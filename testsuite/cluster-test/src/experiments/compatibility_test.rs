@@ -183,7 +183,12 @@ impl Experiment for CompatibilityTest {
         context.report.report_text(msg);
         context
             .tx_emitter
-            .emit_txn_for(job_duration, fullnode_txn_job.clone())
+            .emit_txn_for(
+                job_duration,
+                fullnode_txn_job.clone(),
+                false,
+                job_duration.as_secs(),
+            )
             .await
             .map_err(|e| anyhow::format_err!("Failed to generate traffic: {}", e))?;
 
@@ -207,6 +212,8 @@ impl Experiment for CompatibilityTest {
             .emit_txn_for(
                 job_duration,
                 EmitJobRequest::for_instances(first_node, context.global_emit_job_request, 0),
+                false,
+                job_duration.as_secs(),
             )
             .await
             .map_err(|e| anyhow::format_err!("Storage backwards compat broken: {}", e))?;
@@ -232,7 +239,12 @@ impl Experiment for CompatibilityTest {
         .await?;
         context
             .tx_emitter
-            .emit_txn_for(job_duration, validator_txn_job.clone())
+            .emit_txn_for(
+                job_duration,
+                validator_txn_job.clone(),
+                false,
+                job_duration.as_secs(),
+            )
             .await
             .map_err(|e| anyhow::format_err!("Consensus backwards compat broken: {}", e))?;
 
@@ -257,7 +269,12 @@ impl Experiment for CompatibilityTest {
         .await?;
         context
             .tx_emitter
-            .emit_txn_for(job_duration, validator_txn_job)
+            .emit_txn_for(
+                job_duration,
+                validator_txn_job,
+                false,
+                job_duration.as_secs(),
+            )
             .await
             .map_err(|e| {
                 anyhow::format_err!("Failed to upgrade rest of validator images: {}", e)
@@ -300,7 +317,12 @@ impl Experiment for CompatibilityTest {
             .await?;
             context
                 .tx_emitter
-                .emit_txn_for(job_duration, fullnode_txn_job)
+                .emit_txn_for(
+                    job_duration,
+                    fullnode_txn_job,
+                    false,
+                    job_duration.as_secs(),
+                )
                 .await
                 .map_err(|e| anyhow::format_err!("Failed to upgrade full node images: {}", e))?;
         }

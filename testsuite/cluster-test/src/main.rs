@@ -27,7 +27,7 @@ use cluster_test::{
     report::SuiteReport,
     slack::SlackClient,
     suite::ExperimentSuite,
-    tx_emitter::{AccountData, EmitJobRequest, EmitThreadParams, TxEmitter, TxStats},
+    tx_emitter::{AccountData, EmitJobRequest, EmitThreadParams, TxEmitter},
 };
 use futures::{
     future::{join_all, FutureExt},
@@ -327,16 +327,7 @@ async fn emit_tx(cluster: &Cluster, args: &Args) -> Result<()> {
         })
         .await
         .map_err(|e| format_err!("Failed to start emit job: {}", e))?;
-    let deadline = Instant::now() + duration;
-    let mut prev_stats: Option<TxStats> = None;
-    while Instant::now() < deadline {
-        let window = Duration::from_secs(10);
-        tokio::time::delay_for(window).await;
-        let stats = emitter.peek_job_stats(&job);
-        let delta = &stats - &prev_stats.unwrap_or_default();
-        prev_stats = Some(stats);
-        println!("{}", delta.rate(window));
-    }
+    emitter.periodic_stat(&job, duration, 10).await;
     let stats = emitter.stop_job(job).await;
     println!("Total stats: {}", stats);
     println!("Average rate: {}", stats.rate(duration));

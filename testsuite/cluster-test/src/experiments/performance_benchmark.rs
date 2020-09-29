@@ -61,6 +61,10 @@ pub struct PerformanceBenchmarkParams {
     pub backup: bool,
     #[structopt(long, default_value = "0", help = "Set gas price in tx")]
     pub gas_price: u64,
+    #[structopt(long, help = "Enable periodic stat aggregator.")]
+    pub periodic_stat: bool,
+    #[structopt(long, default_value = "10", help = "Set periodic stat aggregator step")]
+    pub periodic_step: u64,
 }
 
 pub struct PerformanceBenchmark {
@@ -75,6 +79,8 @@ pub struct PerformanceBenchmark {
     use_logs_for_trace: bool,
     backup: bool,
     gas_price: u64,
+    periodic_stat: bool,
+    periodic_step: u64,
 }
 
 pub const DEFAULT_BENCH_DURATION: u64 = 120;
@@ -90,6 +96,8 @@ impl PerformanceBenchmarkParams {
             use_logs_for_trace: false,
             backup: false,
             gas_price: 0,
+            periodic_stat: false,
+            periodic_step: 10,
         }
     }
 
@@ -103,6 +111,8 @@ impl PerformanceBenchmarkParams {
             use_logs_for_trace: false,
             backup: false,
             gas_price: 0,
+            periodic_stat: false,
+            periodic_step: 10,
         }
     }
 
@@ -116,6 +126,8 @@ impl PerformanceBenchmarkParams {
             use_logs_for_trace: false,
             backup: false,
             gas_price,
+            periodic_stat: false,
+            periodic_step: 10,
         }
     }
 
@@ -154,6 +166,8 @@ impl ExperimentParam for PerformanceBenchmarkParams {
             use_logs_for_trace: self.use_logs_for_trace,
             backup: self.backup,
             gas_price: self.gas_price,
+            periodic_stat: self.periodic_stat,
+            periodic_step: self.periodic_step,
         }
     }
 }
@@ -184,7 +198,13 @@ impl Experiment for PerformanceBenchmark {
                 self.gas_price,
             ),
         };
-        let emit_txn = context.tx_emitter.emit_txn_for(window, emit_job_request);
+        let emit_txn = context.tx_emitter.emit_txn_for(
+            window,
+            emit_job_request,
+            self.periodic_stat,
+            self.periodic_step,
+        );
+
         let start = chrono::Utc::now();
         let trace_tail = &context.trace_tail;
         let trace_delay = buffer;

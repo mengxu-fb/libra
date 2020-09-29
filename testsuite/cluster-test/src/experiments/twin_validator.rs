@@ -107,7 +107,7 @@ impl Experiment for TwinValidators {
         info!("Starting txn generation");
         let stats = context
             .tx_emitter
-            .emit_txn_for(window, emit_job_request)
+            .emit_txn_for(window, emit_job_request, false, window.as_secs())
             .await?;
         let end = duration_since_epoch() - buffer;
         let start = end - window + 2 * buffer;

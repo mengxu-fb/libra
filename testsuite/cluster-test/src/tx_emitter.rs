@@ -508,13 +508,30 @@ impl TxEmitter {
         job.stats.accumulate()
     }
 
+    pub async fn periodic_stat(&mut self, job: &EmitJob, duration: Duration, interval_secs: u64) {
+        let deadline = Instant::now() + duration;
+        let mut prev_stats: Option<TxStats> = None;
+        while Instant::now() < deadline {
+            let window = Duration::from_secs(interval_secs);
+            tokio::time::delay_for(window).await;
+            let stats = self.peek_job_stats(job);
+            let delta = &stats - &prev_stats.unwrap_or_default();
+            prev_stats = Some(stats);
+            println!("{}", delta.rate(window));
+        }
+    }
+
     pub async fn emit_txn_for(
         &mut self,
         duration: Duration,
         emit_job_request: EmitJobRequest,
+        periodic_stat: bool,
+        interval_secs: u64,
     ) -> Result<TxStats> {
         let job = self.start_job(emit_job_request).await?;
-        tokio::time::delay_for(duration).await;
+        if periodic_stat {
+            self.periodic_stat(&job, duration, interval_secs).await;
+        }
         let stats = self.stop_job(job).await;
         Ok(stats)
     }

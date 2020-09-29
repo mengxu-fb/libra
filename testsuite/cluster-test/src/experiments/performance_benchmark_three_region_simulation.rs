@@ -70,7 +70,7 @@ impl Experiment for PerformanceBenchmarkThreeRegionSimulation {
         };
         let stats = context
             .tx_emitter
-            .emit_txn_for(window, emit_job_request)
+            .emit_txn_for(window, emit_job_request, false, window.as_secs())
             .await?;
         effects::deactivate_all(&mut effects).await?;
         context

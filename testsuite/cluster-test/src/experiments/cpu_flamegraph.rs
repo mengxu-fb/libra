@@ -65,7 +65,12 @@ impl Experiment for CpuFlamegraph {
         );
         let emit_future = context
             .tx_emitter
-            .emit_txn_for(tx_emitter_duration, emit_job_request)
+            .emit_txn_for(
+                tx_emitter_duration,
+                emit_job_request,
+                false,
+                tx_emitter_duration.as_secs(),
+            )
             .boxed();
         let run_id = env::var("RUN_ID")
             .map_err(|e| anyhow!("RUN_ID could not be read from the environment, Error:{}", e))?;
