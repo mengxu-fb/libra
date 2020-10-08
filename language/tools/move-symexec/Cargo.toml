@@ -1,0 +1,20 @@
+[package]
+name = "move-symexec"
+version = "0.1.0"
+authors = ["Libra Association <opensource@libra.org>"]
+description = "A symbolic executor for the Move language"
+repository = "https://github.com/libra/libra"
+homepage = "https://libra.org"
+license = "Apache-2.0"
+publish = false
+edition = "2018"
+
+[dependencies]
+anyhow = "1.0.33"
+log = "0.4.11"
+simplelog = "0.8.0"
+structopt = "0.3.18"
+
+libra-workspace-hack = { path = "../../../common/workspace-hack", version = "0.1.0" }
+move-lang = { path = "../../move-lang", version = "0.0.1" }
+vm = { path = "../../vm", version = "0.1.0" }

@@ -4037,6 +4037,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "move-symexec"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "libra-workspace-hack",
+ "log",
+ "move-lang",
+ "simplelog",
+ "structopt 0.3.18",
+ "vm",
+]
+
+[[package]]
 name = "move-vm-integration-tests"
 version = "0.1.0"
 dependencies = [
