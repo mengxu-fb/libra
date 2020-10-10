@@ -7,6 +7,10 @@ use anyhow::Result;
 use simplelog::{ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
 use structopt::StructOpt;
 
+use move_core_types::{
+    account_address::AccountAddress, language_storage::TypeTag, parser,
+    transaction_argument::TransactionArgument,
+};
 use move_symexec::symbolizer;
 
 /// Default directory where Move modules live
@@ -94,6 +98,33 @@ enum Command {
         #[structopt()]
         script_file: String,
 
+        /// Possibly-empty list of signers for the current transaction
+        /// (e.g., `account` in `main(&account: signer)`).
+        /// Must match the number of signers expected by `script_file`.
+        #[structopt(
+            long = "signers",
+            parse(try_from_str = AccountAddress::from_hex_literal),
+        )]
+        signers: Vec<AccountAddress>,
+
+        /// Possibly-empty list of arguments passed to the transaction
+        /// (e.g., `i` in `main(i: u64)`).
+        /// Must match the arguments types expected by `script_file`.
+        #[structopt(
+            long = "val-args",
+            parse(try_from_str = parser::parse_transaction_argument),
+        )]
+        val_args: Vec<TransactionArgument>,
+
+        /// Possibly-empty list of type arguments passed to the
+        /// transaction (e.g., `T` in `main<T>()`).
+        /// Must match the type arguments expected by `script_file`.
+        #[structopt(
+            long = "type-args",
+            parse(try_from_str = parser::parse_type_tag),
+        )]
+        type_args: Vec<TypeTag>,
+
         /// Do not clean directories after execution
         #[structopt(long = "no-clean", short = "C")]
         no_clean: bool,
@@ -122,9 +153,15 @@ fn main() -> Result<()> {
     match &args.cmd {
         Command::Run {
             script_file,
+            signers,
+            val_args,
+            type_args,
             no_clean,
         } => symbolizer::run(
             script_file,
+            signers.as_slice(),
+            val_args.as_slice(),
+            type_args.as_slice(),
             args.move_src.as_slice(),
             args.move_dep.as_slice(),
             &args.move_data,
