@@ -5,6 +5,7 @@
 
 use anyhow::Result;
 use simplelog::{ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
+use std::path::PathBuf;
 use structopt::StructOpt;
 
 use move_core_types::{
@@ -24,6 +25,9 @@ pub const MOVE_DATA: &str = "move_data";
 
 /// Default directory for build output
 pub const MOVE_OUTPUT: &str = "move_build_output";
+
+/// Default path to directory containing libsymexec
+pub const MOVE_LIBSYMEXEC: [&str; 2] = [env!("CARGO_MANIFEST_DIR"), "libsymexec"];
 
 /// The intention of this symbolic executor is to generate new tests
 /// that increase coverage on the module(s) being tested
@@ -74,6 +78,10 @@ struct SymExec {
         global = true,
     )]
     move_output: String,
+
+    /// Directory containing libsymexec
+    #[structopt(long = "move-libsymexec", global = true)]
+    move_libsymexec: Option<Vec<String>>,
 
     /// Print additional diagnostics
     #[structopt(long = "verbose", short = "v", global = true)]
@@ -134,6 +142,16 @@ enum Command {
 fn main() -> Result<()> {
     let args = SymExec::from_args();
 
+    // default options
+    let move_libsymexec = args.move_libsymexec.unwrap_or_else(|| {
+        vec![MOVE_LIBSYMEXEC
+            .iter()
+            .collect::<PathBuf>()
+            .into_os_string()
+            .into_string()
+            .unwrap()]
+    });
+
     // setup logging
     TermLogger::init(
         if args.verbose {
@@ -164,6 +182,7 @@ fn main() -> Result<()> {
             type_args.as_slice(),
             args.move_src.as_slice(),
             args.move_dep.as_slice(),
+            move_libsymexec.as_slice(),
             &args.move_data,
             &args.move_output,
             !no_clean,

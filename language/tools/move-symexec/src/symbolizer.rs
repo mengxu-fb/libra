@@ -54,12 +54,13 @@ fn compile_script(
     script_file: &str,
     module_src: &[String],
     module_lib: &[String],
+    libsymexec: &[String],
     move_output: &str,
 ) -> Result<CompiledScript> {
     let path_interface_dir = utils::path_interface_dir(move_output)?;
     let (_, compiled_units) = move_lang::move_compile(
         &[script_file.to_owned()],
-        [module_src, module_lib].concat().as_slice(),
+        [module_src, module_lib, libsymexec].concat().as_slice(),
         None,
         Some(path_interface_dir.into_os_string().into_string().unwrap()),
     )?;
@@ -89,8 +90,9 @@ fn compile_script(
 
 fn execute_script(
     script: &CompiledScript,
-    lib_modules: &[CompiledModule],
     src_modules: &[CompiledModule],
+    lib_modules: &[CompiledModule],
+    libsymexec_modules: &[CompiledModule],
     signers: &[AccountAddress],
     val_args: &[TransactionArgument],
     type_args: &[TypeTag],
@@ -100,7 +102,11 @@ fn execute_script(
     script.serialize(&mut script_bytes)?;
 
     // load modules
-    let state = InMemoryStateView::new([lib_modules, src_modules].concat().as_slice())?;
+    let state = InMemoryStateView::new(
+        [src_modules, lib_modules, libsymexec_modules]
+            .concat()
+            .as_slice(),
+    )?;
 
     // convert args to values
     let exec_args: Vec<Value> = val_args
@@ -164,6 +170,7 @@ pub fn run(
     type_args: &[TypeTag],
     move_src: &[String],
     move_lib: &[String],
+    move_libsymexec: &[String],
     move_data: &str,
     move_output: &str,
     post_run_cleaning: bool,
@@ -175,20 +182,30 @@ pub fn run(
     utils::maybe_recreate_dir(&path_move_output)?;
 
     // compilation
+    let libsymexec_modules = compile_modules(move_libsymexec, &[], move_output)?;
+    debug!("{} libsymexec module(s) compiled", libsymexec_modules.len());
+
     let lib_modules = compile_modules(move_lib, &[], move_output)?;
     debug!("{} lib module(s) compiled", lib_modules.len());
 
     let src_modules = compile_modules(move_src, move_lib, move_output)?;
     debug!("{} src module(s) compiled", src_modules.len());
 
-    let script = compile_script(script_file, move_src, move_lib, move_output)?;
+    let script = compile_script(
+        script_file,
+        move_src,
+        move_lib,
+        move_libsymexec,
+        move_output,
+    )?;
     debug!("Script compiled");
 
     // execute script
     execute_script(
         &script,
-        lib_modules.as_slice(),
         src_modules.as_slice(),
+        lib_modules.as_slice(),
+        libsymexec_modules.as_slice(),
         signers,
         val_args,
         type_args,
