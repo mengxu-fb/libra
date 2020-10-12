@@ -5,7 +5,10 @@
 
 use anyhow::{bail, Result};
 use log::{debug, error, warn};
-use std::path::PathBuf;
+use std::{
+    fs,
+    path::{Path, PathBuf},
+};
 
 use move_core_types::{
     account_address::AccountAddress,
@@ -13,7 +16,7 @@ use move_core_types::{
     language_storage::TypeTag,
     transaction_argument::TransactionArgument,
 };
-use move_lang::{self, compiled_unit::CompiledUnit};
+use move_lang::{self, compiled_unit::CompiledUnit, MOVE_COMPILED_EXTENSION};
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_types::{gas_schedule::CostStrategy, values::Value};
 use vm::{file_format::CompiledScript, CompiledModule};
@@ -21,15 +24,35 @@ use vm_genesis::genesis_gas_schedule::INITIAL_GAS_SCHEDULE;
 
 use crate::{state_view::InMemoryStateView, utils};
 
+fn load_modules(path: &[String]) -> Result<Vec<CompiledModule>> {
+    Ok(move_lang::find_filenames(path, |fpath| {
+        match fpath.extension().and_then(|s| s.to_str()) {
+            None => false,
+            Some(ext) => ext == MOVE_COMPILED_EXTENSION,
+        }
+    })?
+    .iter()
+    .map(|entry| {
+        CompiledModule::deserialize(
+            fs::read(Path::new(entry))
+                .expect("Error: unable to compiled module file")
+                .as_slice(),
+        )
+        .expect("Error: unable to deserialize compiled module")
+    })
+    .collect())
+}
+
 fn compile_modules(
     module_src: &[String],
     module_lib: &[String],
+    systemlibs: &[String],
     move_output: &str,
 ) -> Result<Vec<CompiledModule>> {
     let path_interface_dir = utils::path_interface_dir(move_output)?;
     let (_, compiled_units) = move_lang::move_compile(
         module_src,
-        module_lib,
+        [module_lib, systemlibs].concat().as_slice(),
         None,
         Some(path_interface_dir.into_os_string().into_string().unwrap()),
     )?;
@@ -55,12 +78,15 @@ fn compile_script(
     module_src: &[String],
     module_lib: &[String],
     libsymexec: &[String],
+    systemlibs: &[String],
     move_output: &str,
 ) -> Result<CompiledScript> {
     let path_interface_dir = utils::path_interface_dir(move_output)?;
     let (_, compiled_units) = move_lang::move_compile(
         &[script_file.to_owned()],
-        [module_src, module_lib, libsymexec].concat().as_slice(),
+        [module_src, module_lib, libsymexec, systemlibs]
+            .concat()
+            .as_slice(),
         None,
         Some(path_interface_dir.into_os_string().into_string().unwrap()),
     )?;
@@ -93,6 +119,7 @@ fn execute_script(
     src_modules: &[CompiledModule],
     lib_modules: &[CompiledModule],
     libsymexec_modules: &[CompiledModule],
+    systemlibs_modules: &[CompiledModule],
     signers: &[AccountAddress],
     val_args: &[TransactionArgument],
     type_args: &[TypeTag],
@@ -103,9 +130,14 @@ fn execute_script(
 
     // load modules
     let state = InMemoryStateView::new(
-        [src_modules, lib_modules, libsymexec_modules]
-            .concat()
-            .as_slice(),
+        [
+            src_modules,
+            lib_modules,
+            libsymexec_modules,
+            systemlibs_modules,
+        ]
+        .concat()
+        .as_slice(),
     )?;
 
     // convert args to values
@@ -171,6 +203,7 @@ pub fn run(
     move_src: &[String],
     move_lib: &[String],
     move_libsymexec: &[String],
+    move_systemlibs: &[String],
     move_data: &str,
     move_output: &str,
     post_run_cleaning: bool,
@@ -181,14 +214,18 @@ pub fn run(
     utils::maybe_recreate_dir(&path_move_data)?;
     utils::maybe_recreate_dir(&path_move_output)?;
 
+    // find prebuilt modules
+    let systemlibs_modules = load_modules(move_systemlibs)?;
+    debug!("{} systemlibs module(s) loaded", systemlibs_modules.len());
+
     // compilation
-    let libsymexec_modules = compile_modules(move_libsymexec, &[], move_output)?;
+    let libsymexec_modules = compile_modules(move_libsymexec, &[], &[], move_output)?;
     debug!("{} libsymexec module(s) compiled", libsymexec_modules.len());
 
-    let lib_modules = compile_modules(move_lib, &[], move_output)?;
+    let lib_modules = compile_modules(move_lib, &[], move_systemlibs, move_output)?;
     debug!("{} lib module(s) compiled", lib_modules.len());
 
-    let src_modules = compile_modules(move_src, move_lib, move_output)?;
+    let src_modules = compile_modules(move_src, move_lib, move_systemlibs, move_output)?;
     debug!("{} src module(s) compiled", src_modules.len());
 
     let script = compile_script(
@@ -196,6 +233,7 @@ pub fn run(
         move_src,
         move_lib,
         move_libsymexec,
+        move_systemlibs,
         move_output,
     )?;
     debug!("Script compiled");
@@ -206,6 +244,7 @@ pub fn run(
         src_modules.as_slice(),
         lib_modules.as_slice(),
         libsymexec_modules.as_slice(),
+        systemlibs_modules.as_slice(),
         signers,
         val_args,
         type_args,

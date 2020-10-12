@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::Result;
+use anyhow::{bail, Result};
 use simplelog::{ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -28,6 +28,19 @@ pub const MOVE_OUTPUT: &str = "move_build_output";
 
 /// Default path to directory containing libsymexec
 pub const MOVE_LIBSYMEXEC: [&str; 2] = [env!("CARGO_MANIFEST_DIR"), "libsymexec"];
+
+/// Default path to directory containing stdlib
+pub const MOVE_STDLIB: [&str; 6] = [
+    env!("CARGO_MANIFEST_DIR"),
+    "..",
+    "..",
+    "stdlib",
+    "compiled",
+    "stdlib",
+];
+
+/// Default path to directory containing nursery
+pub const MOVE_NURSERY: [&str; 5] = [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "nursery"];
 
 /// The intention of this symbolic executor is to generate new tests
 /// that increase coverage on the module(s) being tested
@@ -82,6 +95,14 @@ struct SymExec {
     /// Directory containing libsymexec
     #[structopt(long = "move-libsymexec", global = true)]
     move_libsymexec: Option<Vec<String>>,
+
+    /// Directory containing other pre-built libs (e.g., stdlib)
+    #[structopt(long = "move-systemlibs", global = true)]
+    move_systemlibs: Option<Vec<String>>,
+
+    /// Mark that no other system libraries are needed
+    #[structopt(long = "no-systemlibs", short = "L", global = true)]
+    no_systemlibs: bool,
 
     /// Print additional diagnostics
     #[structopt(long = "verbose", short = "v", global = true)]
@@ -152,6 +173,22 @@ fn main() -> Result<()> {
             .unwrap()]
     });
 
+    if args.no_systemlibs && args.move_systemlibs.is_some() {
+        bail!("Error: conflicting option on systemlibs");
+    }
+
+    let move_systemlibs = match args.no_systemlibs {
+        true => vec![],
+        false => args.move_systemlibs.unwrap_or_else(|| {
+            vec![MOVE_STDLIB
+                .iter()
+                .collect::<PathBuf>()
+                .into_os_string()
+                .into_string()
+                .unwrap()]
+        }),
+    };
+
     // setup logging
     TermLogger::init(
         if args.verbose {
@@ -183,6 +220,7 @@ fn main() -> Result<()> {
             args.move_src.as_slice(),
             args.move_dep.as_slice(),
             move_libsymexec.as_slice(),
+            move_systemlibs.as_slice(),
             &args.move_data,
             &args.move_output,
             !no_clean,
