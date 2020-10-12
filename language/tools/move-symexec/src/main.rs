@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Result;
-use simplelog::{ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
+use simplelog::{ConfigBuilder, LevelFilter, SimpleLogger, TermLogger, TerminalMode};
 use std::path::PathBuf;
 use structopt::StructOpt;
 
@@ -121,6 +121,10 @@ struct SymExec {
     /// Print additional diagnostics
     #[structopt(long = "verbose", short = "v", global = true)]
     verbose: bool,
+
+    /// Print pretty diagnostics information
+    #[structopt(long = "verbose-pretty", short = "V", global = true)]
+    verbose_pretty: bool,
 
     /// Subcommands
     #[structopt(subcommand)]
@@ -242,19 +246,27 @@ fn main() -> Result<()> {
     );
 
     // setup logging
-    TermLogger::init(
-        if args.verbose {
+    let log_level = if args.verbose {
+        LevelFilter::Debug
+    } else {
+        LevelFilter::Info
+    };
+    let log_config = ConfigBuilder::new()
+        .set_time_level(if args.verbose_pretty {
             LevelFilter::Debug
         } else {
-            LevelFilter::Info
-        },
-        ConfigBuilder::new()
-            .set_thread_level(LevelFilter::Off)
-            .set_target_level(LevelFilter::Off)
-            .set_location_level(LevelFilter::Off)
-            .build(),
-        TerminalMode::Stderr,
-    )?;
+            LevelFilter::Off
+        })
+        .set_thread_level(LevelFilter::Off)
+        .set_target_level(LevelFilter::Off)
+        .set_location_level(LevelFilter::Off)
+        .build();
+
+    if args.verbose_pretty {
+        TermLogger::init(log_level, log_config, TerminalMode::Stderr)?;
+    } else {
+        SimpleLogger::init(log_level, log_config)?;
+    }
 
     // match commands
     match &args.cmd {
