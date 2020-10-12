@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use anyhow::{bail, Result};
+use anyhow::Result;
 use simplelog::{ConfigBuilder, LevelFilter, TermLogger, TerminalMode};
 use std::path::PathBuf;
 use structopt::StructOpt;
@@ -17,8 +17,8 @@ use move_symexec::symbolizer;
 /// Default directory where Move modules live
 pub const MOVE_SRC: &str = "move_src";
 
-/// Default directory where dependencies (non-stdlib libraries) live
-pub const MOVE_DEP: &str = "move_dep";
+/// Default directory where dependencies (non-prebuilt libraries) live
+pub const MOVE_LIB: &str = "move_lib";
 
 /// Default directory where saved Move resources live
 pub const MOVE_DATA: &str = "move_data";
@@ -29,7 +29,7 @@ pub const MOVE_OUTPUT: &str = "move_build_output";
 /// Default path to directory containing libsymexec
 pub const MOVE_LIBSYMEXEC: [&str; 2] = [env!("CARGO_MANIFEST_DIR"), "libsymexec"];
 
-/// Default path to directory containing stdlib
+/// Default path to directory containing stdlib (pre-built)
 pub const MOVE_STDLIB: [&str; 6] = [
     env!("CARGO_MANIFEST_DIR"),
     "..",
@@ -39,7 +39,7 @@ pub const MOVE_STDLIB: [&str; 6] = [
     "stdlib",
 ];
 
-/// Default path to directory containing nursery
+/// Default path to directory containing nursery (source)
 pub const MOVE_NURSERY: [&str; 5] = [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "nursery"];
 
 /// The intention of this symbolic executor is to generate new tests
@@ -50,59 +50,73 @@ pub const MOVE_NURSERY: [&str; 5] = [env!("CARGO_MANIFEST_DIR"), "..", "..", "st
     about = "Symbolically execute a Move script"
 )]
 struct SymExec {
-    /// Directory storing source code for Move modules.
+    /// Directories storing source code for Move modules.
     /// Modules in these paths
     ///   1. will be loaded before `script_file`, and
     ///   2. will be symbolically executed to probe new execution paths.
-    #[structopt(
-        long = "move-src",
-        default_value = MOVE_SRC,
-        global = true,
-    )]
-    move_src: Vec<String>,
+    #[structopt(long = "move-src", short = "s", global = true)]
+    move_src: Option<Vec<String>>,
 
-    /// Directory storing dependencies for `move_src` and `script_file`
+    /// Mark that no default values will be added to `move_src`
+    #[structopt(long = "no-default-move-src", short = "S", global = true)]
+    no_default_move_src: bool,
+
+    /// Directories storing libraries for `move_src` and `script_file`
     /// (i.e., Move libraries)
     /// Modules in this directory
     ///   1. will be loaded before `script_file`, but
     ///   2. will not be symbolically executed,
     ///      instead, they will be concretely executed.
-    #[structopt(
-        long = "move-dep",
-        default_value = MOVE_DEP,
-        global = true,
-    )]
-    move_dep: Vec<String>,
+    #[structopt(long = "move-lib", short = "l", global = true)]
+    move_lib: Option<Vec<String>>,
 
-    /// Directory storing Move outputs (e.g., resources, events, traces)
-    /// produced by script execution.
+    /// Mark that no default values will be added to `move_lib`
+    #[structopt(long = "no-default-move-lib", short = "L", global = true)]
+    no_default_move_lib: bool,
+
+    /// A directory storing Move and symbolic execution outputs produced
+    /// by script execution.
     #[structopt(
         long = "move-data",
+        short = "o",
         default_value = MOVE_DATA,
         global = true,
     )]
     move_data: String,
 
-    /// Directory storing Move outputs (e.g., bytecode, source maps)
+    /// A directory storing Move outputs (e.g., bytecode, source maps)
     /// produced by compilation.
     #[structopt(
         long = "move-output",
+        short = "b",
         default_value = MOVE_OUTPUT,
         global = true,
     )]
     move_output: String,
 
-    /// Directory containing libsymexec
+    /// Directories containing libsymexec
     #[structopt(long = "move-libsymexec", global = true)]
     move_libsymexec: Option<Vec<String>>,
 
-    /// Directory containing other pre-built libs (e.g., stdlib)
-    #[structopt(long = "move-systemlibs", global = true)]
-    move_systemlibs: Option<Vec<String>>,
+    /// Mark that no default values will be added to `move_libsymexec`
+    #[structopt(long = "no-default-move-libsymexec", global = true)]
+    no_default_move_libsymexec: bool,
 
-    /// Mark that no other system libraries are needed
-    #[structopt(long = "no-systemlibs", short = "L", global = true)]
-    no_systemlibs: bool,
+    /// Directories containing other system libs in source format
+    #[structopt(long = "move-sysdeps-src", global = true)]
+    move_sysdeps_src: Option<Vec<String>>,
+
+    /// Mark that no default values will be added to `move_sysdeps_src`
+    #[structopt(long = "no-default-move-sysdeps-src", global = true)]
+    no_default_move_sysdeps_src: bool,
+
+    /// Directories containing other pre-built libs
+    #[structopt(long = "move-sysdeps-bin", global = true)]
+    move_sysdeps_bin: Option<Vec<String>>,
+
+    /// Mark that no default values will be added to `move_sysdeps_bin`
+    #[structopt(long = "no-default-move-sysdeps-bin", global = true)]
+    no_default_move_sysdeps_bin: bool,
 
     /// Print additional diagnostics
     #[structopt(long = "verbose", short = "v", global = true)]
@@ -160,34 +174,72 @@ enum Command {
     },
 }
 
+fn path_components_to_string(components: &[&str]) -> String {
+    components
+        .iter()
+        .collect::<PathBuf>()
+        .into_os_string()
+        .into_string()
+        .unwrap()
+}
+
+fn setup_arg_by_appending_defaults(
+    arg: Option<Vec<String>>,
+    default_vals: Vec<String>,
+    no_defaults: bool,
+    is_required: bool,
+) -> Vec<String> {
+    if is_required && no_defaults && arg.is_none() {
+        panic!("Error: please set all arguments given --no-default");
+    }
+    let mut fixed: Vec<String> = Vec::new();
+    if let Some(v) = arg {
+        fixed.extend(v);
+    }
+    if !no_defaults {
+        fixed.extend(default_vals);
+    }
+    fixed
+}
+
 fn main() -> Result<()> {
     let args = SymExec::from_args();
 
-    // default options
-    let move_libsymexec = args.move_libsymexec.unwrap_or_else(|| {
-        vec![MOVE_LIBSYMEXEC
-            .iter()
-            .collect::<PathBuf>()
-            .into_os_string()
-            .into_string()
-            .unwrap()]
-    });
+    // setup options
+    let move_src = setup_arg_by_appending_defaults(
+        args.move_src,
+        vec![MOVE_SRC.to_owned()],
+        args.no_default_move_src,
+        false,
+    );
 
-    if args.no_systemlibs && args.move_systemlibs.is_some() {
-        bail!("Error: conflicting option on systemlibs");
-    }
+    let move_lib = setup_arg_by_appending_defaults(
+        args.move_lib,
+        vec![MOVE_LIB.to_owned()],
+        args.no_default_move_lib,
+        false,
+    );
 
-    let move_systemlibs = match args.no_systemlibs {
-        true => vec![],
-        false => args.move_systemlibs.unwrap_or_else(|| {
-            vec![MOVE_STDLIB
-                .iter()
-                .collect::<PathBuf>()
-                .into_os_string()
-                .into_string()
-                .unwrap()]
-        }),
-    };
+    let move_libsymexec = setup_arg_by_appending_defaults(
+        args.move_libsymexec,
+        vec![path_components_to_string(&MOVE_LIBSYMEXEC)],
+        args.no_default_move_libsymexec,
+        false,
+    );
+
+    let move_sysdeps_src = setup_arg_by_appending_defaults(
+        args.move_sysdeps_src,
+        vec![path_components_to_string(&MOVE_NURSERY)],
+        args.no_default_move_sysdeps_src,
+        false,
+    );
+
+    let move_sysdeps_bin = setup_arg_by_appending_defaults(
+        args.move_sysdeps_bin,
+        vec![path_components_to_string(&MOVE_STDLIB)],
+        args.no_default_move_sysdeps_bin,
+        false,
+    );
 
     // setup logging
     TermLogger::init(
@@ -214,13 +266,14 @@ fn main() -> Result<()> {
             no_clean,
         } => symbolizer::run(
             script_file,
-            signers.as_slice(),
-            val_args.as_slice(),
-            type_args.as_slice(),
-            args.move_src.as_slice(),
-            args.move_dep.as_slice(),
-            move_libsymexec.as_slice(),
-            move_systemlibs.as_slice(),
+            &signers,
+            &val_args,
+            &type_args,
+            &move_src,
+            &move_lib,
+            &move_libsymexec,
+            &move_sysdeps_src,
+            &move_sysdeps_bin,
             &args.move_data,
             &args.move_output,
             !no_clean,

@@ -1,1 +1,0 @@
-run ../dummy/test.move --move-src ../dummy/move_src --move-dep ../dummy/move_dep

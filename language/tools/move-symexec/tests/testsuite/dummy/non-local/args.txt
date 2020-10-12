@@ -1,0 +1,4 @@
+run ../local-no-deps/test.move -S --move-src ../local-no-deps/move_src -L --move-lib ../local-no-deps/move_lib --no-default-move-libsymexec --no-default-move-sysdeps-src --no-default-move-sysdeps-bin
+run ../local-with-libsymexec/test.move -S --move-src ../local-with-libsymexec/move_src -L --move-lib ../local-with-libsymexec/move_lib --no-default-move-sysdeps-src --no-default-move-sysdeps-bin
+run ../local-with-stdlib/test.move -S --move-src ../local-with-stdlib/move_src -L --move-lib ../local-with-stdlib/move_lib --no-default-move-libsymexec
+run ../local-with-libsymexec-stdlib/test.move -S --move-src ../local-with-libsymexec-stdlib/move_src -L --move-lib ../local-with-libsymexec-stdlib/move_lib

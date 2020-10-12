@@ -1,1 +1,0 @@
-run test.move --move-dep ../../../../../stdlib/nursery --move-dep move_dep

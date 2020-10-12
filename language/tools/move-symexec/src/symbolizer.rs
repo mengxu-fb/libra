@@ -34,9 +34,7 @@ fn load_modules(path: &[String]) -> Result<Vec<CompiledModule>> {
     .iter()
     .map(|entry| {
         CompiledModule::deserialize(
-            fs::read(Path::new(entry))
-                .expect("Error: unable to compiled module file")
-                .as_slice(),
+            &fs::read(Path::new(entry)).expect("Error: unable to compiled module file"),
         )
         .expect("Error: unable to deserialize compiled module")
     })
@@ -52,7 +50,7 @@ fn compile_modules(
     let path_interface_dir = utils::path_interface_dir(move_output)?;
     let (_, compiled_units) = move_lang::move_compile(
         module_src,
-        [module_lib, systemlibs].concat().as_slice(),
+        &[module_lib, systemlibs].concat(),
         None,
         Some(path_interface_dir.into_os_string().into_string().unwrap()),
     )?;
@@ -84,9 +82,7 @@ fn compile_script(
     let path_interface_dir = utils::path_interface_dir(move_output)?;
     let (_, compiled_units) = move_lang::move_compile(
         &[script_file.to_owned()],
-        [module_src, module_lib, libsymexec, systemlibs]
-            .concat()
-            .as_slice(),
+        &[module_src, module_lib, libsymexec, systemlibs].concat(),
         None,
         Some(path_interface_dir.into_os_string().into_string().unwrap()),
     )?;
@@ -130,14 +126,13 @@ fn execute_script(
 
     // load modules
     let state = InMemoryStateView::new(
-        [
+        &[
             src_modules,
             lib_modules,
             libsymexec_modules,
             systemlibs_modules,
         ]
-        .concat()
-        .as_slice(),
+        .concat(),
     )?;
 
     // convert args to values
@@ -203,25 +198,33 @@ pub fn run(
     move_src: &[String],
     move_lib: &[String],
     move_libsymexec: &[String],
-    move_systemlibs: &[String],
+    move_sysdeps_src: &[String],
+    move_sysdeps_bin: &[String],
     move_data: &str,
     move_output: &str,
     post_run_cleaning: bool,
 ) -> Result<()> {
-    // preparation
+    // directory preparation
     let path_move_data = PathBuf::from(move_data);
     let path_move_output = PathBuf::from(move_output);
     utils::maybe_recreate_dir(&path_move_data)?;
     utils::maybe_recreate_dir(&path_move_output)?;
 
-    // find prebuilt modules
-    let systemlibs_modules = load_modules(move_systemlibs)?;
-    debug!("{} systemlibs module(s) loaded", systemlibs_modules.len());
+    // prepare system modules
+    let pre_built_modules = load_modules(move_sysdeps_bin)?;
+    debug!("{} systemlibs module(s) loaded", pre_built_modules.len());
 
-    // compilation
+    let on_demand_modules = compile_modules(move_sysdeps_src, &[], move_sysdeps_bin, move_output)?;
+    debug!("{} systemlibs module(s) compiled", on_demand_modules.len());
+
+    let move_systemlibs = &[move_sysdeps_src, move_sysdeps_bin].concat();
+    let systemlibs_modules = [pre_built_modules, on_demand_modules].concat();
+
+    // prepare symexec-related modules
     let libsymexec_modules = compile_modules(move_libsymexec, &[], &[], move_output)?;
     debug!("{} libsymexec module(s) compiled", libsymexec_modules.len());
 
+    // prepare local modules and scripts
     let lib_modules = compile_modules(move_lib, &[], move_systemlibs, move_output)?;
     debug!("{} lib module(s) compiled", lib_modules.len());
 
@@ -241,10 +244,10 @@ pub fn run(
     // execute script
     execute_script(
         &script,
-        src_modules.as_slice(),
-        lib_modules.as_slice(),
-        libsymexec_modules.as_slice(),
-        systemlibs_modules.as_slice(),
+        &src_modules,
+        &lib_modules,
+        &libsymexec_modules,
+        &systemlibs_modules,
         signers,
         val_args,
         type_args,
