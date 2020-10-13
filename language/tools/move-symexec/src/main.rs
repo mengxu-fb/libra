@@ -145,6 +145,11 @@ enum Command {
         #[structopt()]
         script_file: String,
 
+        /// Configuration file for the symbolic execution engine.
+        /// Not setting the `config_file` means concreate execution.
+        #[structopt(long = "config", short = "c")]
+        config_file: Option<String>,
+
         /// Possibly-empty list of signers for the current transaction
         /// (e.g., `account` in `main(&account: signer)`).
         /// Must match the number of signers expected by `script_file`.
@@ -244,12 +249,14 @@ fn main() -> Result<()> {
     match &args.cmd {
         Command::Run {
             script_file,
+            config_file,
             signers,
             val_args,
             type_args,
             no_clean,
         } => symbolizer::run(
             script_file,
+            config_file.as_ref(),
             &signers,
             &val_args,
             &type_args,

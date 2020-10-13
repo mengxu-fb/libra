@@ -1,0 +1,9 @@
+{
+    "inclusion": [
+        ".*::L::.*",
+        ".*::M::foo"
+    ],
+    "exclusion": [
+        ".*::L::foo"
+    ]
+}

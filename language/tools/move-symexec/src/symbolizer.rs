@@ -23,7 +23,7 @@ use move_vm_types::{gas_schedule::CostStrategy, values::Value};
 use vm::{file_format::CompiledScript, CompiledModule};
 use vm_genesis::genesis_gas_schedule::INITIAL_GAS_SCHEDULE;
 
-use crate::{state_view::InMemoryStateView, utils};
+use crate::{state_view::InMemoryStateView, sym_config::SymConfig, utils};
 
 fn load_modules(module_bin: &[String], move_output: &str) -> Result<Vec<CompiledModule>> {
     // generate interfaces
@@ -185,6 +185,7 @@ fn execute_script(
 
 pub fn run(
     script_file: &str,
+    config_file_opt: Option<&String>,
     signers: &[AccountAddress],
     val_args: &[TransactionArgument],
     type_args: &[TypeTag],
@@ -216,14 +217,23 @@ pub fn run(
     let script = compile_script(script_file, move_output)?;
     debug!("Script compiled");
 
-    // execute script
-    execute_script(
-        &script,
-        &[sys_modules, lib_modules, src_modules].concat(),
-        signers,
-        val_args,
-        type_args,
-    )?;
+    if let Some(config_file) = config_file_opt {
+        // parse config file
+        let config = SymConfig::new(&config_file, &src_modules)?;
+        debug!(
+            "Config parsed: {} function(s) to be tracked",
+            config.num_tracked_functions()
+        );
+    } else {
+        // if no config file specified, execute concretely
+        execute_script(
+            &script,
+            &[sys_modules, lib_modules, src_modules].concat(),
+            signers,
+            val_args,
+            type_args,
+        )?;
+    }
 
     // cleaning
     if post_run_cleaning {

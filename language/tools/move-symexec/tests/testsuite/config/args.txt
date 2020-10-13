@@ -1,0 +1,6 @@
+run test.move -c sym-default.json
+run test.move -c sym-inc-func-foo.json
+run test.move -c sym-exc-func-foo.json
+run test.move -c sym-inc-mod-M.json
+run test.move -c sym-exc-mod-M.json
+run test.move -c sym-inc-exc.json
