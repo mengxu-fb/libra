@@ -4050,6 +4050,7 @@ dependencies = [
  "move-vm-types",
  "simplelog",
  "structopt 0.3.18",
+ "tempfile",
  "vm",
  "vm-genesis",
 ]

@@ -9,6 +9,7 @@ use std::{
     fs,
     path::{Path, PathBuf},
 };
+use tempfile::tempdir;
 
 use move_core_types::{
     account_address::AccountAddress,
@@ -24,8 +25,12 @@ use vm_genesis::genesis_gas_schedule::INITIAL_GAS_SCHEDULE;
 
 use crate::{state_view::InMemoryStateView, utils};
 
-fn load_modules(path: &[String]) -> Result<Vec<CompiledModule>> {
-    Ok(move_lang::find_filenames(path, |fpath| {
+fn load_modules(module_bin: &[String], move_output: &str) -> Result<Vec<CompiledModule>> {
+    // generate interfaces
+    move_lang::generate_interface_files(module_bin, Some(move_output.to_owned()), false)?;
+
+    // load
+    let compiled_modules = move_lang::find_filenames(module_bin, |fpath| {
         match fpath.extension().and_then(|s| s.to_str()) {
             None => false,
             Some(ext) => ext == MOVE_COMPILED_EXTENSION,
@@ -38,25 +43,21 @@ fn load_modules(path: &[String]) -> Result<Vec<CompiledModule>> {
         )
         .expect("Error: unable to deserialize compiled module")
     })
-    .collect())
+    .collect();
+
+    // done
+    Ok(compiled_modules)
 }
 
-fn compile_modules(
-    module_src: &[String],
-    module_lib: &[String],
-    systemlibs: &[String],
-    move_output: &str,
-) -> Result<Vec<CompiledModule>> {
-    let path_interface_dir = utils::path_interface_dir(move_output)?;
-    let (_, compiled_units) = move_lang::move_compile(
-        module_src,
-        &[module_lib, systemlibs].concat(),
-        None,
-        Some(path_interface_dir.into_os_string().into_string().unwrap()),
-    )?;
+fn compile_modules(module_src: &[String], move_output: &str) -> Result<Vec<CompiledModule>> {
+    let deps = utils::path_interface_dir(move_output)?;
 
+    // compile
+    let (files, compiled_units) = move_lang::move_compile(module_src, &deps, None, None)?;
+
+    // collect modules
     let mut compiled_modules = vec![];
-    for unit in compiled_units {
+    for unit in compiled_units.iter() {
         match unit {
             CompiledUnit::Script { loc, .. } => warn!(
                 "Warning: found a script during module compilation: {}. \
@@ -64,28 +65,31 @@ fn compile_modules(
                 loc.file(),
             ),
             CompiledUnit::Module { module, .. } => {
-                compiled_modules.push(module);
+                compiled_modules.push(module.clone());
             }
         }
     }
+
+    // generate interfaces
+    let mv_dir = tempdir()?;
+    let mv_dir_path = mv_dir.path().to_str().unwrap();
+    move_lang::output_compiled_units(false, files, compiled_units, mv_dir_path)?;
+    move_lang::generate_interface_files(
+        &[mv_dir_path.to_owned()],
+        Some(move_output.to_owned()),
+        false,
+    )?;
+
+    // done
     Ok(compiled_modules)
 }
 
-fn compile_script(
-    script_file: &str,
-    module_src: &[String],
-    module_lib: &[String],
-    libsymexec: &[String],
-    systemlibs: &[String],
-    move_output: &str,
-) -> Result<CompiledScript> {
-    let path_interface_dir = utils::path_interface_dir(move_output)?;
-    let (_, compiled_units) = move_lang::move_compile(
-        &[script_file.to_owned()],
-        &[module_src, module_lib, libsymexec, systemlibs].concat(),
-        None,
-        Some(path_interface_dir.into_os_string().into_string().unwrap()),
-    )?;
+fn compile_script(script_file: &str, move_output: &str) -> Result<CompiledScript> {
+    let deps = utils::path_interface_dir(move_output)?;
+
+    // compile
+    let (_, compiled_units) =
+        move_lang::move_compile(&[script_file.to_owned()], &deps, None, None)?;
 
     let mut compiled_script = None;
     for unit in compiled_units {
@@ -112,10 +116,7 @@ fn compile_script(
 
 fn execute_script(
     script: &CompiledScript,
-    src_modules: &[CompiledModule],
-    lib_modules: &[CompiledModule],
-    libsymexec_modules: &[CompiledModule],
-    systemlibs_modules: &[CompiledModule],
+    modules: &[CompiledModule],
     signers: &[AccountAddress],
     val_args: &[TransactionArgument],
     type_args: &[TypeTag],
@@ -125,15 +126,7 @@ fn execute_script(
     script.serialize(&mut script_bytes)?;
 
     // load modules
-    let state = InMemoryStateView::new(
-        &[
-            src_modules,
-            lib_modules,
-            libsymexec_modules,
-            systemlibs_modules,
-        ]
-        .concat(),
-    )?;
+    let state = InMemoryStateView::new(modules)?;
 
     // convert args to values
     let exec_args: Vec<Value> = val_args
@@ -171,7 +164,7 @@ fn execute_script(
         bail!("Error: failed to execute the script!");
     };
 
-    // collect effects;
+    // collect effects
     match session.finish() {
         Ok(effects) => {
             debug!(
@@ -197,9 +190,7 @@ pub fn run(
     type_args: &[TypeTag],
     move_src: &[String],
     move_lib: &[String],
-    move_libsymexec: &[String],
-    move_sysdeps_src: &[String],
-    move_sysdeps_bin: &[String],
+    move_sys: &[String],
     move_data: &str,
     move_output: &str,
     post_run_cleaning: bool,
@@ -210,44 +201,25 @@ pub fn run(
     utils::maybe_recreate_dir(&path_move_data)?;
     utils::maybe_recreate_dir(&path_move_output)?;
 
-    // prepare system modules
-    let pre_built_modules = load_modules(move_sysdeps_bin)?;
-    debug!("{} systemlibs module(s) loaded", pre_built_modules.len());
+    // load prebuilt modules and expose interfaces
+    let sys_modules = load_modules(move_sys, move_output)?;
+    debug!("{} sys module(s) loaded", sys_modules.len());
 
-    let on_demand_modules = compile_modules(move_sysdeps_src, &[], move_sysdeps_bin, move_output)?;
-    debug!("{} systemlibs module(s) compiled", on_demand_modules.len());
-
-    let move_systemlibs = &[move_sysdeps_src, move_sysdeps_bin].concat();
-    let systemlibs_modules = [pre_built_modules, on_demand_modules].concat();
-
-    // prepare symexec-related modules
-    let libsymexec_modules = compile_modules(move_libsymexec, &[], &[], move_output)?;
-    debug!("{} libsymexec module(s) compiled", libsymexec_modules.len());
-
-    // prepare local modules and scripts
-    let lib_modules = compile_modules(move_lib, &[], move_systemlibs, move_output)?;
+    // compile modules
+    let lib_modules = compile_modules(move_lib, move_output)?;
     debug!("{} lib module(s) compiled", lib_modules.len());
 
-    let src_modules = compile_modules(move_src, move_lib, move_systemlibs, move_output)?;
+    let src_modules = compile_modules(move_src, move_output)?;
     debug!("{} src module(s) compiled", src_modules.len());
 
-    let script = compile_script(
-        script_file,
-        move_src,
-        move_lib,
-        move_libsymexec,
-        move_systemlibs,
-        move_output,
-    )?;
+    // compile script
+    let script = compile_script(script_file, move_output)?;
     debug!("Script compiled");
 
     // execute script
     execute_script(
         &script,
-        &src_modules,
-        &lib_modules,
-        &libsymexec_modules,
-        &systemlibs_modules,
+        &[sys_modules, lib_modules, src_modules].concat(),
         signers,
         val_args,
         type_args,

@@ -17,9 +17,6 @@ use move_symexec::symbolizer;
 /// Default directory where Move modules live
 pub const MOVE_SRC: &str = "move_src";
 
-/// Default directory where dependencies (non-prebuilt libraries) live
-pub const MOVE_LIB: &str = "move_lib";
-
 /// Default directory where saved Move resources live
 pub const MOVE_DATA: &str = "move_data";
 
@@ -29,8 +26,12 @@ pub const MOVE_OUTPUT: &str = "move_build_output";
 /// Default path to directory containing libsymexec
 pub const MOVE_LIBSYMEXEC: [&str; 2] = [env!("CARGO_MANIFEST_DIR"), "libsymexec"];
 
+/// Default path to directory containing nursery (source)
+pub const MOVE_LIBNURSERY: [&str; 5] =
+    [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "nursery"];
+
 /// Default path to directory containing stdlib (pre-built)
-pub const MOVE_STDLIB: [&str; 6] = [
+pub const MOVE_STDLIB_BIN: [&str; 6] = [
     env!("CARGO_MANIFEST_DIR"),
     "..",
     "..",
@@ -39,8 +40,8 @@ pub const MOVE_STDLIB: [&str; 6] = [
     "stdlib",
 ];
 
-/// Default path to directory containing nursery (source)
-pub const MOVE_NURSERY: [&str; 5] = [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "nursery"];
+pub const MOVE_STDLIB_SRC: [&str; 5] =
+    [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "modules"];
 
 /// The intention of this symbolic executor is to generate new tests
 /// that increase coverage on the module(s) being tested
@@ -53,9 +54,10 @@ struct SymExec {
     /// Directories storing source code for Move modules.
     /// Modules in these paths
     ///   1. will be loaded before `script_file`, and
-    ///   2. will be symbolically executed to probe new execution paths.
+    ///   2. will be symbolically executed to probe new execution paths
+    ///      unless excluded by markings in the `script_file`
     #[structopt(long = "move-src", short = "s", global = true)]
-    move_src: Option<Vec<String>>,
+    move_src: Vec<String>,
 
     /// Mark that no default values will be added to `move_src`
     #[structopt(long = "no-default-move-src", short = "S", global = true)]
@@ -68,11 +70,33 @@ struct SymExec {
     ///   2. will not be symbolically executed,
     ///      instead, they will be concretely executed.
     #[structopt(long = "move-lib", short = "l", global = true)]
-    move_lib: Option<Vec<String>>,
+    move_lib: Vec<String>,
 
-    /// Mark that no default values will be added to `move_lib`
-    #[structopt(long = "no-default-move-lib", short = "L", global = true)]
-    no_default_move_lib: bool,
+    /// Mark that the libsymexec library will not be loaded
+    #[structopt(long = "no-libsymexec", global = true)]
+    no_libsymexec: bool,
+
+    /// Mark that the libnursery library will not be loaded
+    #[structopt(long = "no-libnursery", global = true)]
+    no_libnursery: bool,
+
+    /// Directories storing pre-builts for `move_src` and `script_file`
+    /// (i.e., Move stdlib)
+    /// Modules in this directory
+    ///   1. will be loaded before `script_file`, but
+    ///   2. will not be symbolically executed,
+    ///      instead, they will be concretely executed.
+    #[structopt(long = "move-sys", short = "d", global = true)]
+    move_sys: Vec<String>,
+
+    /// Mark that the stdlib library will not be loaded
+    #[structopt(long = "no-stdlib", global = true)]
+    no_stdlib: bool,
+
+    /// Mark that the stdlib library needs to be built instead of using
+    /// the pre-built library
+    #[structopt(long = "build-stdlib", global = true)]
+    build_stdlib: bool,
 
     /// A directory storing Move and symbolic execution outputs produced
     /// by script execution.
@@ -93,30 +117,6 @@ struct SymExec {
         global = true,
     )]
     move_output: String,
-
-    /// Directories containing libsymexec
-    #[structopt(long = "move-libsymexec", global = true)]
-    move_libsymexec: Option<Vec<String>>,
-
-    /// Mark that no default values will be added to `move_libsymexec`
-    #[structopt(long = "no-default-move-libsymexec", global = true)]
-    no_default_move_libsymexec: bool,
-
-    /// Directories containing other system libs in source format
-    #[structopt(long = "move-sysdeps-src", global = true)]
-    move_sysdeps_src: Option<Vec<String>>,
-
-    /// Mark that no default values will be added to `move_sysdeps_src`
-    #[structopt(long = "no-default-move-sysdeps-src", global = true)]
-    no_default_move_sysdeps_src: bool,
-
-    /// Directories containing other pre-built libs
-    #[structopt(long = "move-sysdeps-bin", global = true)]
-    move_sysdeps_bin: Option<Vec<String>>,
-
-    /// Mark that no default values will be added to `move_sysdeps_bin`
-    #[structopt(long = "no-default-move-sysdeps-bin", global = true)]
-    no_default_move_sysdeps_bin: bool,
 
     /// Print additional diagnostics
     #[structopt(long = "verbose", short = "v", global = true)]
@@ -187,63 +187,35 @@ fn path_components_to_string(components: &[&str]) -> String {
         .unwrap()
 }
 
-fn setup_arg_by_appending_defaults(
-    arg: Option<Vec<String>>,
-    default_vals: Vec<String>,
-    no_defaults: bool,
-    is_required: bool,
-) -> Vec<String> {
-    if is_required && no_defaults && arg.is_none() {
-        panic!("Error: please set all arguments given --no-default");
-    }
-    let mut fixed: Vec<String> = Vec::new();
-    if let Some(v) = arg {
-        fixed.extend(v);
-    }
-    if !no_defaults {
-        fixed.extend(default_vals);
-    }
-    fixed
-}
-
 fn main() -> Result<()> {
     let args = SymExec::from_args();
 
     // setup options
-    let move_src = setup_arg_by_appending_defaults(
-        args.move_src,
-        vec![MOVE_SRC.to_owned()],
-        args.no_default_move_src,
-        false,
-    );
+    let mut default_move_src = Vec::new();
+    if !args.no_default_move_src {
+        default_move_src.push(MOVE_SRC.to_owned());
+    }
+    let move_src = [args.move_src, default_move_src].concat();
 
-    let move_lib = setup_arg_by_appending_defaults(
-        args.move_lib,
-        vec![MOVE_LIB.to_owned()],
-        args.no_default_move_lib,
-        false,
-    );
+    let mut default_move_lib = Vec::new();
+    if !args.no_libsymexec {
+        default_move_lib.push(path_components_to_string(&MOVE_LIBSYMEXEC));
+    }
+    if !args.no_stdlib {
+        if args.build_stdlib {
+            default_move_lib.push(path_components_to_string(&MOVE_STDLIB_SRC));
+        }
+        if !args.no_libnursery {
+            default_move_lib.push(path_components_to_string(&MOVE_LIBNURSERY));
+        }
+    }
+    let move_lib = [args.move_lib, default_move_lib].concat();
 
-    let move_libsymexec = setup_arg_by_appending_defaults(
-        args.move_libsymexec,
-        vec![path_components_to_string(&MOVE_LIBSYMEXEC)],
-        args.no_default_move_libsymexec,
-        false,
-    );
-
-    let move_sysdeps_src = setup_arg_by_appending_defaults(
-        args.move_sysdeps_src,
-        vec![path_components_to_string(&MOVE_NURSERY)],
-        args.no_default_move_sysdeps_src,
-        false,
-    );
-
-    let move_sysdeps_bin = setup_arg_by_appending_defaults(
-        args.move_sysdeps_bin,
-        vec![path_components_to_string(&MOVE_STDLIB)],
-        args.no_default_move_sysdeps_bin,
-        false,
-    );
+    let mut default_move_sys = Vec::new();
+    if !args.no_stdlib && !args.build_stdlib {
+        default_move_sys.push(path_components_to_string(&MOVE_STDLIB_BIN));
+    }
+    let move_sys = [args.move_sys, default_move_sys].concat();
 
     // setup logging
     let log_level = if args.verbose {
@@ -283,9 +255,7 @@ fn main() -> Result<()> {
             &type_args,
             &move_src,
             &move_lib,
-            &move_libsymexec,
-            &move_sysdeps_src,
-            &move_sysdeps_bin,
+            &move_sys,
             &args.move_data,
             &args.move_output,
             !no_clean,

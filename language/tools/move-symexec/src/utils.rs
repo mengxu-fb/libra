@@ -9,8 +9,6 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const MOVE_SOURCE_EXTENSION: &str = "move";
-pub const MOVE_COMPILED_EXTENSION: &str = "mv";
 pub const MOVE_COMPILED_INTERFACES_DIR: &str = "mv_interfaces";
 
 pub fn maybe_create_dir(dir_name: &PathBuf) -> Result<()> {
@@ -38,9 +36,9 @@ pub fn maybe_recreate_dir(dir_name: &PathBuf) -> Result<()> {
     Ok(())
 }
 
-pub fn path_interface_dir(move_output: &str) -> Result<PathBuf> {
+pub fn path_interface_dir(move_output: &str) -> Result<Vec<String>> {
     let mut path = PathBuf::from(move_output);
     path.push(MOVE_COMPILED_INTERFACES_DIR);
     maybe_create_dir(&path)?;
-    Ok(path)
+    Ok(vec![path.into_os_string().into_string().unwrap()])
 }

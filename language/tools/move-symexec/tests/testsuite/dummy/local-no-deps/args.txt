@@ -1,1 +1,1 @@
-run test.move --no-default-move-libsymexec --no-default-move-sysdeps-src --no-default-move-sysdeps-bin
+run test.move --no-libsymexec --no-libnursery --no-stdlib
