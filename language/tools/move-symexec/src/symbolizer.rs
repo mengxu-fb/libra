@@ -23,7 +23,7 @@ use move_vm_types::{gas_schedule::CostStrategy, values::Value};
 use vm::{file_format::CompiledScript, CompiledModule};
 use vm_genesis::genesis_gas_schedule::INITIAL_GAS_SCHEDULE;
 
-use crate::{state_view::InMemoryStateView, sym_config::SymConfig, utils};
+use crate::{exec_graph::ExecGraph, state_view::InMemoryStateView, sym_config::SymConfig, utils};
 
 fn load_modules(module_bin: &[String], move_output: &str) -> Result<Vec<CompiledModule>> {
     // generate interfaces
@@ -221,6 +221,14 @@ pub fn run(
             "Config parsed: {} function(s) to be tracked",
             config.num_tracked_functions()
         );
+
+        // execute each script symbolically
+        for script in src_scripts {
+            // build an execution graph that encloses both script and
+            // module CFGs, i.e., a super graph that has CFGs connected
+            // by the call graph
+            ExecGraph::new(&config, &script, &sym_modules);
+        }
     } else {
         // if no config file specified, execute each script concretely
         let modules = [sys_modules, lib_modules, src_modules].concat();

@@ -4041,6 +4041,7 @@ name = "move-symexec"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bytecode-verifier",
  "datatest-stable",
  "libra-workspace-hack",
  "log",
@@ -4048,6 +4049,7 @@ dependencies = [
  "move-lang",
  "move-vm-runtime",
  "move-vm-types",
+ "petgraph",
  "regex",
  "serde_json",
  "simplelog",

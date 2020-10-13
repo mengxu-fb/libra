@@ -169,4 +169,10 @@ impl SymConfig {
     pub fn num_tracked_functions(&self) -> usize {
         self.tracked_functions.iter().map(|(_, v)| v.len()).sum()
     }
+
+    pub fn is_function_tracked(&self, module_id: &ModuleId, func_id: &IdentStr) -> bool {
+        self.tracked_functions
+            .get(module_id)
+            .map_or(false, |func_set| func_set.contains(func_id))
+    }
 }
