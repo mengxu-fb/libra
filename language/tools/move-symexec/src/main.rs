@@ -14,10 +14,10 @@ use move_core_types::{
 };
 use move_symexec::symbolizer;
 
-/// Default directory where Move modules live
+/// Default directory where Move modules and scripts live
 pub const MOVE_SRC: &str = "move_src";
 
-/// Default directory where saved Move resources live
+/// Default directory where saved symbolic execution data live
 pub const MOVE_DATA: &str = "move_data";
 
 /// Default directory for build output
@@ -40,6 +40,7 @@ pub const MOVE_STDLIB_BIN: [&str; 6] = [
     "stdlib",
 ];
 
+/// Default path to directory containing stdlib (source)
 pub const MOVE_STDLIB_SRC: [&str; 5] =
     [env!("CARGO_MANIFEST_DIR"), "..", "..", "stdlib", "modules"];
 
@@ -51,9 +52,9 @@ pub const MOVE_STDLIB_SRC: [&str; 5] =
     about = "Symbolically execute a Move script"
 )]
 struct SymExec {
-    /// Directories storing source code for Move modules.
+    /// Directories storing source code for Move modules and scripts.
     /// Modules in these paths
-    ///   1. will be loaded before `script_file`, and
+    ///   1. will be loaded before script execution, and
     ///   2. will be symbolically executed to probe new execution paths
     ///      unless excluded by markings in the `script_file`
     #[structopt(long = "move-src", short = "s", global = true)]
@@ -63,12 +64,12 @@ struct SymExec {
     #[structopt(long = "no-default-move-src", short = "S", global = true)]
     no_default_move_src: bool,
 
-    /// Directories storing libraries for `move_src` and `script_file`
+    /// Directories storing libraries for files in `move_src`
     /// (i.e., Move libraries)
     /// Modules in this directory
-    ///   1. will be loaded before `script_file`, but
+    ///   1. will be loaded before script execution, but
     ///   2. will not be symbolically executed,
-    ///      instead, they will be concretely executed.
+    ///      instead, they must be statically modeled.
     #[structopt(long = "move-lib", short = "l", global = true)]
     move_lib: Vec<String>,
 
@@ -80,12 +81,12 @@ struct SymExec {
     #[structopt(long = "no-libnursery", global = true)]
     no_libnursery: bool,
 
-    /// Directories storing pre-builts for `move_src` and `script_file`
-    /// (i.e., Move stdlib)
+    /// Directories storing compiled modules for files in `move_src`
+    /// (e.g., Move stdlib)
     /// Modules in this directory
-    ///   1. will be loaded before `script_file`, but
+    ///   1. will be loaded before script execution, but
     ///   2. will not be symbolically executed,
-    ///      instead, they will be concretely executed.
+    ///      instead, they must be statically modeled.
     #[structopt(long = "move-sys", short = "d", global = true)]
     move_sys: Vec<String>,
 
@@ -94,9 +95,15 @@ struct SymExec {
     no_stdlib: bool,
 
     /// Mark that the stdlib library needs to be built instead of using
-    /// the pre-built library
+    /// the compiled version, i.e., adding stdlib to `move_lib`.
     #[structopt(long = "build-stdlib", global = true)]
     build_stdlib: bool,
+
+    /// Mark that the stdlib library needs to be tracked for symbolic
+    /// execution, similar to modules in `move_src`, regardless of
+    /// whether stdlib is compiled or loaded.
+    #[structopt(long = "track-stdlib", global = true)]
+    track_stdlib: bool,
 
     /// A directory storing Move and symbolic execution outputs produced
     /// by script execution.
@@ -141,10 +148,6 @@ enum Command {
     /// symbolically executing the script.
     #[structopt(name = "run")]
     Run {
-        /// Path to script to be compiled and symbolically executed.
-        #[structopt()]
-        script_file: String,
-
         /// Configuration file for the symbolic execution engine.
         /// Not setting the `config_file` means concreate execution.
         #[structopt(long = "config", short = "c")]
@@ -195,32 +198,33 @@ fn path_components_to_string(components: &[&str]) -> String {
 fn main() -> Result<()> {
     let args = SymExec::from_args();
 
-    // setup options
+    // argument: move_src
     let mut default_move_src = Vec::new();
     if !args.no_default_move_src {
         default_move_src.push(MOVE_SRC.to_owned());
     }
-    let move_src = [args.move_src, default_move_src].concat();
+    let move_src = [default_move_src, args.move_src].concat();
 
+    // argument: move_lib
     let mut default_move_lib = Vec::new();
     if !args.no_libsymexec {
         default_move_lib.push(path_components_to_string(&MOVE_LIBSYMEXEC));
     }
-    if !args.no_stdlib {
-        if args.build_stdlib {
-            default_move_lib.push(path_components_to_string(&MOVE_STDLIB_SRC));
-        }
-        if !args.no_libnursery {
-            default_move_lib.push(path_components_to_string(&MOVE_LIBNURSERY));
-        }
+    if !args.no_stdlib && !args.no_libnursery {
+        default_move_lib.push(path_components_to_string(&MOVE_LIBNURSERY));
     }
-    let move_lib = [args.move_lib, default_move_lib].concat();
+    let move_lib = [default_move_lib, args.move_lib].concat();
 
+    // argument: move_sys
     let mut default_move_sys = Vec::new();
-    if !args.no_stdlib && !args.build_stdlib {
-        default_move_sys.push(path_components_to_string(&MOVE_STDLIB_BIN));
+    if !args.no_stdlib {
+        default_move_sys.push(path_components_to_string(if args.build_stdlib {
+            &MOVE_STDLIB_SRC
+        } else {
+            &MOVE_STDLIB_BIN
+        }));
     }
-    let move_sys = [args.move_sys, default_move_sys].concat();
+    let move_sys = [default_move_sys, args.move_sys].concat();
 
     // setup logging
     let log_level = if args.verbose {
@@ -248,14 +252,12 @@ fn main() -> Result<()> {
     // match commands
     match &args.cmd {
         Command::Run {
-            script_file,
             config_file,
             signers,
             val_args,
             type_args,
             no_clean,
         } => symbolizer::run(
-            script_file,
             config_file.as_ref(),
             &signers,
             &val_args,
@@ -263,6 +265,8 @@ fn main() -> Result<()> {
             &move_src,
             &move_lib,
             &move_sys,
+            args.build_stdlib,
+            args.track_stdlib,
             &args.move_data,
             &args.move_output,
             !no_clean,

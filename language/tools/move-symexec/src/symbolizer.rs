@@ -49,21 +49,23 @@ fn load_modules(module_bin: &[String], move_output: &str) -> Result<Vec<Compiled
     Ok(compiled_modules)
 }
 
-fn compile_modules(module_src: &[String], move_output: &str) -> Result<Vec<CompiledModule>> {
+fn compile(
+    move_src: &[String],
+    move_output: &str,
+) -> Result<(Vec<CompiledModule>, Vec<CompiledScript>)> {
     let deps = utils::path_interface_dir(move_output)?;
 
     // compile
-    let (files, compiled_units) = move_lang::move_compile(module_src, &deps, None, None)?;
+    let (files, compiled_units) = move_lang::move_compile(move_src, &deps, None, None)?;
 
-    // collect modules
+    // collect modules and scripts
     let mut compiled_modules = vec![];
+    let mut compiled_scripts = vec![];
     for unit in compiled_units.iter() {
         match unit {
-            CompiledUnit::Script { loc, .. } => warn!(
-                "Warning: found a script during module compilation: {}. \
-                The script will not be involved in symbolic execution.",
-                loc.file(),
-            ),
+            CompiledUnit::Script { script, .. } => {
+                compiled_scripts.push(script.clone());
+            }
             CompiledUnit::Module { module, .. } => {
                 compiled_modules.push(module.clone());
             }
@@ -81,37 +83,7 @@ fn compile_modules(module_src: &[String], move_output: &str) -> Result<Vec<Compi
     )?;
 
     // done
-    Ok(compiled_modules)
-}
-
-fn compile_script(script_file: &str, move_output: &str) -> Result<CompiledScript> {
-    let deps = utils::path_interface_dir(move_output)?;
-
-    // compile
-    let (_, compiled_units) =
-        move_lang::move_compile(&[script_file.to_owned()], &deps, None, None)?;
-
-    let mut compiled_script = None;
-    for unit in compiled_units {
-        match unit {
-            CompiledUnit::Script { script, .. } => {
-                if compiled_script.is_some() {
-                    bail!("Error: found more than one script!");
-                }
-                compiled_script = Some(script);
-            }
-            CompiledUnit::Module { ident, .. } => warn!(
-                "Warning: found a module during script compilation: {}. \
-                The module will not be involved in symbolic execution.",
-                ident,
-            ),
-        }
-    }
-
-    match compiled_script {
-        None => bail!("Error: no scripts found!"),
-        Some(script) => Ok(script),
-    }
+    Ok((compiled_modules, compiled_scripts))
 }
 
 fn execute_script(
@@ -184,7 +156,6 @@ fn execute_script(
 }
 
 pub fn run(
-    script_file: &str,
     config_file_opt: Option<&String>,
     signers: &[AccountAddress],
     val_args: &[TransactionArgument],
@@ -192,6 +163,8 @@ pub fn run(
     move_src: &[String],
     move_lib: &[String],
     move_sys: &[String],
+    build_stdlib: bool,
+    track_stdlib: bool,
     move_data: &str,
     move_output: &str,
     post_run_cleaning: bool,
@@ -202,37 +175,58 @@ pub fn run(
     utils::maybe_recreate_dir(&path_move_data)?;
     utils::maybe_recreate_dir(&path_move_output)?;
 
-    // load prebuilt modules and expose interfaces
-    let sys_modules = load_modules(move_sys, move_output)?;
-    debug!("{} sys module(s) loaded", sys_modules.len());
+    // load/compile modules and expose interfaces
+    let sys_modules = if build_stdlib {
+        let (modules, scripts) = compile(move_sys, move_output)?;
+        if !scripts.is_empty() {
+            warn!(
+                "{} scripts ignored when compiling sys modules",
+                scripts.len()
+            );
+        }
+        debug!("{} sys module(s) compiled", modules.len());
+        modules
+    } else {
+        let modules = load_modules(move_sys, move_output)?;
+        debug!("{} sys module(s) loaded", modules.len());
+        modules
+    };
 
-    // compile modules
-    let lib_modules = compile_modules(move_lib, move_output)?;
+    // compile libraries
+    let (lib_modules, lib_scripts) = compile(move_lib, move_output)?;
+    if !lib_scripts.is_empty() {
+        warn!(
+            "{} scripts ignored when compiling lib modules",
+            lib_scripts.len()
+        );
+    }
     debug!("{} lib module(s) compiled", lib_modules.len());
 
-    let src_modules = compile_modules(move_src, move_output)?;
+    // compile sources
+    let (src_modules, src_scripts) = compile(move_src, move_output)?;
     debug!("{} src module(s) compiled", src_modules.len());
-
-    // compile script
-    let script = compile_script(script_file, move_output)?;
-    debug!("Script compiled");
+    debug!("{} src script(s) compiled", src_scripts.len());
 
     if let Some(config_file) = config_file_opt {
+        // collect modules to track
+        let sym_modules = if track_stdlib {
+            [sys_modules, src_modules].concat()
+        } else {
+            src_modules
+        };
+
         // parse config file
-        let config = SymConfig::new(&config_file, &src_modules)?;
+        let config = SymConfig::new(&config_file, &sym_modules)?;
         debug!(
             "Config parsed: {} function(s) to be tracked",
             config.num_tracked_functions()
         );
     } else {
-        // if no config file specified, execute concretely
-        execute_script(
-            &script,
-            &[sys_modules, lib_modules, src_modules].concat(),
-            signers,
-            val_args,
-            type_args,
-        )?;
+        // if no config file specified, execute each script concretely
+        let modules = [sys_modules, lib_modules, src_modules].concat();
+        for script in src_scripts {
+            execute_script(&script, &modules, signers, val_args, type_args)?;
+        }
     }
 
     // cleaning

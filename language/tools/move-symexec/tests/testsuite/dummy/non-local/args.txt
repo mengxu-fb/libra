@@ -1,4 +1,4 @@
-run ../local-no-deps/test.move -S --move-src ../local-no-deps/move_src --no-libsymexec --no-libnursery --no-stdlib
-run ../local-with-libsymexec/test.move -S --move-src ../local-with-libsymexec/move_src --no-libnursery --no-stdlib
-run ../local-with-stdlib/test.move -S --move-src ../local-with-stdlib/move_src --no-libsymexec
-run ../local-with-libsymexec-stdlib/test.move -S --move-src ../local-with-libsymexec-stdlib/move_src
+run -S --move-src ../local-no-deps/move_src --no-libsymexec --no-libnursery --no-stdlib
+run -S --move-src ../local-with-libsymexec/move_src --no-libnursery --no-stdlib
+run -S --move-src ../local-with-stdlib/move_src --no-libsymexec
+run -S --move-src ../local-with-libsymexec-stdlib/move_src
