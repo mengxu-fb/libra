@@ -4043,6 +4043,7 @@ dependencies = [
  "anyhow",
  "bytecode-verifier",
  "datatest-stable",
+ "libra-types",
  "libra-workspace-hack",
  "log",
  "move-core-types",
@@ -4057,6 +4058,20 @@ dependencies = [
  "tempfile",
  "vm",
  "vm-genesis",
+]
+
+[[package]]
+name = "move-symexec-functional-tests"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "datatest-stable",
+ "functional-tests",
+ "libra-types",
+ "libra-workspace-hack",
+ "move-lang",
+ "move-symexec",
+ "tempfile",
 ]
 
 [[package]]

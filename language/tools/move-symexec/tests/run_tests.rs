@@ -11,8 +11,7 @@ use std::{
 };
 
 use datatest_stable::{harness, Result};
-
-const MOVE_SYMEXEC_BIN_NAME: &str = "move-symexec";
+use move_symexec::MOVE_SYMEXEC_BIN_NAME;
 
 #[derive(Debug)]
 struct TestFailure {

@@ -11,6 +11,17 @@ use std::{
 
 pub const MOVE_COMPILED_INTERFACES_DIR: &str = "mv_interfaces";
 
+// helpers
+pub fn path_components_to_string(components: &[&str]) -> String {
+    components
+        .iter()
+        .collect::<PathBuf>()
+        .into_os_string()
+        .into_string()
+        .unwrap()
+}
+
+// paths
 pub fn maybe_create_dir(dir_name: &PathBuf) -> Result<()> {
     let dir = Path::new(dir_name);
     if !dir.exists() {

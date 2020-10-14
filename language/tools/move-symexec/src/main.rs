@@ -5,14 +5,13 @@
 
 use anyhow::Result;
 use simplelog::{ConfigBuilder, LevelFilter, SimpleLogger, TermLogger, TerminalMode};
-use std::path::PathBuf;
 use structopt::StructOpt;
 
 use move_core_types::{
     account_address::AccountAddress, language_storage::TypeTag, parser,
     transaction_argument::TransactionArgument,
 };
-use move_symexec::symbolizer;
+use move_symexec::{symbolizer, utils};
 
 /// Default directory where Move modules and scripts live
 pub const MOVE_SRC: &str = "move_src";
@@ -186,15 +185,6 @@ enum Command {
     },
 }
 
-fn path_components_to_string(components: &[&str]) -> String {
-    components
-        .iter()
-        .collect::<PathBuf>()
-        .into_os_string()
-        .into_string()
-        .unwrap()
-}
-
 fn main() -> Result<()> {
     let args = SymExec::from_args();
 
@@ -208,17 +198,17 @@ fn main() -> Result<()> {
     // argument: move_lib
     let mut default_move_lib = Vec::new();
     if !args.no_libsymexec {
-        default_move_lib.push(path_components_to_string(&MOVE_LIBSYMEXEC));
+        default_move_lib.push(utils::path_components_to_string(&MOVE_LIBSYMEXEC));
     }
     if !args.no_stdlib && !args.no_libnursery {
-        default_move_lib.push(path_components_to_string(&MOVE_LIBNURSERY));
+        default_move_lib.push(utils::path_components_to_string(&MOVE_LIBNURSERY));
     }
     let move_lib = [default_move_lib, args.move_lib].concat();
 
     // argument: move_sys
     let mut default_move_sys = Vec::new();
     if !args.no_stdlib {
-        default_move_sys.push(path_components_to_string(if args.build_stdlib {
+        default_move_sys.push(utils::path_components_to_string(if args.build_stdlib {
             &MOVE_STDLIB_SRC
         } else {
             &MOVE_STDLIB_BIN

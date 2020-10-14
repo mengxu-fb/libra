@@ -72,10 +72,19 @@ fn compile(
         }
     }
 
+    // filter out scripts from compiled units
+    let compiled_units_modules = compiled_units
+        .into_iter()
+        .filter(|unit| match unit {
+            CompiledUnit::Script { .. } => false,
+            CompiledUnit::Module { .. } => true,
+        })
+        .collect();
+
     // generate interfaces
     let mv_dir = tempdir()?;
     let mv_dir_path = mv_dir.path().to_str().unwrap();
-    move_lang::output_compiled_units(false, files, compiled_units, mv_dir_path)?;
+    move_lang::output_compiled_units(false, files, compiled_units_modules, mv_dir_path)?;
     move_lang::generate_interface_files(
         &[mv_dir_path.to_owned()],
         Some(move_output.to_owned()),
