@@ -131,6 +131,7 @@ members = [
     "language/move-lang/functional-tests",
     "language/move-prover/test-utils",
     "language/move-vm/integration-tests",
+    "language/tools/move-symexec",
     "language/vm/serializer-tests",
     "network/memsocket",
     "network/socket-bench-server",

@@ -96,6 +96,7 @@ members = [
     "language/tools/move-cli",
     "language/tools/move-coverage",
     "language/tools/move-explain",
+    "language/tools/move-symexec",
     "language/tools/resource-viewer",
     "language/tools/vm-genesis",
     "language/transaction-builder",
