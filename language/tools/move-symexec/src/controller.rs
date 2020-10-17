@@ -379,7 +379,7 @@ impl MoveController {
 
         // symbolize each script one by one
         for script in tracked_scripts.iter() {
-            let _symbolizer = MoveSymbolizer::new(script, &tracked_modules, &sym_setup);
+            let _symbolizer = MoveSymbolizer::new(&sym_setup, script, &tracked_modules);
         }
 
         // done

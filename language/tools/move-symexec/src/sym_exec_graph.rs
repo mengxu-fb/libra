@@ -4,8 +4,9 @@
 #![forbid(unsafe_code)]
 
 use petgraph::{
-    algo::tarjan_scc,
-    graph::{Graph, NodeIndex},
+    graph::{EdgeIndex, Graph, NodeIndex},
+    visit::DfsPostOrder,
+    EdgeDirection,
 };
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +20,7 @@ use move_core_types::{
 };
 use vm::{
     access::{ModuleAccess, ScriptAccess},
-    file_format::{Bytecode, CompiledModule, CompiledScript},
+    file_format::{Bytecode, CodeOffset, CompiledModule, CompiledScript},
 };
 
 use crate::sym_setup::SymSetup;
@@ -28,18 +29,30 @@ use crate::sym_setup::SymSetup;
 /// graph that encloses both script and module CFGs, i.e., a super
 /// graph that has CFGs connected by the call graph.
 
+#[derive(Clone, Debug)]
+enum CodeContext {
+    Script,
+    Module {
+        module_id: ModuleId,
+        function_id: Identifier,
+    },
+}
+
 /// This is the basic block (i.e., the node) in the super-CFG.
+type ExecBlockId = usize;
+
+#[derive(Clone, Debug)]
 struct ExecBlock {
-    module_id: Option<ModuleId>,
-    function_id: Identifier,
+    block_id: ExecBlockId,
+    code_context: CodeContext,
     instructions: Vec<Bytecode>,
 }
 
 impl ExecBlock {
-    pub fn new(module_id: Option<ModuleId>, function_id: Identifier) -> Self {
+    pub fn new(block_id: ExecBlockId, code_context: CodeContext) -> Self {
         Self {
-            module_id,
-            function_id,
+            block_id,
+            code_context,
             instructions: vec![],
         }
     }
@@ -49,43 +62,104 @@ impl ExecBlock {
     }
 }
 
-/// This is the control transition (i.e., the edge) in the super-CFG.
-enum ExecTransition {
+/// This is the control flow (i.e., the edge) in the super-CFG.
+type ExecFlowId = usize;
+
+#[derive(Clone, Debug)]
+enum ExecFlowType {
     /// Fall through: the next instruction is PC + 1
     Fallthrough,
-
     /// Conditional or unconditional (if condition is None) branch
     Branch {
         bytecode: Bytecode,
         condition: Option<bool>,
     },
-
     /// Function call
     Call { bytecode: Bytecode },
-
     /// Function return
     Ret,
 }
 
+#[derive(Clone, Debug)]
+struct ExecFlow {
+    flow_id: ExecFlowId,
+    flow_type: ExecFlowType,
+}
+
 /// This is the super-CFG graph representation.
-pub(crate) struct ExecGraph {}
+#[derive(Clone, Debug)]
+pub(crate) struct ExecGraph {
+    graph: Graph<ExecBlock, ExecFlow>,
+    node_map: HashMap<ExecBlockId, NodeIndex>,
+    edge_map: HashMap<ExecFlowId, EdgeIndex>,
+    instruction_map: HashMap<CodeContext, HashMap<CodeOffset, (ExecBlockId, usize)>>,
+}
 
 impl ExecGraph {
+    fn empty() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_map: HashMap::new(),
+            edge_map: HashMap::new(),
+            instruction_map: HashMap::new(),
+        }
+    }
+
+    fn incorporate(
+        &mut self,
+        cfg: &VMControlFlowGraph,
+        instructions: &[Bytecode],
+        call_stack: &mut Vec<(CodeContext, CodeOffset)>,
+        setup: &SymSetup,
+        tracked_modules: &[CompiledModule],
+    ) {
+        // iterate script CFG
+        for block_id in cfg_reverse_postorder_dfs(cfg, instructions) {
+            // create the block
+            let exec_block_id = self.graph.node_count();
+            let mut exec_block = ExecBlock::new(exec_block_id, CodeContext::Script);
+
+            // push instructions
+            for offset in cfg.block_start(block_id)..=cfg.block_end(block_id) {
+                let instruction = &instructions[offset as usize];
+                match instruction {
+                    Bytecode::Abort
+                    | Bytecode::Branch(_)
+                    | Bytecode::BrTrue(_)
+                    | Bytecode::BrFalse(_)
+                    | Bytecode::Ret => (),
+                    _ => assert!(!instruction.is_branch()),
+                };
+            }
+
+            // add block to graph
+            let node_index = self.graph.add_node(exec_block);
+            self.node_map.insert(exec_block_id, node_index);
+        }
+    }
+
     pub fn new(
         setup: &SymSetup,
         script: &CompiledScript,
         tracked_modules: &[CompiledModule],
     ) -> Self {
-        // prepare
-        // let mut call_stack = vec![];
-        // let mut block_stack = vec![];
-
         // build CFG for the script
         let script_code = script.code();
         let script_cfg = VMControlFlowGraph::new(&script_code.code);
 
+        // start symbolization from here
+        let mut call_stack = vec![];
+        let mut exec_graph = ExecGraph::empty();
+        exec_graph.incorporate(
+            &script_cfg,
+            &script_code.code,
+            &mut call_stack,
+            setup,
+            tracked_modules,
+        );
+
         // TODO: to be removed
-        cfg_topological_sort(&script_cfg);
+        cfg_reverse_postorder_dfs(&script_cfg, &script_code.code);
         for module in tracked_modules {
             let module_id = module.self_id();
             for func_def in module.function_defs() {
@@ -96,93 +170,116 @@ impl ExecGraph {
                 }
                 if let Some(code_unit) = &func_def.code {
                     let function_cfg = VMControlFlowGraph::new(&code_unit.code);
-                    cfg_topological_sort(&function_cfg);
+                    cfg_reverse_postorder_dfs(&function_cfg, &code_unit.code);
                 }
             }
         }
 
         // done
-        Self {}
+        exec_graph
     }
 }
 
 // CFG / graph utils
 
-/// Convert a (partial) CFG into generic graphs so we can benefit
-/// from the algorithms, in particular, the SCC calculation algorithm,
+/// Convert a CFG into generic graphs so we can benefit from various
+/// graph algorithms, in particular, the DfsPostOrder visit algorithm,
 /// in the petgraph crate.
-fn partial_cfg_to_generic_graph(
+fn cfg_to_generic_graph(
     cfg: &VMControlFlowGraph,
-    blockset: &HashSet<BlockId>,
-) -> Graph<BlockId, ()> {
+    instructions: &[Bytecode],
+) -> (Graph<BlockId, ()>, NodeIndex) {
     // convert a CFG into a generic graph provided by petgraph
     let mut graph = Graph::new();
+    let blocks = cfg.blocks();
 
     // add nodes
-    let node_map: HashMap<BlockId, NodeIndex> = blockset
+    let node_map: HashMap<BlockId, NodeIndex> = blocks
         .iter()
         .map(|block_id| (*block_id, graph.add_node(*block_id)))
         .collect();
 
     // add edges
-    cfg.blocks()
-        .iter()
-        .filter(|block_id| blockset.contains(block_id))
-        .for_each(|block_id| {
-            cfg.successors(*block_id)
-                .iter()
-                .filter(|successor_id| blockset.contains(successor_id))
-                .for_each(|successor_id| {
-                    // all nodes added before, we can safely unwrap here
-                    graph.add_edge(
-                        *node_map.get(block_id).unwrap(),
-                        *node_map.get(successor_id).unwrap(),
-                        (),
-                    );
-                })
+    blocks.iter().for_each(|block_id| {
+        cfg.successors(*block_id).iter().for_each(|successor_id| {
+            // all nodes added before, we can safely unwrap here
+            graph.add_edge(
+                *node_map.get(block_id).unwrap(),
+                *node_map.get(successor_id).unwrap(),
+                (),
+            );
+        })
+    });
+
+    // ensure there is only one unified exit
+    let exit_blocks: Vec<BlockId> = blocks
+        .into_iter()
+        .filter(|block_id| cfg.successors(*block_id).is_empty())
+        .collect();
+
+    #[cfg(debug_assertions)]
+    // if a basic block has no successors, it must be either
+    //  1. a basic block ending with Ret
+    //  2. a basic block ending with Abort
+    for block_id in exit_blocks.iter() {
+        match &instructions[cfg.block_end(*block_id) as usize] {
+            Bytecode::Ret => true,
+            Bytecode::Abort => false,
+            _ => panic!("Invalid termination block in funciton CFG"),
+        };
+    }
+
+    // If more than one exit blocks found, add an arbitrary unity block
+    // and link all Ret blocks to the unity block.
+    let exit_node = if exit_blocks.len() != 1 {
+        // Note: given how BlockId are assigned, any number >= length of
+        // instructions: &[Bytecode] will be safe to use as the BlockId
+        // for artificial blocks
+        let unity_node = graph.add_node(instructions.len() as BlockId);
+        exit_blocks.iter().for_each(|block_id| {
+            graph.add_edge(*node_map.get(block_id).unwrap(), unity_node, ());
         });
+        unity_node
+    } else {
+        *node_map.get(exit_blocks.last().unwrap()).unwrap()
+    };
 
     // done
-    graph
+    (graph, exit_node)
 }
 
-/// Iterate a (partial) CFG in DAG-topological order
-/// The function first convert the (partial) CFG into a DAG by
-/// abstracting each loop into a single component. And then iterate
-/// over the DAG in topological order. For each component seen in
-/// DAG-iteration, convert loop component into a sub DAG and further
-/// iterate that sub-DAG.
-fn partial_cfg_topological_sort(
-    cfg: &VMControlFlowGraph,
-    blockset: &HashSet<BlockId>,
-) -> Vec<BlockId> {
-    let mut sorted_blocks = vec![];
+fn cfg_reverse_postorder_dfs(cfg: &VMControlFlowGraph, instructions: &[Bytecode]) -> Vec<BlockId> {
+    let mut result = vec![];
 
-    // partial CFG convertion
-    let graph = partial_cfg_to_generic_graph(&cfg, blockset);
+    // build and reverse the CFG
+    let (mut graph, exit_node) = cfg_to_generic_graph(cfg, instructions);
+    graph.reverse();
 
-    // iterate in topological order.
-    // `petgraph::algo::tarjan_scc` guarantees reverse topological order
-    for component in tarjan_scc(&graph).into_iter().rev() {
-        if component.len() == 1 {
-            // this is a single block
-            sorted_blocks.push(*graph.node_weight(*component.last().unwrap()).unwrap());
-        } else {
-            // this is a loop, sort its blocks and concat the results
-            let loop_blockset = HashSet::from_iter(
-                component
-                    .iter()
-                    .map(|node_idx| *graph.node_weight(*node_idx).unwrap()),
-            );
-            sorted_blocks.extend(partial_cfg_topological_sort(cfg, &loop_blockset));
+    #[cfg(debug_assertions)]
+    // check that the exit_node now is the entry node after reversal
+    assert_eq!(
+        graph
+            .edges_directed(exit_node, EdgeDirection::Incoming)
+            .count(),
+        0
+    );
+
+    // Run post-order DFS visitation
+    //
+    // In reverse-postorder iteration, a node is visited before any of
+    // its successor nodes has been visited, except when the successor
+    // is reached by a back edge.
+    // (Note that this is not the same as preorder.)
+    let mut visitor = DfsPostOrder::new(&graph, exit_node);
+    while let Some(node) = visitor.next(&graph) {
+        let block_id = *graph.node_weight(node).unwrap();
+        if block_id == instructions.len() as BlockId {
+            // ignore the arbitrary unity block
+            continue;
         }
+        result.push(block_id);
     }
 
     // done
-    sorted_blocks
-}
-
-fn cfg_topological_sort(cfg: &VMControlFlowGraph) -> Vec<BlockId> {
-    let blockset = HashSet::from_iter(cfg.blocks());
-    partial_cfg_topological_sort(cfg, &blockset)
+    result
 }

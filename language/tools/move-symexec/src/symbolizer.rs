@@ -9,15 +9,18 @@ use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup};
 
 /// The symbolizer
 #[derive(Clone, Debug)]
-pub(crate) struct MoveSymbolizer {}
+pub(crate) struct MoveSymbolizer {
+    exec_graph: ExecGraph,
+}
 
 impl MoveSymbolizer {
     pub fn new(
+        setup: &SymSetup,
         script: &CompiledScript,
         tracked_modules: &[CompiledModule],
-        setup: &SymSetup,
     ) -> Self {
-        ExecGraph::new(setup, script, tracked_modules);
-        MoveSymbolizer {}
+        Self {
+            exec_graph: ExecGraph::new(setup, script, tracked_modules),
+        }
     }
 }
