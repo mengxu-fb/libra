@@ -97,14 +97,15 @@ impl ExecGraph {
         exec_unit: &ExecUnit,
         call_stack: &mut Vec<(CodeContext, CodeOffset, ExecBlockId)>,
         setup: &SymSetup,
-    ) {
+    ) -> Vec<ExecBlockId> {
         // prepare
         let code_context = exec_unit.get_code_condext();
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
-        let mut call_inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
+        let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, Vec<ExecBlockId>)> =
+            HashMap::new();
 
         // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
@@ -149,19 +150,25 @@ impl ExecGraph {
                     let node_index = self.graph.add_node(exec_block.clone());
                     self.node_map.insert(exec_block_id, node_index);
 
-                    // check recursion
+                    // check recursion and act accordingly
                     let next_context = next_unit.get_code_condext();
-                    if !call_stack
+                    let ret_block_ids = if call_stack
                         .iter()
                         .any(|(call_context, _, _)| call_context == &next_context)
                     {
-                        // non-recursive : call into the next unit
+                        // recursive call: do not further expand the CFG of that function.
+
+                        // TODO: need to collect return blocks
+                        vec![]
+                    } else {
+                        // non-recursive: call into the next unit
                         call_stack.push((code_context.clone(), offset, exec_block.block_id));
-                        self.incorporate(next_unit, call_stack, setup);
+                        let ret_blocks = self.incorporate(next_unit, call_stack, setup);
                         assert!(call_stack.pop().is_some());
-                    }
-                    // otherwise, it is recursion, we will not further
-                    // expand the CFG of that function.
+
+                        // to build the return edges
+                        ret_blocks
+                    };
 
                     // clear this exec block so that it can be
                     // reused to host the rest of instructions in
@@ -171,7 +178,7 @@ impl ExecGraph {
 
                     // add the new block id to the instruction map that
                     // tracks calls specifically
-                    call_inst_map.insert(offset, exec_block.block_id);
+                    call_inst_map.insert(offset, (exec_block.block_id, ret_block_ids));
                 }
             }
 
@@ -211,6 +218,7 @@ impl ExecGraph {
             let origin_block_id = match term_instruction {
                 Bytecode::Call(_) | Bytecode::CallGeneric(_) => call_inst_map
                     .get(&term_offset)
+                    .map(|(ret_to_id, _)| ret_to_id)
                     .unwrap_or_else(|| inst_map.get(&term_offset).unwrap()),
                 _ => inst_map.get(&term_offset).unwrap(),
             };
@@ -250,6 +258,36 @@ impl ExecGraph {
                 self.edge_map.insert(exec_flow_id, edge_index);
             }
         }
+
+        // add returning edges from internal calls
+        for (ret_to_id, ret_from_ids) in call_inst_map.values() {
+            // derive destination node id
+            let ret_to_node_id = *self.node_map.get(ret_to_id).unwrap();
+
+            for ret_from_id in ret_from_ids {
+                // derive source node id
+                let ret_from_node_id = *self.node_map.get(ret_from_id).unwrap();
+
+                // add edge to graph
+                let exec_flow_id = self.graph.edge_count();
+                let edge_index = self.graph.add_edge(
+                    ret_from_node_id,
+                    ret_to_node_id,
+                    ExecFlow::new(exec_flow_id, ExecFlowType::Ret),
+                );
+                self.edge_map.insert(exec_flow_id, edge_index);
+            }
+        }
+
+        // collect blocks that ends with Ret
+        instructions
+            .iter()
+            .enumerate()
+            .filter_map(|(offset, instruction)| match instruction {
+                Bytecode::Ret => Some(*inst_map.get(&(offset as CodeOffset)).unwrap()),
+                _ => None,
+            })
+            .collect()
     }
 
     pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
