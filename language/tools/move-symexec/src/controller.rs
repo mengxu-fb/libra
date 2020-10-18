@@ -21,13 +21,14 @@ use move_core_types::{
 };
 use move_lang::shared::Address;
 use vm::{
-    access::ModuleAccess,
+    access::{ModuleAccess, ScriptAccess},
     file_format::{CompiledModule, CompiledScript},
 };
 
 use crate::{
     builder::MoveBuilder,
     executor::MoveExecutor,
+    sym_exec_graph::function_is_infinite_loop,
     sym_setup::{ExecUnit, SymSetup},
     symbolizer::MoveSymbolizer,
     utils,
@@ -382,6 +383,14 @@ impl MoveController {
 
         // symbolize each script one by one
         for script in tracked_scripts.iter() {
+            // do not symbolize infinite loops, for similar reason why
+            // we do not symbolize functions that themselves are purely
+            // infinite loops.
+            if function_is_infinite_loop(&script.code().code) {
+                warn!("Script is an infinite loop, excluding it from symbolization",);
+                continue;
+            }
+
             let _symbolizer = MoveSymbolizer::new(&sym_setup, script);
         }
 
@@ -528,6 +537,15 @@ impl MoveController {
                                 if func_def.code.is_none() {
                                     warn!(
                                         "Function {}::{} has no code unit \
+                                        excluding it from tracked functions",
+                                        module_id, func_id,
+                                    );
+                                    None
+                                } else if function_is_infinite_loop(
+                                    &(&func_def.code).as_ref().unwrap().code,
+                                ) {
+                                    warn!(
+                                        "Function {}::{} is an infinite loop \
                                         excluding it from tracked functions",
                                         module_id, func_id,
                                     );

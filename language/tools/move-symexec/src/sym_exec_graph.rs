@@ -323,6 +323,12 @@ fn cfg_to_generic_graph(
         };
     }
 
+    #[cfg(debug_assertions)]
+    // there are no exit blocks, it means that the whole CFG is an
+    // never-ending loop, which should have been filtered out by the
+    // func_is_infinite_loop check
+    assert!(!exit_blocks.is_empty());
+
     // If more than one exit blocks found, add an arbitrary unity block
     // and link all Ret blocks to the unity block.
     let exit_node = if exit_blocks.len() != 1 {
@@ -376,4 +382,11 @@ fn cfg_reverse_postorder_dfs(cfg: &VMControlFlowGraph, instructions: &[Bytecode]
 
     // done
     result
+}
+
+pub fn function_is_infinite_loop(instructions: &[Bytecode]) -> bool {
+    let cfg = VMControlFlowGraph::new(instructions);
+    !cfg.blocks()
+        .iter()
+        .any(|block_id| cfg.successors(*block_id).is_empty())
 }
