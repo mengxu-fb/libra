@@ -19,6 +19,16 @@ use vm::{
     },
 };
 
+/// uniquely identifies a function in the execution
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+pub(crate) enum CodeContext {
+    Script,
+    Module {
+        module_id: ModuleId,
+        function_id: Identifier,
+    },
+}
+
 /// unify script and module accesses
 pub(crate) enum ExecUnit<'a> {
     Script(&'a CompiledScript),
@@ -26,49 +36,60 @@ pub(crate) enum ExecUnit<'a> {
 }
 
 impl ExecUnit<'_> {
-    pub fn module_handle_at(&self, idx: ModuleHandleIndex) -> &ModuleHandle {
+    fn module_handle_at(&self, idx: ModuleHandleIndex) -> &ModuleHandle {
         match self {
             ExecUnit::Script(unit) => unit.module_handle_at(idx),
             ExecUnit::Module(unit, _) => unit.module_handle_at(idx),
         }
     }
 
-    pub fn function_handle_at(&self, idx: FunctionHandleIndex) -> &FunctionHandle {
+    fn function_handle_at(&self, idx: FunctionHandleIndex) -> &FunctionHandle {
         match self {
             ExecUnit::Script(unit) => unit.function_handle_at(idx),
             ExecUnit::Module(unit, _) => unit.function_handle_at(idx),
         }
     }
 
-    pub fn function_instantiation_at(
-        &self,
-        idx: FunctionInstantiationIndex,
-    ) -> &FunctionInstantiation {
+    fn function_instantiation_at(&self, idx: FunctionInstantiationIndex) -> &FunctionInstantiation {
         match self {
             ExecUnit::Script(unit) => unit.function_instantiation_at(idx),
             ExecUnit::Module(unit, _) => unit.function_instantiation_at(idx),
         }
     }
 
-    pub fn address_identifier_at(&self, idx: AddressIdentifierIndex) -> &AccountAddress {
+    fn address_identifier_at(&self, idx: AddressIdentifierIndex) -> &AccountAddress {
         match self {
             ExecUnit::Script(unit) => unit.address_identifier_at(idx),
             ExecUnit::Module(unit, _) => unit.address_identifier_at(idx),
         }
     }
 
-    pub fn identifier_at(&self, idx: IdentifierIndex) -> &IdentStr {
+    fn identifier_at(&self, idx: IdentifierIndex) -> &IdentStr {
         match self {
             ExecUnit::Script(unit) => unit.identifier_at(idx),
             ExecUnit::Module(unit, _) => unit.identifier_at(idx),
         }
     }
 
-    pub fn module_id_for_handle(&self, handle: &ModuleHandle) -> ModuleId {
+    pub fn module_id_by_index(&self, idx: ModuleHandleIndex) -> ModuleId {
+        let handle = self.module_handle_at(idx);
         ModuleId::new(
             *self.address_identifier_at(handle.address),
             self.identifier_at(handle.name).to_owned(),
         )
+    }
+
+    pub fn code_context_by_index(&self, idx: FunctionHandleIndex) -> CodeContext {
+        let handle = self.function_handle_at(idx);
+        CodeContext::Module {
+            module_id: self.module_id_by_index(handle.module),
+            function_id: self.identifier_at(handle.name).to_owned(),
+        }
+    }
+
+    pub fn code_context_by_generic_index(&self, idx: FunctionInstantiationIndex) -> CodeContext {
+        let instantiation = self.function_instantiation_at(idx);
+        self.code_context_by_index(instantiation.handle)
     }
 
     pub fn code_unit(&self) -> &CodeUnit {
@@ -77,6 +98,18 @@ impl ExecUnit<'_> {
             ExecUnit::Module(_, func) => (&func.code)
                 .as_ref()
                 .expect("A tracked function must have a code unit"),
+        }
+    }
+
+    pub fn get_code_condext(&self) -> CodeContext {
+        match self {
+            ExecUnit::Script(_) => CodeContext::Script,
+            ExecUnit::Module(unit, func) => CodeContext::Module {
+                module_id: unit.self_id(),
+                function_id: unit
+                    .identifier_at(unit.function_handle_at(func.function).name)
+                    .to_owned(),
+            },
         }
     }
 }
@@ -100,5 +133,19 @@ impl<'a> SymSetup<'a> {
         self.tracked_functions
             .get(module_id)
             .map_or(false, |func_set| func_set.get(func_id).is_some())
+    }
+
+    pub fn get_exec_unit_by_context(&self, context: &CodeContext) -> Option<&ExecUnit> {
+        match context {
+            CodeContext::Script => None,
+            CodeContext::Module {
+                module_id,
+                function_id,
+            } => self
+                .tracked_functions
+                .get(module_id)
+                .map(|func_map| func_map.get(function_id))
+                .flatten(),
+        }
     }
 }

@@ -8,29 +8,16 @@ use petgraph::{
     visit::DfsPostOrder,
     EdgeDirection,
 };
-use std::{collections::HashMap, iter::FromIterator};
+use std::collections::HashMap;
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
-use move_core_types::{
-    identifier::{IdentStr, Identifier},
-    language_storage::ModuleId,
-};
 use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
 
-use crate::sym_setup::{ExecUnit, SymSetup};
+use crate::sym_setup::{CodeContext, ExecUnit, SymSetup};
 
 /// The following classes aim for building an extended control-flow
 /// graph that encloses both script and module CFGs, i.e., a super
 /// graph that has CFGs connected by the call graph.
-
-#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
-enum CodeContext {
-    Script,
-    Module {
-        module_id: ModuleId,
-        function_id: Identifier,
-    },
-}
 
 /// This is the basic block (i.e., the node) in the super-CFG.
 type ExecBlockId = usize;
@@ -53,6 +40,10 @@ impl ExecBlock {
 
     pub fn add_instruction(&mut self, bytecode: Bytecode) {
         self.instructions.push(bytecode);
+    }
+
+    pub fn clear_instructions(&mut self) {
+        self.instructions.clear();
     }
 }
 
@@ -86,7 +77,6 @@ pub(crate) struct ExecGraph {
     graph: Graph<ExecBlock, ExecFlow>,
     node_map: HashMap<ExecBlockId, NodeIndex>,
     edge_map: HashMap<ExecFlowId, EdgeIndex>,
-    instruction_map: HashMap<CodeContext, HashMap<CodeOffset, (ExecBlockId, usize)>>,
 }
 
 impl ExecGraph {
@@ -95,7 +85,6 @@ impl ExecGraph {
             graph: Graph::new(),
             node_map: HashMap::new(),
             edge_map: HashMap::new(),
-            instruction_map: HashMap::new(),
         }
     }
 
@@ -105,6 +94,7 @@ impl ExecGraph {
         call_stack: &mut Vec<(CodeContext, CodeOffset)>,
         setup: &SymSetup,
     ) {
+        let code_context = exec_unit.get_code_condext();
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
@@ -112,7 +102,7 @@ impl ExecGraph {
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
             // create the block
             let exec_block_id = self.graph.node_count();
-            let mut exec_block = ExecBlock::new(exec_block_id, CodeContext::Script);
+            let mut exec_block = ExecBlock::new(exec_block_id, code_context.clone());
 
             // scan instructions
             for offset in cfg.block_start(block_id)..=cfg.block_end(block_id) {
@@ -126,11 +116,41 @@ impl ExecGraph {
                     assert_eq!(offset, cfg.block_end(block_id));
                 }
 
-                match instruction {
-                    Bytecode::Call(func_handle) => {}
-                    Bytecode::CallGeneric(func_instantiation) => {}
-                    _ => (),
+                // see if we are going to call into another exec unit
+                let next_unit_opt = match instruction {
+                    Bytecode::Call(func_handle_index) => setup.get_exec_unit_by_context(
+                        &exec_unit.code_context_by_index(*func_handle_index),
+                    ),
+                    Bytecode::CallGeneric(func_instantiation_index) => setup
+                        .get_exec_unit_by_context(
+                            &exec_unit.code_context_by_generic_index(*func_instantiation_index),
+                        ),
+                    _ => None,
                 };
+
+                if let Some(next_unit) = next_unit_opt {
+                    // check recursion
+                    let next_context = next_unit.get_code_condext();
+                    if !call_stack
+                        .iter()
+                        .any(|(call_context, _)| call_context == &next_context)
+                    {
+                        // done with exploration of this exec block
+                        let node_index = self.graph.add_node(exec_block.clone());
+                        self.node_map.insert(exec_block_id, node_index);
+
+                        // clear this exec block so that it can be
+                        // reused to host the rest of instructions in
+                        // current basic block, after the call.
+                        exec_block.clear_instructions();
+
+                        // call into the next execution unit
+                        call_stack.push((code_context.clone(), offset));
+                        self.incorporate(next_unit, call_stack, setup);
+                    }
+                    // otherwise, it is recursion, we will not further
+                    // expand the CFG of that function.
+                }
             }
 
             // add block to graph
@@ -150,6 +170,14 @@ impl ExecGraph {
 
         // done
         exec_graph
+    }
+
+    pub fn node_count(&self) -> usize {
+        self.graph.node_count()
+    }
+
+    pub fn edge_count(&self) -> usize {
+        self.graph.edge_count()
     }
 }
 
