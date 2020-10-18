@@ -55,12 +55,9 @@ enum ExecFlowType {
     /// Fall through: the next instruction is PC + 1
     Fallthrough,
     /// Conditional or unconditional (if condition is None) branch
-    Branch {
-        bytecode: Bytecode,
-        condition: Option<bool>,
-    },
+    Branch { condition: Option<bool> },
     /// Function call
-    Call { bytecode: Bytecode },
+    Call,
     /// Function return
     Ret,
 }
@@ -98,7 +95,7 @@ impl ExecGraph {
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
-        // iterate CFG: build blocks only in this iteration
+        // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
             // create the block
             let exec_block_id = self.graph.node_count();
