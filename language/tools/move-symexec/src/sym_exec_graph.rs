@@ -115,6 +115,7 @@ impl ExecGraph {
         &mut self,
         exec_unit: &ExecUnit,
         call_stack: &mut Vec<CallSite>,
+        id_counter: &mut ExecBlockId,
         setup: &SymSetup,
     ) -> Vec<ExecBlockId> {
         // prepare
@@ -129,7 +130,8 @@ impl ExecGraph {
         // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
             // create the block
-            let mut exec_block_id = self.graph.node_count();
+            let mut exec_block_id = *id_counter;
+            *id_counter += 1;
             let mut exec_block = ExecBlock::new(exec_block_id, code_context.clone());
 
             // scan instructions
@@ -169,7 +171,8 @@ impl ExecGraph {
                     // clear this exec block so that it can be reused
                     // to host the rest of instructions in current basic
                     // block, after the call.
-                    exec_block_id = self.graph.node_count();
+                    exec_block_id = *id_counter;
+                    *id_counter += 1;
                     exec_block.refresh(exec_block_id);
 
                     // record the block id that the call will return to
@@ -195,7 +198,7 @@ impl ExecGraph {
                             recursive_return_to: vec![],
                         };
                         call_stack.push(call_site);
-                        let ret_blocks = self.incorporate(next_unit, call_stack, setup);
+                        let ret_blocks = self.incorporate(next_unit, call_stack, id_counter, setup);
                         assert!(call_stack.pop().is_some());
 
                         // to build the return edges
@@ -351,8 +354,9 @@ impl ExecGraph {
 
         // start symbolization from here
         let mut call_stack = vec![];
+        let mut id_counter = 0;
         let mut exec_graph = ExecGraph::empty();
-        exec_graph.incorporate(&init_unit, &mut call_stack, setup);
+        exec_graph.incorporate(&init_unit, &mut call_stack, &mut id_counter, setup);
 
         // done
         exec_graph
