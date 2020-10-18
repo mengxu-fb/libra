@@ -49,8 +49,6 @@ impl ExecBlock {
 }
 
 /// This is the control flow (i.e., the edge) in the super-CFG.
-type ExecFlowId = usize;
-
 #[derive(Clone, Debug)]
 enum ExecFlowType {
     /// Fall through: the next instruction is PC + 1
@@ -65,14 +63,35 @@ enum ExecFlowType {
 
 #[derive(Clone, Debug)]
 struct ExecFlow {
-    flow_id: ExecFlowId,
+    flow_src: ExecBlockId,
+    flow_dst: ExecBlockId,
     flow_type: ExecFlowType,
 }
 
 impl ExecFlow {
-    pub fn new(flow_id: ExecFlowId, flow_type: ExecFlowType) -> Self {
-        Self { flow_id, flow_type }
+    pub fn new(flow_src: ExecBlockId, flow_dst: ExecBlockId, flow_type: ExecFlowType) -> Self {
+        Self {
+            flow_src,
+            flow_dst,
+            flow_type,
+        }
     }
+}
+
+/// This is the information stored on the call stack
+struct CallSite {
+    /// context where this call is initiated
+    context: CodeContext,
+    /// code offset in the context where this call is initiated
+    offset: CodeOffset,
+    /// the exec block id for the entry block in this context
+    init_block_id: ExecBlockId,
+    /// the exec block id where the call is initiated
+    call_block_id: ExecBlockId,
+    /// holds the places where this context is recursively called into
+    recursive_called_by: Vec<ExecBlockId>,
+    /// holds the places where this context will recursively return to
+    recursive_return_to: Vec<ExecBlockId>,
 }
 
 /// This is the super-CFG graph representation.
@@ -80,7 +99,7 @@ impl ExecFlow {
 pub(crate) struct ExecGraph {
     graph: Graph<ExecBlock, ExecFlow>,
     node_map: HashMap<ExecBlockId, NodeIndex>,
-    edge_map: HashMap<ExecFlowId, EdgeIndex>,
+    edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
 }
 
 impl ExecGraph {
@@ -95,7 +114,7 @@ impl ExecGraph {
     fn incorporate(
         &mut self,
         exec_unit: &ExecUnit,
-        call_stack: &mut Vec<(CodeContext, CodeOffset, ExecBlockId)>,
+        call_stack: &mut Vec<CallSite>,
         setup: &SymSetup,
     ) -> Vec<ExecBlockId> {
         // prepare
@@ -118,15 +137,9 @@ impl ExecGraph {
                 let instruction = &instructions[offset as usize];
                 exec_block.add_instruction(instruction.clone());
 
-                #[cfg(debug_assertions)]
-                // ensure that each instruction location is only mapped
-                // to one exec block
-                assert!(!inst_map.contains_key(&offset));
-
                 // now update the local instruction map
-                inst_map.insert(offset, exec_block.block_id);
+                assert!(inst_map.insert(offset, exec_block.block_id).is_none());
 
-                #[cfg(debug_assertions)]
                 // ensure that all branch instructions are terminations
                 // in the block
                 if instruction.is_branch() {
@@ -146,67 +159,106 @@ impl ExecGraph {
                 };
 
                 if let Some(next_unit) = next_unit_opt {
+                    // record block id
+                    let call_site_block_id = exec_block.block_id;
+
                     // done with exploration of this exec block
                     let node_index = self.graph.add_node(exec_block.clone());
-                    self.node_map.insert(exec_block_id, node_index);
+                    assert!(self.node_map.insert(exec_block_id, node_index).is_none());
+
+                    // clear this exec block so that it can be reused
+                    // to host the rest of instructions in current basic
+                    // block, after the call.
+                    exec_block_id = self.graph.node_count();
+                    exec_block.refresh(exec_block_id);
+
+                    // record the block id that the call will return to
+                    let call_site_ret_block_id = exec_block.block_id;
 
                     // check recursion and act accordingly
                     let next_context = next_unit.get_code_condext();
-                    let ret_block_ids = if call_stack
-                        .iter()
-                        .any(|(call_context, _, _)| call_context == &next_context)
-                    {
-                        // recursive call: do not further expand the CFG of that function.
+                    let mut recursion_points: Vec<&mut CallSite> = call_stack
+                        .iter_mut()
+                        .filter(|call_site| &call_site.context == &next_context)
+                        .collect();
 
-                        // TODO: need to collect return blocks
-                        vec![]
-                    } else {
+                    let ret_block_ids = if recursion_points.is_empty() {
                         // non-recursive: call into the next unit
-                        call_stack.push((code_context.clone(), offset, exec_block.block_id));
+                        let call_site = CallSite {
+                            context: code_context.clone(),
+                            offset,
+                            init_block_id: *inst_map
+                                .get(&cfg.block_start(cfg.entry_block_id()))
+                                .unwrap(),
+                            call_block_id: call_site_block_id,
+                            recursive_called_by: vec![],
+                            recursive_return_to: vec![],
+                        };
+                        call_stack.push(call_site);
                         let ret_blocks = self.incorporate(next_unit, call_stack, setup);
                         assert!(call_stack.pop().is_some());
 
                         // to build the return edges
                         ret_blocks
-                    };
+                    } else {
+                        // recursive call: do not further expand the CFG
+                        // of that function, just connect the blocks.
 
-                    // clear this exec block so that it can be
-                    // reused to host the rest of instructions in
-                    // current basic block, after the call.
-                    exec_block_id = self.graph.node_count();
-                    exec_block.refresh(exec_block_id);
+                        // ensure no duplicated context in call stack
+                        assert_eq!(recursion_points.len(), 1);
+
+                        // mark that there should be a pending call edge
+                        // from this block to the beginning of the
+                        // call site context, and also that the context
+                        // will return to the ret block.
+                        let recursive_call_site = recursion_points.pop().unwrap();
+                        recursive_call_site
+                            .recursive_called_by
+                            .push(call_site_block_id);
+                        recursive_call_site
+                            .recursive_return_to
+                            .push(call_site_ret_block_id);
+
+                        // intentionally return an empty list as the
+                        // recursive call site has not finished CFG
+                        // exploration, and hence, we do not know all
+                        // of their return blocks.
+                        vec![]
+                    };
 
                     // add the new block id to the instruction map that
                     // tracks calls specifically
-                    call_inst_map.insert(offset, (exec_block.block_id, ret_block_ids));
+                    assert!(call_inst_map
+                        .insert(offset, (call_site_ret_block_id, ret_block_ids))
+                        .is_none());
                 }
             }
 
             // add block to graph
             let node_index = self.graph.add_node(exec_block);
-            self.node_map.insert(exec_block_id, node_index);
+            assert!(self.node_map.insert(exec_block_id, node_index).is_none());
         }
 
         // add incoming call edge
-        if let Some((_, _, call_block_id)) = call_stack.last() {
+        if let Some(call_site) = call_stack.last() {
             // this exec unit is called into, add the call edge
-            let call_from_node = *self.node_map.get(call_block_id).unwrap();
-            let call_into_node = *self
-                .node_map
-                .get(
-                    inst_map
-                        .get(&cfg.block_start(cfg.entry_block_id()))
-                        .unwrap(),
-                )
-                .unwrap();
+            let call_from_block = call_site.call_block_id;
+            let call_from_node = *self.node_map.get(&call_site.call_block_id).unwrap();
 
-            let exec_flow_id = self.graph.edge_count();
+            let call_into_block = *inst_map
+                .get(&cfg.block_start(cfg.entry_block_id()))
+                .unwrap();
+            let call_into_node = *self.node_map.get(&call_into_block).unwrap();
+
             let edge_index = self.graph.add_edge(
                 call_from_node,
                 call_into_node,
-                ExecFlow::new(exec_flow_id, ExecFlowType::Call),
+                ExecFlow::new(call_from_block, call_into_block, ExecFlowType::Call),
             );
-            self.edge_map.insert(exec_flow_id, edge_index);
+            assert!(self
+                .edge_map
+                .insert((call_from_block, call_into_block), edge_index)
+                .is_none());
         }
 
         // add branching edges in CFG
@@ -215,19 +267,19 @@ impl ExecGraph {
             let term_instruction = &instructions[term_offset as usize];
 
             // derive origin node id
-            let origin_block_id = match term_instruction {
+            let origin_block_id = *match term_instruction {
                 Bytecode::Call(_) | Bytecode::CallGeneric(_) => call_inst_map
                     .get(&term_offset)
                     .map(|(ret_to_id, _)| ret_to_id)
                     .unwrap_or_else(|| inst_map.get(&term_offset).unwrap()),
                 _ => inst_map.get(&term_offset).unwrap(),
             };
-            let origin_node_id = *self.node_map.get(origin_block_id).unwrap();
+            let origin_node_id = *self.node_map.get(&origin_block_id).unwrap();
 
             for successor_offset in Bytecode::get_successors(term_offset, instructions) {
                 // derive successor node id
-                let successor_block_id = inst_map.get(&successor_offset).unwrap();
-                let successor_node_id = *self.node_map.get(successor_block_id).unwrap();
+                let successor_block_id = *inst_map.get(&successor_offset).unwrap();
+                let successor_node_id = *self.node_map.get(&successor_block_id).unwrap();
 
                 // derive flow type
                 let exec_flow_type = match term_instruction {
@@ -239,7 +291,6 @@ impl ExecGraph {
                         ExecFlowType::Branch(Some(successor_offset != *target_offset))
                     }
                     _ => {
-                        #[cfg(debug_assertions)]
                         // ensure that these instruction never branch
                         assert!(!term_instruction.is_branch());
 
@@ -249,13 +300,15 @@ impl ExecGraph {
                 };
 
                 // add edge to graph
-                let exec_flow_id = self.graph.edge_count();
                 let edge_index = self.graph.add_edge(
                     origin_node_id,
                     successor_node_id,
-                    ExecFlow::new(exec_flow_id, exec_flow_type),
+                    ExecFlow::new(origin_block_id, successor_block_id, exec_flow_type),
                 );
-                self.edge_map.insert(exec_flow_id, edge_index);
+                assert!(self
+                    .edge_map
+                    .insert((origin_block_id, successor_block_id), edge_index)
+                    .is_none());
             }
         }
 
@@ -269,13 +322,15 @@ impl ExecGraph {
                 let ret_from_node_id = *self.node_map.get(ret_from_id).unwrap();
 
                 // add edge to graph
-                let exec_flow_id = self.graph.edge_count();
                 let edge_index = self.graph.add_edge(
                     ret_from_node_id,
                     ret_to_node_id,
-                    ExecFlow::new(exec_flow_id, ExecFlowType::Ret),
+                    ExecFlow::new(*ret_from_id, *ret_to_id, ExecFlowType::Ret),
                 );
-                self.edge_map.insert(exec_flow_id, edge_index);
+                assert!(self
+                    .edge_map
+                    .insert((*ret_from_id, *ret_to_id), edge_index)
+                    .is_none());
             }
         }
 
@@ -349,7 +404,6 @@ fn cfg_to_generic_graph(
         .filter(|block_id| cfg.successors(*block_id).is_empty())
         .collect();
 
-    #[cfg(debug_assertions)]
     // if a basic block has no successors, it must be either
     //  1. a basic block ending with Ret
     //  2. a basic block ending with Abort
@@ -361,7 +415,6 @@ fn cfg_to_generic_graph(
         };
     }
 
-    #[cfg(debug_assertions)]
     // there are no exit blocks, it means that the whole CFG is an
     // never-ending loop, which should have been filtered out by the
     // func_is_infinite_loop check
@@ -393,7 +446,6 @@ fn cfg_reverse_postorder_dfs(cfg: &VMControlFlowGraph, instructions: &[Bytecode]
     let (mut graph, exit_node) = cfg_to_generic_graph(cfg, instructions);
     graph.reverse();
 
-    #[cfg(debug_assertions)]
     // check that the exit_node now is the entry node after reversal
     assert_eq!(
         graph
