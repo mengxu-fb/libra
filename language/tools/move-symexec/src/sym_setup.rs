@@ -129,12 +129,6 @@ impl<'a> SymSetup<'a> {
         self.tracked_functions.iter().map(|(_, v)| v.len()).sum()
     }
 
-    pub fn is_function_tracked(&self, module_id: &ModuleId, func_id: &IdentStr) -> bool {
-        self.tracked_functions
-            .get(module_id)
-            .map_or(false, |func_set| func_set.get(func_id).is_some())
-    }
-
     pub fn get_exec_unit_by_context(&self, context: &CodeContext) -> Option<&ExecUnit> {
         match context {
             CodeContext::Script => None,

@@ -56,7 +56,7 @@ enum ExecFlowType {
     /// Fall through: the next instruction is PC + 1
     Fallthrough,
     /// Conditional or unconditional (if condition is None) branch
-    Branch { condition: Option<bool> },
+    Branch(Option<bool>),
     /// Function call
     Call,
     /// Function return
@@ -104,6 +104,7 @@ impl ExecGraph {
         let cfg = VMControlFlowGraph::new(instructions);
 
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
+        let mut call_inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
 
         // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
@@ -167,6 +168,10 @@ impl ExecGraph {
                     // current basic block, after the call.
                     exec_block_id = self.graph.node_count();
                     exec_block.refresh(exec_block_id);
+
+                    // add the new block id to the instruction map that
+                    // tracks calls specifically
+                    call_inst_map.insert(offset, exec_block.block_id);
                 }
             }
 
@@ -175,7 +180,7 @@ impl ExecGraph {
             self.node_map.insert(exec_block_id, node_index);
         }
 
-        // add call edge
+        // add incoming call edge
         if let Some((_, _, call_block_id)) = call_stack.last() {
             // this exec unit is called into, add the call edge
             let call_from_node = *self.node_map.get(call_block_id).unwrap();
@@ -189,11 +194,61 @@ impl ExecGraph {
                 .unwrap();
 
             let exec_flow_id = self.graph.edge_count();
-            self.graph.add_edge(
+            let edge_index = self.graph.add_edge(
                 call_from_node,
                 call_into_node,
                 ExecFlow::new(exec_flow_id, ExecFlowType::Call),
             );
+            self.edge_map.insert(exec_flow_id, edge_index);
+        }
+
+        // add branching edges in CFG
+        for block_id in cfg.blocks() {
+            let term_offset = cfg.block_end(block_id);
+            let term_instruction = &instructions[term_offset as usize];
+
+            // derive origin node id
+            let origin_block_id = match term_instruction {
+                Bytecode::Call(_) | Bytecode::CallGeneric(_) => call_inst_map
+                    .get(&term_offset)
+                    .unwrap_or_else(|| inst_map.get(&term_offset).unwrap()),
+                _ => inst_map.get(&term_offset).unwrap(),
+            };
+            let origin_node_id = *self.node_map.get(origin_block_id).unwrap();
+
+            for successor_offset in Bytecode::get_successors(term_offset, instructions) {
+                // derive successor node id
+                let successor_block_id = inst_map.get(&successor_offset).unwrap();
+                let successor_node_id = *self.node_map.get(successor_block_id).unwrap();
+
+                // derive flow type
+                let exec_flow_type = match term_instruction {
+                    Bytecode::Branch(_) => ExecFlowType::Branch(None),
+                    Bytecode::BrTrue(target_offset) => {
+                        ExecFlowType::Branch(Some(successor_offset == *target_offset))
+                    }
+                    Bytecode::BrFalse(target_offset) => {
+                        ExecFlowType::Branch(Some(successor_offset != *target_offset))
+                    }
+                    _ => {
+                        #[cfg(debug_assertions)]
+                        // ensure that these instruction never branch
+                        assert!(!term_instruction.is_branch());
+
+                        // fall through type
+                        ExecFlowType::Fallthrough
+                    }
+                };
+
+                // add edge to graph
+                let exec_flow_id = self.graph.edge_count();
+                let edge_index = self.graph.add_edge(
+                    origin_node_id,
+                    successor_node_id,
+                    ExecFlow::new(exec_flow_id, exec_flow_type),
+                );
+                self.edge_map.insert(exec_flow_id, edge_index);
+            }
         }
     }
 
