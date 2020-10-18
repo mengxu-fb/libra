@@ -42,7 +42,8 @@ impl ExecBlock {
         self.instructions.push(bytecode);
     }
 
-    pub fn clear_instructions(&mut self) {
+    pub fn refresh(&mut self, block_id: ExecBlockId) {
+        self.block_id = block_id;
         self.instructions.clear();
     }
 }
@@ -88,7 +89,7 @@ impl ExecGraph {
     fn incorporate(
         &mut self,
         exec_unit: &ExecUnit,
-        call_stack: &mut Vec<(CodeContext, CodeOffset)>,
+        call_stack: &mut Vec<(CodeContext, CodeOffset, ExecBlockId)>,
         setup: &SymSetup,
     ) {
         let code_context = exec_unit.get_code_condext();
@@ -98,7 +99,7 @@ impl ExecGraph {
         // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
             // create the block
-            let exec_block_id = self.graph.node_count();
+            let mut exec_block_id = self.graph.node_count();
             let mut exec_block = ExecBlock::new(exec_block_id, code_context.clone());
 
             // scan instructions
@@ -130,20 +131,21 @@ impl ExecGraph {
                     let next_context = next_unit.get_code_condext();
                     if !call_stack
                         .iter()
-                        .any(|(call_context, _)| call_context == &next_context)
+                        .any(|(call_context, _, _)| call_context == &next_context)
                     {
                         // done with exploration of this exec block
                         let node_index = self.graph.add_node(exec_block.clone());
                         self.node_map.insert(exec_block_id, node_index);
 
+                        // call into the next execution unit
+                        call_stack.push((code_context.clone(), offset, exec_block.block_id));
+                        self.incorporate(next_unit, call_stack, setup);
+
                         // clear this exec block so that it can be
                         // reused to host the rest of instructions in
                         // current basic block, after the call.
-                        exec_block.clear_instructions();
-
-                        // call into the next execution unit
-                        call_stack.push((code_context.clone(), offset));
-                        self.incorporate(next_unit, call_stack, setup);
+                        exec_block_id = self.graph.node_count();
+                        exec_block.refresh(exec_block_id);
                     }
                     // otherwise, it is recursion, we will not further
                     // expand the CFG of that function.
