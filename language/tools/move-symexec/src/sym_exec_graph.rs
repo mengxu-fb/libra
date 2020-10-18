@@ -8,28 +8,22 @@ use petgraph::{
     visit::DfsPostOrder,
     EdgeDirection,
 };
-use std::{
-    collections::{HashMap, HashSet},
-    iter::FromIterator,
-};
+use std::{collections::HashMap, iter::FromIterator};
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
 use move_core_types::{
     identifier::{IdentStr, Identifier},
     language_storage::ModuleId,
 };
-use vm::{
-    access::{ModuleAccess, ScriptAccess},
-    file_format::{Bytecode, CodeOffset, CompiledModule, CompiledScript},
-};
+use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
 
-use crate::sym_setup::SymSetup;
+use crate::sym_setup::{ExecUnit, SymSetup};
 
 /// The following classes aim for building an extended control-flow
 /// graph that encloses both script and module CFGs, i.e., a super
 /// graph that has CFGs connected by the call graph.
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 enum CodeContext {
     Script,
     Module {
@@ -107,28 +101,35 @@ impl ExecGraph {
 
     fn incorporate(
         &mut self,
-        cfg: &VMControlFlowGraph,
-        instructions: &[Bytecode],
+        exec_unit: &ExecUnit,
         call_stack: &mut Vec<(CodeContext, CodeOffset)>,
         setup: &SymSetup,
-        tracked_modules: &[CompiledModule],
     ) {
-        // iterate script CFG
-        for block_id in cfg_reverse_postorder_dfs(cfg, instructions) {
+        let instructions = &exec_unit.code_unit().code;
+        let cfg = VMControlFlowGraph::new(instructions);
+
+        // iterate CFG: build blocks only in this iteration
+        for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
             // create the block
             let exec_block_id = self.graph.node_count();
             let mut exec_block = ExecBlock::new(exec_block_id, CodeContext::Script);
 
-            // push instructions
+            // scan instructions
             for offset in cfg.block_start(block_id)..=cfg.block_end(block_id) {
                 let instruction = &instructions[offset as usize];
+                exec_block.add_instruction(instruction.clone());
+
+                #[cfg(debug_assertions)]
+                // ensure that all branch instructions are terminations
+                // in the block
+                if instruction.is_branch() {
+                    assert_eq!(offset, cfg.block_end(block_id));
+                }
+
                 match instruction {
-                    Bytecode::Abort
-                    | Bytecode::Branch(_)
-                    | Bytecode::BrTrue(_)
-                    | Bytecode::BrFalse(_)
-                    | Bytecode::Ret => (),
-                    _ => assert!(!instruction.is_branch()),
+                    Bytecode::Call(func_handle) => {}
+                    Bytecode::CallGeneric(func_instantiation) => {}
+                    _ => (),
                 };
             }
 
@@ -138,42 +139,14 @@ impl ExecGraph {
         }
     }
 
-    pub fn new(
-        setup: &SymSetup,
-        script: &CompiledScript,
-        tracked_modules: &[CompiledModule],
-    ) -> Self {
-        // build CFG for the script
-        let script_code = script.code();
-        let script_cfg = VMControlFlowGraph::new(&script_code.code);
+    pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
+        // make the script an ExecUnit
+        let init_unit = ExecUnit::Script(script);
 
         // start symbolization from here
         let mut call_stack = vec![];
         let mut exec_graph = ExecGraph::empty();
-        exec_graph.incorporate(
-            &script_cfg,
-            &script_code.code,
-            &mut call_stack,
-            setup,
-            tracked_modules,
-        );
-
-        // TODO: to be removed
-        cfg_reverse_postorder_dfs(&script_cfg, &script_code.code);
-        for module in tracked_modules {
-            let module_id = module.self_id();
-            for func_def in module.function_defs() {
-                let handle = module.function_handle_at(func_def.function);
-                let func_id = module.identifier_at(handle.name);
-                if !setup.is_function_tracked(&module_id, func_id) {
-                    continue;
-                }
-                if let Some(code_unit) = &func_def.code {
-                    let function_cfg = VMControlFlowGraph::new(&code_unit.code);
-                    cfg_reverse_postorder_dfs(&function_cfg, &code_unit.code);
-                }
-            }
-        }
+        exec_graph.incorporate(&init_unit, &mut call_stack, setup);
 
         // done
         exec_graph

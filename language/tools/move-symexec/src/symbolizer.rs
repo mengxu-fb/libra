@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use vm::file_format::{CompiledModule, CompiledScript};
+use vm::file_format::CompiledScript;
 
 use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup};
 
@@ -14,13 +14,9 @@ pub(crate) struct MoveSymbolizer {
 }
 
 impl MoveSymbolizer {
-    pub fn new(
-        setup: &SymSetup,
-        script: &CompiledScript,
-        tracked_modules: &[CompiledModule],
-    ) -> Self {
+    pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
         Self {
-            exec_graph: ExecGraph::new(setup, script, tracked_modules),
+            exec_graph: ExecGraph::new(setup, script),
         }
     }
 }

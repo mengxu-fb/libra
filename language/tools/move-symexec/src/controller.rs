@@ -26,7 +26,10 @@ use vm::{
 };
 
 use crate::{
-    builder::MoveBuilder, executor::MoveExecutor, sym_setup::SymSetup, symbolizer::MoveSymbolizer,
+    builder::MoveBuilder,
+    executor::MoveExecutor,
+    sym_setup::{ExecUnit, SymSetup},
+    symbolizer::MoveSymbolizer,
     utils,
 };
 
@@ -379,7 +382,7 @@ impl MoveController {
 
         // symbolize each script one by one
         for script in tracked_scripts.iter() {
-            let _symbolizer = MoveSymbolizer::new(&sym_setup, script, &tracked_modules);
+            let _symbolizer = MoveSymbolizer::new(&sym_setup, script);
         }
 
         // done
@@ -456,12 +459,12 @@ impl MoveController {
     }
 
     // identifier filtering
-    fn collect_tracked_functions(
+    fn collect_tracked_functions<'a>(
         &self,
-        tracked_modules: &[CompiledModule],
+        tracked_modules: &'a [CompiledModule],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
-    ) -> HashMap<ModuleId, HashSet<Identifier>> {
+    ) -> HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>> {
         // build filters
         let inc_matcher = FuncIdMatcherList {
             matchers_opt: inclusion,
@@ -509,8 +512,48 @@ impl MoveController {
             }
         }
 
+        // build as ExecUnit
+        let function_map = tracked_modules
+            .iter()
+            .filter_map(|module| {
+                let module_id = module.self_id();
+                let per_module_map: HashMap<Identifier, ExecUnit> = module
+                    .function_defs()
+                    .iter()
+                    .filter_map(|func_def| {
+                        let handle = module.function_handle_at(func_def.function);
+                        let func_id = module.identifier_at(handle.name);
+                        if let Some(func_set) = tracked_functions.get(&module_id) {
+                            if func_set.contains(func_id) {
+                                if func_def.code.is_none() {
+                                    warn!(
+                                        "Function {}::{} has no code unit \
+                                        excluding it from tracked functions",
+                                        module_id, func_id,
+                                    );
+                                    None
+                                } else {
+                                    Some((func_id.to_owned(), ExecUnit::Module(module, func_def)))
+                                }
+                            } else {
+                                None
+                            }
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+
+                if per_module_map.is_empty() {
+                    None
+                } else {
+                    Some((module_id, per_module_map))
+                }
+            })
+            .collect();
+
         // done
-        tracked_functions
+        function_map
     }
 
     // command handling
