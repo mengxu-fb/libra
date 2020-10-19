@@ -102,9 +102,13 @@ struct CallSite {
 /// This is the super-CFG graph representation.
 #[derive(Clone, Debug)]
 pub(crate) struct ExecGraph {
+    // used during the graph building progress
     graph: Graph<ExecBlock, ExecFlow>,
     node_map: HashMap<ExecBlockId, NodeIndex>,
     edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
+    // used during the graph checking progress
+    entry_block_id: ExecBlockId,
+    dead_block_ids: HashSet<ExecBlockId>,
 }
 
 impl ExecGraph {
@@ -113,6 +117,8 @@ impl ExecGraph {
             graph: Graph::new(),
             node_map: HashMap::new(),
             edge_map: HashMap::new(),
+            entry_block_id: 0,
+            dead_block_ids: HashSet::new(),
         }
     }
 
@@ -443,7 +449,7 @@ impl ExecGraph {
     }
 
     /// post-construction sanity check
-    fn check(&self) {
+    fn check(&mut self) {
         // check all nodes and edges are mapped
         assert_eq!(self.graph.node_count(), self.node_map.len());
         assert_eq!(self.graph.edge_count(), self.edge_map.len());
@@ -452,6 +458,7 @@ impl ExecGraph {
         // for the entry node.
         let mut entry_node = None;
         let mut exit_nodes = vec![];
+        let mut dead_nodes = vec![];
         for node in self.graph.node_indices() {
             if self
                 .graph
@@ -465,6 +472,7 @@ impl ExecGraph {
                             likely caused by calling a function \
                             that only aborts but never returns."
                         );
+                        dead_nodes.push(node);
                     }
                     Some(offset) => {
                         if offset == 0 {
@@ -477,6 +485,7 @@ impl ExecGraph {
                                 likely caused by calling a function \
                                 that only aborts but never returns."
                             );
+                            dead_nodes.push(node);
                         }
                     }
                 };
@@ -504,6 +513,17 @@ impl ExecGraph {
             }
         }
         assert!(entry_node.is_some());
+
+        // fill the information
+        self.entry_block_id = self
+            .graph
+            .node_weight(entry_node.unwrap())
+            .unwrap()
+            .block_id;
+        self.dead_block_ids = dead_nodes
+            .into_iter()
+            .map(|node| self.graph.node_weight(node).unwrap().block_id)
+            .collect();
     }
 
     pub fn node_count(&self) -> usize {
