@@ -5,8 +5,9 @@
 
 use log::debug;
 use petgraph::{
+    algo::tarjan_scc,
     graph::{EdgeIndex, Graph, NodeIndex},
-    visit::DfsPostOrder,
+    visit::{DfsPostOrder, EdgeRef},
     EdgeDirection,
 };
 use std::collections::{HashMap, HashSet};
@@ -54,6 +55,10 @@ impl ExecBlock {
         self.instructions.push(bytecode);
     }
 }
+
+/// This is a self-contained set of blocks (can be either a single block
+/// or a loop) (i.e., the SCC) in the super-CFG
+type ExecSccIndex = usize;
 
 /// This is the control flow (i.e., the edge) in the super-CFG.
 #[derive(Clone, Debug)]
@@ -526,12 +531,107 @@ impl ExecGraph {
             .collect();
     }
 
+    /// count number of nodes in the execution graph, including
+    /// unreachable nodes from entry_block
     pub fn node_count(&self) -> usize {
         self.graph.node_count()
     }
 
+    /// count number of edges in the execution graph, including
+    /// unreachable edges from entry_block
     pub fn edge_count(&self) -> usize {
         self.graph.edge_count()
+    }
+
+    /// collect all paths reachable from entry_block and enumerating
+    /// them by first condensing the exec graph as a DAG
+    pub fn scc_paths_from_entry(&self) -> HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>> {
+        let mut node_map: HashMap<NodeIndex, ExecSccIndex> = HashMap::new();
+        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>>> =
+            HashMap::new();
+
+        for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
+            // ignore dead scc
+            let scc_is_unreachable = scc_nodes.iter().any(|node| {
+                self.dead_block_ids
+                    .contains(&self.graph.node_weight(*node).unwrap().block_id)
+            });
+            if scc_is_unreachable {
+                continue;
+            }
+
+            // map node to scc (must be done before edge collection)
+            for node in scc_nodes.iter() {
+                node_map.insert(*node, scc_index);
+            }
+
+            // collect edges branching out of this scc
+            let mut outlet_map: HashMap<EdgeIndex, ExecSccIndex> = HashMap::new();
+            for node in scc_nodes.iter() {
+                for edge in self.graph.edges_directed(*node, EdgeDirection::Outgoing) {
+                    let scc_dst_index = *node_map.get(&edge.target()).unwrap();
+                    if scc_dst_index != scc_index {
+                        assert!(outlet_map.insert(edge.id(), scc_dst_index).is_none());
+                    }
+                }
+            }
+
+            // build path sets dynamically
+            if outlet_map.is_empty() {
+                // this is a termination scc
+                let mut term_path_set = HashSet::new();
+                term_path_set.insert(vec![]);
+
+                let mut term_path_map = HashMap::new();
+                term_path_map.insert(scc_index, term_path_set);
+
+                assert!(path_map.insert(scc_index, term_path_map).is_none());
+            } else {
+                // update path map
+                let mut scc_reach_set: HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>> =
+                    HashMap::new();
+
+                for (exit_edge, exit_scc) in outlet_map.iter() {
+                    for (path_end_scc, path_end_reach_map) in path_map.iter() {
+                        if let Some(path_set) = path_end_reach_map.get(exit_scc) {
+                            // there is a way from this exit_scc to
+                            // path_end_scc, append the new edge to
+                            // existing paths in the the path set.
+                            for path_seq in path_set {
+                                let mut new_path_seq = vec![*exit_edge];
+                                new_path_seq.extend(path_seq);
+
+                                // ensure that there is no duplication
+                                assert!(scc_reach_set
+                                    .entry(*path_end_scc)
+                                    .or_insert_with(HashSet::new)
+                                    .insert(new_path_seq));
+                            }
+                        }
+                    }
+                }
+
+                // merge into the path map
+                for (path_end_scc, path_end_reach_path_set) in scc_reach_set {
+                    assert!(path_map
+                        .get_mut(&path_end_scc)
+                        .unwrap()
+                        .insert(scc_index, path_end_reach_path_set)
+                        .is_none());
+                }
+            }
+        }
+
+        // derive end-to-end path maps
+        let entry_scc = node_map
+            .get(self.node_map.get(&self.entry_block_id).unwrap())
+            .unwrap();
+        path_map
+            .iter_mut()
+            .map(|(path_end_scc, scc_reach_map)| {
+                (*path_end_scc, scc_reach_map.remove(entry_scc).unwrap())
+            })
+            .collect()
     }
 }
 

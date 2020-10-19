@@ -18,12 +18,20 @@ pub(crate) struct MoveSymbolizer {
 impl MoveSymbolizer {
     pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
         let exec_graph = ExecGraph::new(setup, script);
+
+        // explore the paths
+        let path_sets = exec_graph.scc_paths_from_entry();
+        let path_nums = path_sets
+            .values()
+            .fold(0, |count, path_set| count + path_set.len());
         debug!(
-            "{} nodes + {} edges in exec graph",
+            "{} nodes + {} edges + {} paths in exec graph",
             exec_graph.node_count(),
-            exec_graph.edge_count()
+            exec_graph.edge_count(),
+            path_nums
         );
 
+        // done
         Self { exec_graph }
     }
 }
