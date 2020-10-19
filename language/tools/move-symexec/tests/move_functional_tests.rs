@@ -82,7 +82,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         let (mut modules, mut scripts) = self.controller.get_compiled_units_recent(None);
 
         // symbolize
-        self.controller.symbolize(None, Some(&[]))?;
+        self.controller.symbolize(None, Some(&[]), false)?;
 
         // return results
         if !modules.is_empty() {

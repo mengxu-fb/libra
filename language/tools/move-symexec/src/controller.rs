@@ -37,6 +37,9 @@ use crate::{
 /// Default directory containing builder workdirs
 const MOVE_BUILDER_WORKDIR: &str = "builder";
 
+/// Default directory containing symbolizer workdirs
+const MOVE_SYMEXEC_WORKDIR: &str = "symexec";
+
 /// Filters for identifiers in Move compiled units
 pub struct FuncIdMatcher {
     module_addr_regex: Regex,
@@ -182,6 +185,10 @@ enum OpCommand {
         /// and symbolic execution.
         #[structopt(long = "exclusion", short = "e", parse(try_from_str = FuncIdMatcher::new))]
         exclusion: Vec<FuncIdMatcher>,
+
+        /// Output the composed execution graph in dot format
+        #[structopt(long = "output-exec-graph")]
+        output_exec_graph: bool,
     },
 
     /// Push the execution stack, modules and scripts compiled will be
@@ -252,17 +259,23 @@ struct OpState {
 pub struct MoveController {
     workdir: String,
     workdir_builder: String,
+    workdir_symexec: String,
     op_stack: Vec<OpState>,
     num_contexts: usize,
+    num_symexecs: usize,
     clean_on_destroy: bool,
 }
 
 impl MoveController {
     pub fn new(workdir: String, clean_on_destroy: bool) -> Result<Self> {
         // prepare the directory
-        let workdir_builder = join_path_items!(&workdir, MOVE_BUILDER_WORKDIR);
         utils::maybe_recreate_dir(&workdir)?;
+
+        let workdir_builder = join_path_items!(&workdir, MOVE_BUILDER_WORKDIR);
         fs::create_dir_all(&workdir_builder)?;
+
+        let workdir_symexec = join_path_items!(&workdir, MOVE_SYMEXEC_WORKDIR);
+        fs::create_dir_all(&workdir_symexec)?;
 
         // create the initial state
         let state = OpState {
@@ -280,8 +293,10 @@ impl MoveController {
         Ok(Self {
             workdir,
             workdir_builder,
+            workdir_symexec,
             op_stack: vec![state],
             num_contexts: 1,
+            num_symexecs: 0,
             clean_on_destroy,
         })
     }
@@ -367,9 +382,10 @@ impl MoveController {
     }
 
     pub fn symbolize(
-        &self,
+        &mut self,
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
+        output_exec_graph: bool,
     ) -> Result<()> {
         // build the setup
         let tracked_scripts = self.get_compiled_scripts_all(Some(true));
@@ -391,7 +407,16 @@ impl MoveController {
                 continue;
             }
 
-            let _symbolizer = MoveSymbolizer::new(&sym_setup, script);
+            // derive the workdir
+            let sym_workdir =
+                join_path_items!(&self.workdir_symexec, self.num_symexecs.to_string());
+            self.num_symexecs += 1;
+
+            // build the symbolizer
+            let symbolizer = MoveSymbolizer::new(sym_workdir, &sym_setup, script)?;
+            if output_exec_graph {
+                symbolizer.save_exec_graph_as_dot()?;
+            }
         }
 
         // done
@@ -600,7 +625,8 @@ impl MoveController {
             OpCommand::Symbolize {
                 inclusion,
                 exclusion,
-            } => self.symbolize(inclusion.as_deref(), Some(&exclusion)),
+                output_exec_graph,
+            } => self.symbolize(inclusion.as_deref(), Some(&exclusion), output_exec_graph),
             OpCommand::Push => self.push(),
             OpCommand::Pop => self.pop(),
         }

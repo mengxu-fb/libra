@@ -6,6 +6,7 @@
 use log::debug;
 use petgraph::{
     algo::tarjan_scc,
+    dot::{self, Dot},
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::{DfsPostOrder, EdgeRef},
     EdgeDirection,
@@ -632,6 +633,16 @@ impl ExecGraph {
                 (*path_end_scc, scc_reach_map.remove(entry_scc).unwrap())
             })
             .collect()
+    }
+
+    pub fn to_dot(&self) -> String {
+        format!(
+            "{:?}",
+            Dot::with_config(
+                &self.graph,
+                &[dot::Config::EdgeNoLabel, dot::Config::NodeIndexLabel],
+            )
+        )
     }
 }
 

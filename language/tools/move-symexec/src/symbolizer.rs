@@ -3,20 +3,30 @@
 
 #![forbid(unsafe_code)]
 
+use anyhow::Result;
 use log::debug;
+use std::{fs::File, io::Write};
 
 use vm::file_format::CompiledScript;
 
-use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup};
+use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup, utils};
+
+/// The default file name for the exec graph
+const EXEC_GRAPH_NAME: &str = "exec_graph.dot";
 
 /// The symbolizer
 #[derive(Clone, Debug)]
 pub(crate) struct MoveSymbolizer {
+    workdir: String,
     exec_graph: ExecGraph,
 }
 
 impl MoveSymbolizer {
-    pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
+    pub fn new(workdir: String, setup: &SymSetup, script: &CompiledScript) -> Result<Self> {
+        // prepare the directory
+        utils::maybe_recreate_dir(&workdir)?;
+
+        // build execution graph
         let exec_graph = ExecGraph::new(setup, script);
 
         // explore the paths
@@ -32,6 +42,16 @@ impl MoveSymbolizer {
         );
 
         // done
-        Self { exec_graph }
+        Ok(Self {
+            workdir,
+            exec_graph,
+        })
+    }
+
+    pub fn save_exec_graph_as_dot(&self) -> Result<()> {
+        let path = join_path_items!(&self.workdir, EXEC_GRAPH_NAME);
+        let mut file = File::create(path)?;
+        file.write_all(self.exec_graph.to_dot().as_bytes())?;
+        Ok(())
     }
 }
