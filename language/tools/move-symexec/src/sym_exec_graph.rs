@@ -8,7 +8,7 @@ use petgraph::{
     visit::DfsPostOrder,
     EdgeDirection,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
 use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
@@ -59,6 +59,10 @@ enum ExecFlowType {
     Call,
     /// Function return
     Ret,
+    /// Recursive call
+    CallRecursive,
+    /// Recursive return
+    RetRecursive(ExecBlockId),
 }
 
 #[derive(Clone, Debug)]
@@ -82,16 +86,10 @@ impl ExecFlow {
 struct CallSite {
     /// context where this call is initiated
     context: CodeContext,
-    /// code offset in the context where this call is initiated
-    offset: CodeOffset,
     /// the exec block id for the entry block in this context
     init_block_id: ExecBlockId,
     /// the exec block id where the call is initiated
     call_block_id: ExecBlockId,
-    /// holds the places where this context is recursively called into
-    recursive_called_by: Vec<ExecBlockId>,
-    /// holds the places where this context will recursively return to
-    recursive_return_to: Vec<ExecBlockId>,
 }
 
 /// This is the super-CFG graph representation.
@@ -115,16 +113,18 @@ impl ExecGraph {
         &mut self,
         exec_unit: &ExecUnit,
         call_stack: &mut Vec<CallSite>,
+        exit_table: &mut HashMap<ExecBlockId, HashSet<ExecBlockId>>,
         id_counter: &mut ExecBlockId,
+        recursions: &mut HashMap<(ExecBlockId, ExecBlockId), ExecBlockId>,
         setup: &SymSetup,
-    ) -> Vec<ExecBlockId> {
+    ) -> HashSet<ExecBlockId> {
         // prepare
         let code_context = exec_unit.get_code_condext();
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
-        let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, Vec<ExecBlockId>)> =
+        let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, HashSet<ExecBlockId>)> =
             HashMap::new();
 
         // iterate CFG
@@ -180,25 +180,24 @@ impl ExecGraph {
 
                     // check recursion and act accordingly
                     let next_context = next_unit.get_code_condext();
-                    let mut recursion_points: Vec<&mut CallSite> = call_stack
-                        .iter_mut()
-                        .filter(|call_site| &call_site.context == &next_context)
+                    let rec_candidates: Vec<&CallSite> = call_stack
+                        .iter()
+                        .filter(|call_site| call_site.context == next_context)
                         .collect();
 
-                    let ret_block_ids = if recursion_points.is_empty() {
+                    let ret_block_ids = if rec_candidates.is_empty() {
                         // non-recursive: call into the next unit
                         let call_site = CallSite {
                             context: code_context.clone(),
-                            offset,
                             init_block_id: *inst_map
                                 .get(&cfg.block_start(cfg.entry_block_id()))
                                 .unwrap(),
                             call_block_id: call_site_block_id,
-                            recursive_called_by: vec![],
-                            recursive_return_to: vec![],
                         };
                         call_stack.push(call_site);
-                        let ret_blocks = self.incorporate(next_unit, call_stack, id_counter, setup);
+                        let ret_blocks = self.incorporate(
+                            next_unit, call_stack, exit_table, id_counter, recursions, setup,
+                        );
                         assert!(call_stack.pop().is_some());
 
                         // to build the return edges
@@ -208,25 +207,25 @@ impl ExecGraph {
                         // of that function, just connect the blocks.
 
                         // ensure no duplicated context in call stack
-                        assert_eq!(recursion_points.len(), 1);
+                        assert_eq!(rec_candidates.len(), 1);
 
                         // mark that there should be a pending call edge
-                        // from this block to the beginning of the
-                        // call site context, and also that the context
-                        // will return to the ret block.
-                        let recursive_call_site = recursion_points.pop().unwrap();
-                        recursive_call_site
-                            .recursive_called_by
-                            .push(call_site_block_id);
-                        recursive_call_site
-                            .recursive_return_to
-                            .push(call_site_ret_block_id);
+                        // from this block to the beginning of the call
+                        // site context, and also that the context will
+                        // return to the ret block.
+                        let rec_call_site = rec_candidates.last().unwrap();
+                        assert!(recursions
+                            .insert(
+                                (call_site_block_id, rec_call_site.init_block_id),
+                                call_site_ret_block_id
+                            )
+                            .is_none());
 
                         // intentionally return an empty list as the
                         // recursive call site has not finished CFG
                         // exploration, and hence, we do not know all
                         // of their return blocks.
-                        vec![]
+                        HashSet::new()
                     };
 
                     // add the new block id to the instruction map that
@@ -242,25 +241,26 @@ impl ExecGraph {
             assert!(self.node_map.insert(exec_block_id, node_index).is_none());
         }
 
+        // find entry block id and node
+        let cfg_entry_block_id = *inst_map
+            .get(&cfg.block_start(cfg.entry_block_id()))
+            .unwrap();
+        let cfg_entry_node = *self.node_map.get(&cfg_entry_block_id).unwrap();
+
         // add incoming call edge
         if let Some(call_site) = call_stack.last() {
             // this exec unit is called into, add the call edge
-            let call_from_block = call_site.call_block_id;
-            let call_from_node = *self.node_map.get(&call_site.call_block_id).unwrap();
-
-            let call_into_block = *inst_map
-                .get(&cfg.block_start(cfg.entry_block_id()))
-                .unwrap();
-            let call_into_node = *self.node_map.get(&call_into_block).unwrap();
+            let call_from_block_id = call_site.call_block_id;
+            let call_from_node = *self.node_map.get(&call_from_block_id).unwrap();
 
             let edge_index = self.graph.add_edge(
                 call_from_node,
-                call_into_node,
-                ExecFlow::new(call_from_block, call_into_block, ExecFlowType::Call),
+                cfg_entry_node,
+                ExecFlow::new(call_from_block_id, cfg_entry_block_id, ExecFlowType::Call),
             );
             assert!(self
                 .edge_map
-                .insert((call_from_block, call_into_block), edge_index)
+                .insert((call_from_block_id, cfg_entry_block_id), edge_index)
                 .is_none());
         }
 
@@ -338,14 +338,18 @@ impl ExecGraph {
         }
 
         // collect blocks that ends with Ret
-        instructions
+        let exit_points: HashSet<ExecBlockId> = instructions
             .iter()
             .enumerate()
             .filter_map(|(offset, instruction)| match instruction {
                 Bytecode::Ret => Some(*inst_map.get(&(offset as CodeOffset)).unwrap()),
                 _ => None,
             })
-            .collect()
+            .collect();
+        exit_table.insert(cfg_entry_block_id, exit_points.clone());
+
+        // done
+        exit_points
     }
 
     pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
@@ -354,9 +358,56 @@ impl ExecGraph {
 
         // start symbolization from here
         let mut call_stack = vec![];
+        let mut exit_table = HashMap::new();
         let mut id_counter = 0;
+        let mut recursions = HashMap::new();
+
         let mut exec_graph = ExecGraph::empty();
-        exec_graph.incorporate(&init_unit, &mut call_stack, &mut id_counter, setup);
+        exec_graph.incorporate(
+            &init_unit,
+            &mut call_stack,
+            &mut exit_table,
+            &mut id_counter,
+            &mut recursions,
+            setup,
+        );
+
+        // add all recursion edges
+        for ((call_from_id, call_into_id), ret_into_id) in recursions.iter() {
+            // add call edge to graph
+            let call_from_node = *exec_graph.node_map.get(call_from_id).unwrap();
+            let call_into_node = *exec_graph.node_map.get(call_into_id).unwrap();
+
+            let edge_index = exec_graph.graph.add_edge(
+                call_from_node,
+                call_into_node,
+                ExecFlow::new(*call_from_id, *call_into_id, ExecFlowType::CallRecursive),
+            );
+            assert!(exec_graph
+                .edge_map
+                .insert((*call_from_id, *call_into_id), edge_index)
+                .is_none());
+
+            // add return edges to graph
+            let ret_into_node = *exec_graph.node_map.get(&ret_into_id).unwrap();
+            for ret_from_id in exit_table.get(&call_into_id).unwrap() {
+                let ret_from_node = *exec_graph.node_map.get(ret_from_id).unwrap();
+
+                let edge_index = exec_graph.graph.add_edge(
+                    ret_from_node,
+                    ret_into_node,
+                    ExecFlow::new(
+                        *ret_from_id,
+                        *ret_into_id,
+                        ExecFlowType::RetRecursive(*call_from_id),
+                    ),
+                );
+                assert!(exec_graph
+                    .edge_map
+                    .insert((*ret_from_id, *ret_into_id), edge_index)
+                    .is_none());
+            }
+        }
 
         // done
         exec_graph
