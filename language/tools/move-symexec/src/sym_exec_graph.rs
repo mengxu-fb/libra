@@ -3,6 +3,7 @@
 
 #![forbid(unsafe_code)]
 
+use log::debug;
 use petgraph::{
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::DfsPostOrder,
@@ -26,25 +27,31 @@ type ExecBlockId = usize;
 struct ExecBlock {
     block_id: ExecBlockId,
     code_context: CodeContext,
+    /// the starting offset of the instructions in code context
+    /// A None code offset means that this must be an arbitrary block
+    /// which will host no instructions.
+    /// (However, not all arbitrary blocks have None as code_offset,
+    /// those that do host instructions will have a valid code_offset)
+    code_offset: Option<CodeOffset>,
     instructions: Vec<Bytecode>,
 }
 
 impl ExecBlock {
-    pub fn new(block_id: ExecBlockId, code_context: CodeContext) -> Self {
+    pub fn new(
+        block_id: ExecBlockId,
+        code_context: CodeContext,
+        code_offset: Option<CodeOffset>,
+    ) -> Self {
         Self {
             block_id,
             code_context,
+            code_offset,
             instructions: vec![],
         }
     }
 
     pub fn add_instruction(&mut self, bytecode: Bytecode) {
         self.instructions.push(bytecode);
-    }
-
-    pub fn refresh(&mut self, block_id: ExecBlockId) {
-        self.block_id = block_id;
-        self.instructions.clear();
     }
 }
 
@@ -129,13 +136,21 @@ impl ExecGraph {
 
         // iterate CFG
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
+            // prepare
+            let block_code_offset_begin = cfg.block_start(block_id);
+            let block_code_offset_end = cfg.block_end(block_id);
+
             // create the block
             let mut exec_block_id = *id_counter;
             *id_counter += 1;
-            let mut exec_block = ExecBlock::new(exec_block_id, code_context.clone());
+            let mut exec_block = ExecBlock::new(
+                exec_block_id,
+                code_context.clone(),
+                Some(block_code_offset_begin),
+            );
 
             // scan instructions
-            for offset in cfg.block_start(block_id)..=cfg.block_end(block_id) {
+            for offset in block_code_offset_begin..=block_code_offset_end {
                 let instruction = &instructions[offset as usize];
                 exec_block.add_instruction(instruction.clone());
 
@@ -145,7 +160,7 @@ impl ExecGraph {
                 // ensure that all branch instructions are terminations
                 // in the block
                 if instruction.is_branch() {
-                    assert_eq!(offset, cfg.block_end(block_id));
+                    assert_eq!(offset, block_code_offset_end);
                 }
 
                 // see if we are going to call into another exec unit
@@ -173,7 +188,15 @@ impl ExecGraph {
                     // block, after the call.
                     exec_block_id = *id_counter;
                     *id_counter += 1;
-                    exec_block.refresh(exec_block_id);
+                    exec_block = ExecBlock::new(
+                        exec_block_id,
+                        code_context.clone(),
+                        if offset == block_code_offset_end {
+                            None
+                        } else {
+                            Some(offset + 1)
+                        },
+                    );
 
                     // record the block id that the call will return to
                     let call_site_ret_block_id = exec_block.block_id;
@@ -372,6 +395,9 @@ impl ExecGraph {
             setup,
         );
 
+        // at the end of the execution, we should have no calls in stack
+        assert!(call_stack.is_empty());
+
         // add all recursion edges
         for ((call_from_id, call_into_id), ret_into_id) in recursions.iter() {
             // add call edge to graph
@@ -409,8 +435,75 @@ impl ExecGraph {
             }
         }
 
+        // additional sanity checks
+        exec_graph.check();
+
         // done
         exec_graph
+    }
+
+    /// post-construction sanity check
+    fn check(&self) {
+        // check all nodes and edges are mapped
+        assert_eq!(self.graph.node_count(), self.node_map.len());
+        assert_eq!(self.graph.edge_count(), self.edge_map.len());
+
+        // check that each node has at least one incoming edge, except
+        // for the entry node.
+        let mut entry_node = None;
+        let mut exit_nodes = vec![];
+        for node in self.graph.node_indices() {
+            if self
+                .graph
+                .first_edge(node, EdgeDirection::Incoming)
+                .is_none()
+            {
+                match self.graph.node_weight(node).unwrap().code_offset {
+                    None => {
+                        debug!(
+                            "Found a dead exec block: this is \
+                            likely caused by calling a function \
+                            that only aborts but never returns."
+                        );
+                    }
+                    Some(offset) => {
+                        if offset == 0 {
+                            // this is the true entry node
+                            assert!(entry_node.is_none());
+                            entry_node = Some(node);
+                        } else {
+                            debug!(
+                                "Found a dead exec block: this is \
+                                likely caused by calling a function \
+                                that only aborts but never returns."
+                            );
+                        }
+                    }
+                };
+            }
+            if self
+                .graph
+                .first_edge(node, EdgeDirection::Outgoing)
+                .is_none()
+            {
+                let termination_instruction = self
+                    .graph
+                    .node_weight(node)
+                    .unwrap()
+                    .instructions
+                    .last()
+                    .unwrap();
+                match termination_instruction {
+                    Bytecode::Ret | Bytecode::Abort => (),
+                    _ => panic!(
+                        "Only Ret or Abort can be the termination \
+                        instruction of an exit execution block"
+                    ),
+                };
+                exit_nodes.push(node);
+            }
+        }
+        assert!(entry_node.is_some());
     }
 
     pub fn node_count(&self) -> usize {
