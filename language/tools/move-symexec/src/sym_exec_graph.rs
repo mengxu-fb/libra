@@ -605,9 +605,9 @@ impl ExecGraph {
 
     /// count all paths reachable from entry_block and enumerating
     /// them by first condensing the exec graph as a DAG
-    pub fn scc_path_count(&self) -> usize {
+    pub fn scc_path_count(&self) -> u128 {
         let mut node_map: HashMap<NodeIndex, ExecSccIndex> = HashMap::new();
-        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, usize>> = HashMap::new();
+        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, u128>> = HashMap::new();
 
         for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
             // ignore dead scc
@@ -643,7 +643,7 @@ impl ExecGraph {
                 assert!(path_map.insert(scc_index, term_path_map).is_none());
             } else {
                 // update path count map
-                let mut scc_reach_map: HashMap<ExecSccIndex, usize> = HashMap::new();
+                let mut scc_reach_map: HashMap<ExecSccIndex, u128> = HashMap::new();
                 for exit_scc in outlet_map.values() {
                     for (path_end_scc, path_end_reach_map) in path_map.iter() {
                         if let Some(path_count) = path_end_reach_map.get(exit_scc) {
@@ -719,13 +719,20 @@ impl ExecSccGraph {
     pub fn enumerate_paths(&self) -> Vec<Vec<NodeIndex>> {
         let mut paths = vec![];
         for leaf_node in self.leaf_nodes.iter() {
-            paths.extend(all_simple_paths::<Vec<NodeIndex>, _>(
-                &self.graph,
-                *self.node_map.get(&self.root_node).unwrap(),
-                *self.node_map.get(leaf_node).unwrap(),
-                0,
-                None,
-            ));
+            if *leaf_node == self.root_node {
+                // the all_simple_paths does not count single node path
+                // we add it manually to reconcile with the output from
+                // the algorithm in scc_path_count
+                paths.push(vec![*self.node_map.get(&self.root_node).unwrap()]);
+            } else {
+                paths.extend(all_simple_paths::<Vec<NodeIndex>, _>(
+                    &self.graph,
+                    *self.node_map.get(&self.root_node).unwrap(),
+                    *self.node_map.get(leaf_node).unwrap(),
+                    0,
+                    None,
+                ));
+            }
         }
         paths
     }
