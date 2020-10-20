@@ -603,12 +603,11 @@ impl ExecGraph {
         scc_graph
     }
 
-    /// collect all paths reachable from entry_block and enumerating
+    /// count all paths reachable from entry_block and enumerating
     /// them by first condensing the exec graph as a DAG
-    pub fn scc_paths_from_entry(&self) -> HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>> {
+    pub fn scc_path_count(&self) -> usize {
         let mut node_map: HashMap<NodeIndex, ExecSccIndex> = HashMap::new();
-        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>>> =
-            HashMap::new();
+        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, usize>> = HashMap::new();
 
         for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
             // ignore dead scc
@@ -636,62 +635,48 @@ impl ExecGraph {
                 }
             }
 
-            // build path sets dynamically
+            // build path counts dynamically
             if outlet_map.is_empty() {
                 // this is a termination scc
-                let mut term_path_set = HashSet::new();
-                term_path_set.insert(vec![]);
-
                 let mut term_path_map = HashMap::new();
-                term_path_map.insert(scc_index, term_path_set);
-
+                term_path_map.insert(scc_index, 1);
                 assert!(path_map.insert(scc_index, term_path_map).is_none());
             } else {
-                // update path map
-                let mut scc_reach_set: HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>> =
-                    HashMap::new();
-
-                for (exit_edge, exit_scc) in outlet_map.iter() {
+                // update path count map
+                let mut scc_reach_map: HashMap<ExecSccIndex, usize> = HashMap::new();
+                for exit_scc in outlet_map.values() {
                     for (path_end_scc, path_end_reach_map) in path_map.iter() {
-                        if let Some(path_set) = path_end_reach_map.get(exit_scc) {
+                        if let Some(path_count) = path_end_reach_map.get(exit_scc) {
                             // there is a way from this exit_scc to
-                            // path_end_scc, append the new edge to
-                            // existing paths in the the path set.
-                            for path_seq in path_set {
-                                let mut new_path_seq = vec![*exit_edge];
-                                new_path_seq.extend(path_seq);
-
-                                // ensure that there is no duplication
-                                assert!(scc_reach_set
-                                    .entry(*path_end_scc)
-                                    .or_insert_with(HashSet::new)
-                                    .insert(new_path_seq));
-                            }
+                            // path_end_scc, adding to existing count.
+                            let existing_count = scc_reach_map.entry(*path_end_scc).or_insert(0);
+                            *existing_count += path_count;
                         }
                     }
                 }
 
                 // merge into the path map
-                for (path_end_scc, path_end_reach_path_set) in scc_reach_set {
+                for (path_end_scc, path_end_reach_count) in scc_reach_map {
                     assert!(path_map
                         .get_mut(&path_end_scc)
                         .unwrap()
-                        .insert(scc_index, path_end_reach_path_set)
+                        .insert(scc_index, path_end_reach_count)
                         .is_none());
                 }
             }
         }
 
-        // derive end-to-end path maps
+        // derive end-to-end path count
         let entry_scc = node_map
             .get(self.node_map.get(&self.entry_block_id).unwrap())
             .unwrap();
-        path_map
-            .iter_mut()
-            .map(|(path_end_scc, scc_reach_map)| {
-                (*path_end_scc, scc_reach_map.remove(entry_scc).unwrap())
-            })
-            .collect()
+
+        let mut total_count = 0;
+        for path_end_reach_map in path_map.values() {
+            total_count += path_end_reach_map.get(entry_scc).unwrap();
+        }
+
+        total_count
     }
 
     pub fn to_dot(&self) -> String {

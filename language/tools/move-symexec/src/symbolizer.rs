@@ -4,7 +4,7 @@
 #![forbid(unsafe_code)]
 
 use anyhow::Result;
-use log::info;
+use log::{info, warn};
 use std::{fs::File, io::Write};
 
 use vm::file_format::CompiledScript;
@@ -13,6 +13,9 @@ use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup, utils};
 
 /// The default file name for the exec graph
 const EXEC_GRAPH_NAME: &str = "exec_graph.dot";
+
+/// Limit of path count
+const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: usize = std::u32::MAX as usize;
 
 /// The symbolizer
 #[derive(Clone, Debug)]
@@ -51,18 +54,16 @@ impl MoveSymbolizer {
             self.exec_graph.edge_count()
         );
 
-        // count paths manually
-        let path_sets = self.exec_graph.scc_paths_from_entry();
-        let path_nums = path_sets
-            .values()
-            .fold(0, |count, path_set| count + path_set.len());
-        info!("{} paths in scc graph (handwritten algorithm)", path_nums);
-
-        // build scc graph
+        // build the scc graph
         let scc_graph = self.exec_graph.scc_graph();
-        info!(
-            "{} paths in scc graph (by petgraph::all_simple_paths)",
-            scc_graph.enumerate_paths().len()
-        );
+
+        // count paths with our handwritten algorithm
+        let path_count = self.exec_graph.scc_path_count();
+        if path_count > EXEC_GRAPH_PATH_ENUMERATION_LIMIT {
+            warn!("Path count exceeding limit, will not try to enumerate paths");
+        } else {
+            assert_eq!(path_count, scc_graph.enumerate_paths().len());
+        }
+        info!("{} paths in scc graph", path_count);
     }
 }
