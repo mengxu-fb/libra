@@ -127,6 +127,42 @@ impl ExecGraph {
         }
     }
 
+    fn add_block(&mut self, block: ExecBlock) -> NodeIndex {
+        let node_index = self.graph.add_node(block.clone());
+        assert!(self.node_map.insert(block.block_id, node_index).is_none());
+        node_index
+    }
+
+    fn get_node_by_block_id(&self, block_id: ExecBlockId) -> NodeIndex {
+        *self.node_map.get(&block_id).unwrap()
+    }
+
+    fn get_block_id_by_node(&self, node: NodeIndex) -> ExecBlockId {
+        self.graph.node_weight(node).unwrap().block_id
+    }
+
+    fn get_entry_node(&self) -> NodeIndex {
+        self.get_node_by_block_id(self.entry_block_id)
+    }
+
+    fn add_flow(
+        &mut self,
+        src_block_id: ExecBlockId,
+        dst_block_id: ExecBlockId,
+        flow_type: ExecFlowType,
+    ) -> EdgeIndex {
+        let edge_index = self.graph.add_edge(
+            self.get_node_by_block_id(src_block_id),
+            self.get_node_by_block_id(dst_block_id),
+            ExecFlow::new(src_block_id, dst_block_id, flow_type),
+        );
+        assert!(self
+            .edge_map
+            .insert((src_block_id, dst_block_id), edge_index)
+            .is_none());
+        edge_index
+    }
+
     fn incorporate(
         &mut self,
         exec_unit: &ExecUnit,
@@ -141,7 +177,11 @@ impl ExecGraph {
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
+        // maps instruction offset within one context to exec block id
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
+
+        // maps a call instruction to a tuple
+        // (return_into exec block id, return_from exec block id set)
         let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, HashSet<ExecBlockId>)> =
             HashMap::new();
 
@@ -190,9 +230,8 @@ impl ExecGraph {
                     // record block id
                     let call_site_block_id = exec_block.block_id;
 
-                    // done with exploration of this exec block
-                    let node_index = self.graph.add_node(exec_block.clone());
-                    assert!(self.node_map.insert(exec_block_id, node_index).is_none());
+                    // done with building of this exec block
+                    self.add_block(exec_block.clone());
 
                     // clear this exec block so that it can be reused
                     // to host the rest of instructions in current basic
@@ -229,6 +268,7 @@ impl ExecGraph {
                             call_block_id: call_site_block_id,
                         };
                         call_stack.push(call_site);
+
                         let ret_blocks = self.incorporate(
                             next_unit, call_stack, exit_table, id_counter, recursions, setup,
                         );
@@ -247,7 +287,7 @@ impl ExecGraph {
                         // from this block to the beginning of the call
                         // site context, and also that the context will
                         // return to the ret block.
-                        let rec_call_site = rec_candidates.last().unwrap();
+                        let rec_call_site = *rec_candidates.last().unwrap();
                         assert!(recursions
                             .insert(
                                 (call_site_block_id, rec_call_site.init_block_id),
@@ -271,31 +311,22 @@ impl ExecGraph {
             }
 
             // add block to graph
-            let node_index = self.graph.add_node(exec_block);
-            assert!(self.node_map.insert(exec_block_id, node_index).is_none());
+            self.add_block(exec_block);
         }
 
         // find entry block id and node
         let cfg_entry_block_id = *inst_map
             .get(&cfg.block_start(cfg.entry_block_id()))
             .unwrap();
-        let cfg_entry_node = *self.node_map.get(&cfg_entry_block_id).unwrap();
 
         // add incoming call edge
         if let Some(call_site) = call_stack.last() {
             // this exec unit is called into, add the call edge
-            let call_from_block_id = call_site.call_block_id;
-            let call_from_node = *self.node_map.get(&call_from_block_id).unwrap();
-
-            let edge_index = self.graph.add_edge(
-                call_from_node,
-                cfg_entry_node,
-                ExecFlow::new(call_from_block_id, cfg_entry_block_id, ExecFlowType::Call),
+            self.add_flow(
+                call_site.call_block_id,
+                cfg_entry_block_id,
+                ExecFlowType::Call,
             );
-            assert!(self
-                .edge_map
-                .insert((call_from_block_id, cfg_entry_block_id), edge_index)
-                .is_none());
         }
 
         // add branching edges in CFG
@@ -311,12 +342,10 @@ impl ExecGraph {
                     .unwrap_or_else(|| inst_map.get(&term_offset).unwrap()),
                 _ => inst_map.get(&term_offset).unwrap(),
             };
-            let origin_node_id = *self.node_map.get(&origin_block_id).unwrap();
 
             for successor_offset in Bytecode::get_successors(term_offset, instructions) {
                 // derive successor node id
                 let successor_block_id = *inst_map.get(&successor_offset).unwrap();
-                let successor_node_id = *self.node_map.get(&successor_block_id).unwrap();
 
                 // derive flow type
                 let exec_flow_type = match term_instruction {
@@ -330,44 +359,19 @@ impl ExecGraph {
                     _ => {
                         // ensure that these instruction never branch
                         assert!(!term_instruction.is_branch());
-
-                        // fall through type
                         ExecFlowType::Fallthrough
                     }
                 };
 
                 // add edge to graph
-                let edge_index = self.graph.add_edge(
-                    origin_node_id,
-                    successor_node_id,
-                    ExecFlow::new(origin_block_id, successor_block_id, exec_flow_type),
-                );
-                assert!(self
-                    .edge_map
-                    .insert((origin_block_id, successor_block_id), edge_index)
-                    .is_none());
+                self.add_flow(origin_block_id, successor_block_id, exec_flow_type);
             }
         }
 
         // add returning edges from internal calls
-        for (ret_to_id, ret_from_ids) in call_inst_map.values() {
-            // derive destination node id
-            let ret_to_node_id = *self.node_map.get(ret_to_id).unwrap();
-
+        for (ret_into_id, ret_from_ids) in call_inst_map.values() {
             for ret_from_id in ret_from_ids {
-                // derive source node id
-                let ret_from_node_id = *self.node_map.get(ret_from_id).unwrap();
-
-                // add edge to graph
-                let edge_index = self.graph.add_edge(
-                    ret_from_node_id,
-                    ret_to_node_id,
-                    ExecFlow::new(*ret_from_id, *ret_to_id, ExecFlowType::Ret),
-                );
-                assert!(self
-                    .edge_map
-                    .insert((*ret_from_id, *ret_to_id), edge_index)
-                    .is_none());
+                self.add_flow(*ret_from_id, *ret_into_id, ExecFlowType::Ret);
             }
         }
 
@@ -412,49 +416,27 @@ impl ExecGraph {
         // add all recursion edges
         for ((call_from_id, call_into_id), ret_into_id) in recursions.iter() {
             // add call edge to graph
-            let call_from_node = *exec_graph.node_map.get(call_from_id).unwrap();
-            let call_into_node = *exec_graph.node_map.get(call_into_id).unwrap();
-
-            let edge_index = exec_graph.graph.add_edge(
-                call_from_node,
-                call_into_node,
-                ExecFlow::new(*call_from_id, *call_into_id, ExecFlowType::CallRecursive),
-            );
-            assert!(exec_graph
-                .edge_map
-                .insert((*call_from_id, *call_into_id), edge_index)
-                .is_none());
+            exec_graph.add_flow(*call_from_id, *call_into_id, ExecFlowType::CallRecursive);
 
             // add return edges to graph
-            let ret_into_node = *exec_graph.node_map.get(&ret_into_id).unwrap();
             for ret_from_id in exit_table.get(&call_into_id).unwrap() {
-                let ret_from_node = *exec_graph.node_map.get(ret_from_id).unwrap();
-
-                let edge_index = exec_graph.graph.add_edge(
-                    ret_from_node,
-                    ret_into_node,
-                    ExecFlow::new(
-                        *ret_from_id,
-                        *ret_into_id,
-                        ExecFlowType::RetRecursive(*call_from_id),
-                    ),
+                exec_graph.add_flow(
+                    *ret_from_id,
+                    *ret_into_id,
+                    ExecFlowType::RetRecursive(*call_from_id),
                 );
-                assert!(exec_graph
-                    .edge_map
-                    .insert((*ret_from_id, *ret_into_id), edge_index)
-                    .is_none());
             }
         }
 
-        // additional sanity checks
-        exec_graph.check();
+        // additional sanity checks and information derivation
+        exec_graph.check_and_finish();
 
         // done
         exec_graph
     }
 
     /// post-construction sanity check
-    fn check(&mut self) {
+    fn check_and_finish(&mut self) {
         // check all nodes and edges are mapped
         assert_eq!(self.graph.node_count(), self.node_map.len());
         assert_eq!(self.graph.edge_count(), self.edge_map.len());
@@ -476,7 +458,7 @@ impl ExecGraph {
                             "Found a dead exec block {}: this is \
                             likely caused by calling a function \
                             that only aborts but never returns.",
-                            self.graph.node_weight(node).unwrap().block_id
+                            self.get_block_id_by_node(node)
                         );
                         dead_nodes.push(node);
                     }
@@ -490,7 +472,7 @@ impl ExecGraph {
                                 "Found a dead exec block {}: this is \
                                 likely caused by calling a function \
                                 that only aborts but never returns.",
-                                self.graph.node_weight(node).unwrap().block_id
+                                self.get_block_id_by_node(node)
                             );
                             dead_nodes.push(node);
                         }
@@ -519,10 +501,12 @@ impl ExecGraph {
                 exit_nodes.push(node);
             }
         }
+
+        // this statement checks that entry_note must exist
         let entry_node = entry_node.unwrap();
 
         // set the entry block id
-        self.entry_block_id = self.graph.node_weight(entry_node).unwrap().block_id;
+        self.entry_block_id = self.get_block_id_by_node(entry_node);
 
         // find all dead blocks
         let mut reachable_nodes = HashSet::new();
@@ -560,7 +544,7 @@ impl ExecGraph {
             // ignore dead scc
             let scc_is_unreachable = scc_nodes.iter().any(|node| {
                 self.dead_block_ids
-                    .contains(&self.graph.node_weight(*node).unwrap().block_id)
+                    .contains(&self.get_block_id_by_node(*node))
             });
             if scc_is_unreachable {
                 continue;
@@ -602,10 +586,7 @@ impl ExecGraph {
         }
 
         // find the entry scc
-        scc_graph.root_node = *scc_graph
-            .linkage
-            .get(self.node_map.get(&self.entry_block_id).unwrap())
-            .unwrap();
+        scc_graph.root_node = *scc_graph.linkage.get(&self.get_entry_node()).unwrap();
 
         // done
         scc_graph
@@ -614,14 +595,18 @@ impl ExecGraph {
     /// count all paths reachable from entry_block and enumerating
     /// them by first condensing the exec graph as a DAG
     pub fn scc_path_count(&self) -> u128 {
+        // maps each node to an SccIndex
         let mut node_map: HashMap<NodeIndex, ExecSccIndex> = HashMap::new();
+
+        // per each path_end_scc (i.e., a leaf node in the SCC graph),
+        // stores how many reachable paths from any_scc to path_end_scc
         let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, u128>> = HashMap::new();
 
         for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
             // ignore dead scc
             let scc_is_unreachable = scc_nodes.iter().any(|node| {
                 self.dead_block_ids
-                    .contains(&self.graph.node_weight(*node).unwrap().block_id)
+                    .contains(&self.get_block_id_by_node(*node))
             });
             if scc_is_unreachable {
                 continue;
@@ -675,9 +660,7 @@ impl ExecGraph {
         }
 
         // derive end-to-end path count
-        let entry_scc = node_map
-            .get(self.node_map.get(&self.entry_block_id).unwrap())
-            .unwrap();
+        let entry_scc = node_map.get(&self.get_entry_node()).unwrap();
 
         let mut total_count = 0;
         for path_end_reach_map in path_map.values() {
