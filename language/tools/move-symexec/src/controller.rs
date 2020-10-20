@@ -194,6 +194,10 @@ enum OpCommand {
         /// Output the composed execution graph in dot format
         #[structopt(long = "output-exec-graph")]
         output_exec_graph: bool,
+
+        /// Output statistics  about the composed execution graph
+        #[structopt(long = "output-exec-graph-stats")]
+        output_exec_graph_stats: bool,
     },
 
     /// Push the execution stack, modules and scripts compiled will be
@@ -392,6 +396,7 @@ impl MoveController {
         exclusion: Option<&[FuncIdMatcher]>,
         all_scripts: bool,
         output_exec_graph: bool,
+        output_exec_graph_stats: bool,
     ) -> Result<()> {
         // build the setup
         let tracked_scripts = if all_scripts {
@@ -426,6 +431,9 @@ impl MoveController {
             let symbolizer = MoveSymbolizer::new(sym_workdir, &sym_setup, script)?;
             if output_exec_graph {
                 symbolizer.save_exec_graph_as_dot()?;
+            }
+            if output_exec_graph_stats {
+                symbolizer.show_exec_graph_stats();
             }
         }
 
@@ -644,11 +652,13 @@ impl MoveController {
                 exclusion,
                 all_scripts,
                 output_exec_graph,
+                output_exec_graph_stats,
             } => self.symbolize(
                 inclusion.as_deref(),
                 Some(&exclusion),
                 all_scripts,
                 output_exec_graph,
+                output_exec_graph_stats,
             ),
             OpCommand::Push => self.push(),
             OpCommand::Pop => self.pop(),

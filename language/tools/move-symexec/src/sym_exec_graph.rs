@@ -5,13 +5,16 @@
 
 use log::debug;
 use petgraph::{
-    algo::tarjan_scc,
+    algo::{all_simple_paths, tarjan_scc},
     dot::{self, Dot},
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::{DfsPostOrder, EdgeRef},
     EdgeDirection,
 };
-use std::collections::{HashMap, HashSet};
+use std::{
+    collections::{HashMap, HashSet},
+    iter::FromIterator,
+};
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
 use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
@@ -56,10 +59,6 @@ impl ExecBlock {
         self.instructions.push(bytecode);
     }
 }
-
-/// This is a self-contained set of blocks (can be either a single block
-/// or a loop) (i.e., the SCC) in the super-CFG
-type ExecSccIndex = usize;
 
 /// This is the control flow (i.e., the edge) in the super-CFG.
 #[derive(Clone, Debug)]
@@ -544,6 +543,66 @@ impl ExecGraph {
         self.graph.edge_count()
     }
 
+    /// condense the exec graph into an SCC graph
+    pub fn scc_graph(&self) -> ExecSccGraph {
+        // build the scc graph
+        let mut scc_graph = ExecSccGraph::new();
+
+        for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
+            // ignore dead scc
+            let scc_is_unreachable = scc_nodes.iter().any(|node| {
+                self.dead_block_ids
+                    .contains(&self.graph.node_weight(*node).unwrap().block_id)
+            });
+            if scc_is_unreachable {
+                continue;
+            }
+
+            // map node to scc (must be done before edge collection)
+            for node in scc_nodes.iter() {
+                scc_graph.linkage.insert(*node, scc_index);
+            }
+
+            // collect edges branching out of this scc
+            let mut outlet_map: HashMap<EdgeIndex, ExecSccIndex> = HashMap::new();
+            for node in scc_nodes.iter() {
+                for edge in self.graph.edges_directed(*node, EdgeDirection::Outgoing) {
+                    let scc_dst_index = *scc_graph.linkage.get(&edge.target()).unwrap();
+                    if scc_dst_index != scc_index {
+                        assert!(outlet_map.insert(edge.id(), scc_dst_index).is_none());
+                    }
+                }
+            }
+
+            // register scc to scc graph
+            let scc_node = scc_graph.graph.add_node(HashSet::from_iter(scc_nodes));
+            scc_graph.node_map.insert(scc_index, scc_node);
+
+            // detect leaf scc
+            if outlet_map.is_empty() {
+                scc_graph.leaf_nodes.push(scc_index);
+            }
+
+            // add edges between sccs
+            for (exit_edge, exit_scc) in outlet_map {
+                scc_graph.graph.add_edge(
+                    scc_node,
+                    *scc_graph.node_map.get(&exit_scc).unwrap(),
+                    exit_edge,
+                );
+            }
+        }
+
+        // find the entry scc
+        scc_graph.root_node = *scc_graph
+            .linkage
+            .get(self.node_map.get(&self.entry_block_id).unwrap())
+            .unwrap();
+
+        // done
+        scc_graph
+    }
+
     /// collect all paths reachable from entry_block and enumerating
     /// them by first condensing the exec graph as a DAG
     pub fn scc_paths_from_entry(&self) -> HashMap<ExecSccIndex, HashSet<Vec<EdgeIndex>>> {
@@ -643,6 +702,47 @@ impl ExecGraph {
                 &[dot::Config::EdgeNoLabel, dot::Config::NodeIndexLabel],
             )
         )
+    }
+}
+
+/// This is a self-contained set of blocks (can be either a single block
+/// or a loop) (i.e., the SCC) in the super-CFG
+type ExecSccIndex = usize;
+
+pub(crate) struct ExecSccGraph {
+    // used during the graph building progress
+    graph: Graph<HashSet<NodeIndex>, EdgeIndex>,
+    node_map: HashMap<ExecSccIndex, NodeIndex>,
+    // derived after graph building
+    root_node: ExecSccIndex,
+    leaf_nodes: Vec<ExecSccIndex>,
+    /// linkage between exec graph to exec scc graph
+    linkage: HashMap<NodeIndex, ExecSccIndex>,
+}
+
+impl ExecSccGraph {
+    pub fn new() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_map: HashMap::new(),
+            linkage: HashMap::new(),
+            root_node: 0,
+            leaf_nodes: vec![],
+        }
+    }
+
+    pub fn enumerate_paths(&self) -> Vec<Vec<NodeIndex>> {
+        let mut paths = vec![];
+        for leaf_node in self.leaf_nodes.iter() {
+            paths.extend(all_simple_paths::<Vec<NodeIndex>, _>(
+                &self.graph,
+                *self.node_map.get(&self.root_node).unwrap(),
+                *self.node_map.get(leaf_node).unwrap(),
+                0,
+                None,
+            ));
+        }
+        paths
     }
 }
 
