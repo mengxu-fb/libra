@@ -186,6 +186,11 @@ enum OpCommand {
         #[structopt(long = "exclusion", short = "e", parse(try_from_str = FuncIdMatcher::new))]
         exclusion: Vec<FuncIdMatcher>,
 
+        /// Symbolize all scripts marked so far (by default, only start
+        /// symbolization on scripts compiled since last push)
+        #[structopt(long = "all-scripts")]
+        all_scripts: bool,
+
         /// Output the composed execution graph in dot format
         #[structopt(long = "output-exec-graph")]
         output_exec_graph: bool,
@@ -385,10 +390,15 @@ impl MoveController {
         &mut self,
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
+        all_scripts: bool,
         output_exec_graph: bool,
     ) -> Result<()> {
         // build the setup
-        let tracked_scripts = self.get_compiled_scripts_all(Some(true));
+        let tracked_scripts = if all_scripts {
+            self.get_compiled_scripts_all(Some(true))
+        } else {
+            self.get_compiled_scripts_recent(Some(true))
+        };
         let tracked_modules = self.get_compiled_modules_all(Some(true));
         let sym_setup =
             SymSetup::new(self.collect_tracked_functions(&tracked_modules, inclusion, exclusion));
@@ -451,24 +461,31 @@ impl MoveController {
     }
 
     // get results (maybe across stack)
+    fn get_compiled_modules_recent(&self, track_opt: Option<bool>) -> Vec<CompiledModule> {
+        self.get_state()
+            .compiled_modules
+            .iter()
+            .filter_map(|m| m.filter(track_opt))
+            .cloned()
+            .collect()
+    }
+
+    fn get_compiled_scripts_recent(&self, track_opt: Option<bool>) -> Vec<CompiledScript> {
+        self.get_state()
+            .compiled_scripts
+            .iter()
+            .filter_map(|s| s.filter(track_opt))
+            .cloned()
+            .collect()
+    }
+
     pub fn get_compiled_units_recent(
         &self,
         track_opt: Option<bool>,
     ) -> (Vec<CompiledModule>, Vec<CompiledScript>) {
-        let state = self.get_state();
         (
-            state
-                .compiled_modules
-                .iter()
-                .filter_map(|m| m.filter(track_opt))
-                .cloned()
-                .collect(),
-            state
-                .compiled_scripts
-                .iter()
-                .filter_map(|s| s.filter(track_opt))
-                .cloned()
-                .collect(),
+            self.get_compiled_modules_recent(track_opt),
+            self.get_compiled_scripts_recent(track_opt),
         )
     }
 
@@ -625,8 +642,14 @@ impl MoveController {
             OpCommand::Symbolize {
                 inclusion,
                 exclusion,
+                all_scripts,
                 output_exec_graph,
-            } => self.symbolize(inclusion.as_deref(), Some(&exclusion), output_exec_graph),
+            } => self.symbolize(
+                inclusion.as_deref(),
+                Some(&exclusion),
+                all_scripts,
+                output_exec_graph,
+            ),
             OpCommand::Push => self.push(),
             OpCommand::Pop => self.pop(),
         }
