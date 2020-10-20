@@ -5,7 +5,7 @@
 
 use log::debug;
 use petgraph::{
-    algo::{all_simple_paths, tarjan_scc},
+    algo::{all_simple_paths, tarjan_scc, toposort},
     dot::{self, Dot},
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::{Bfs, DfsPostOrder, EdgeRef},
@@ -107,12 +107,15 @@ struct CallSite {
 /// This is the super-CFG graph representation.
 #[derive(Clone, Debug)]
 pub(crate) struct ExecGraph {
-    // used during the graph building progress
+    /// the graph structure
     graph: Graph<ExecBlock, ExecFlow>,
+    /// a map mapping block id to node index
     node_map: HashMap<ExecBlockId, NodeIndex>,
+    /// a map mapping a pair of connecting blocks to edge index
     edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
-    // used during the graph checking progress
+    /// the block id of the graph entry block
     entry_block_id: ExecBlockId,
+    /// a list of blocks that are unreachable from the entry block
     dead_block_ids: HashSet<ExecBlockId>,
 }
 
@@ -128,8 +131,9 @@ impl ExecGraph {
     }
 
     fn add_block(&mut self, block: ExecBlock) -> NodeIndex {
-        let node_index = self.graph.add_node(block.clone());
-        assert!(self.node_map.insert(block.block_id, node_index).is_none());
+        let exec_block_id = block.block_id;
+        let node_index = self.graph.add_node(block);
+        assert!(self.node_map.insert(exec_block_id, node_index).is_none());
         node_index
     }
 
@@ -535,141 +539,7 @@ impl ExecGraph {
         self.graph.edge_count()
     }
 
-    /// condense the exec graph into an SCC graph
-    pub fn scc_graph(&self) -> ExecSccGraph {
-        // build the scc graph
-        let mut scc_graph = ExecSccGraph::new();
-
-        for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
-            // ignore dead scc
-            let scc_is_unreachable = scc_nodes.iter().any(|node| {
-                self.dead_block_ids
-                    .contains(&self.get_block_id_by_node(*node))
-            });
-            if scc_is_unreachable {
-                continue;
-            }
-
-            // map node to scc (must be done before edge collection)
-            for node in scc_nodes.iter() {
-                scc_graph.linkage.insert(*node, scc_index);
-            }
-
-            // collect edges branching out of this scc
-            let mut outlet_map: HashMap<EdgeIndex, ExecSccIndex> = HashMap::new();
-            for node in scc_nodes.iter() {
-                for edge in self.graph.edges_directed(*node, EdgeDirection::Outgoing) {
-                    let scc_dst_index = *scc_graph.linkage.get(&edge.target()).unwrap();
-                    if scc_dst_index != scc_index {
-                        assert!(outlet_map.insert(edge.id(), scc_dst_index).is_none());
-                    }
-                }
-            }
-
-            // register scc to scc graph
-            let scc_node = scc_graph.graph.add_node(HashSet::from_iter(scc_nodes));
-            scc_graph.node_map.insert(scc_index, scc_node);
-
-            // detect leaf scc
-            if outlet_map.is_empty() {
-                scc_graph.leaf_nodes.push(scc_index);
-            }
-
-            // add edges between sccs
-            for (exit_edge, exit_scc) in outlet_map {
-                scc_graph.graph.add_edge(
-                    scc_node,
-                    *scc_graph.node_map.get(&exit_scc).unwrap(),
-                    exit_edge,
-                );
-            }
-        }
-
-        // find the entry scc
-        scc_graph.root_node = *scc_graph.linkage.get(&self.get_entry_node()).unwrap();
-
-        // done
-        scc_graph
-    }
-
-    /// count all paths reachable from entry_block and enumerating
-    /// them by first condensing the exec graph as a DAG
-    pub fn scc_path_count(&self) -> u128 {
-        // maps each node to an SccIndex
-        let mut node_map: HashMap<NodeIndex, ExecSccIndex> = HashMap::new();
-
-        // per each path_end_scc (i.e., a leaf node in the SCC graph),
-        // stores how many reachable paths from any_scc to path_end_scc
-        let mut path_map: HashMap<ExecSccIndex, HashMap<ExecSccIndex, u128>> = HashMap::new();
-
-        for (scc_index, scc_nodes) in tarjan_scc(&self.graph).into_iter().enumerate() {
-            // ignore dead scc
-            let scc_is_unreachable = scc_nodes.iter().any(|node| {
-                self.dead_block_ids
-                    .contains(&self.get_block_id_by_node(*node))
-            });
-            if scc_is_unreachable {
-                continue;
-            }
-
-            // map node to scc (must be done before edge collection)
-            for node in scc_nodes.iter() {
-                node_map.insert(*node, scc_index);
-            }
-
-            // collect edges branching out of this scc
-            let mut outlet_map: HashMap<EdgeIndex, ExecSccIndex> = HashMap::new();
-            for node in scc_nodes.iter() {
-                for edge in self.graph.edges_directed(*node, EdgeDirection::Outgoing) {
-                    let scc_dst_index = *node_map.get(&edge.target()).unwrap();
-                    if scc_dst_index != scc_index {
-                        assert!(outlet_map.insert(edge.id(), scc_dst_index).is_none());
-                    }
-                }
-            }
-
-            // build path counts dynamically
-            if outlet_map.is_empty() {
-                // this is a termination scc
-                let mut term_path_map = HashMap::new();
-                term_path_map.insert(scc_index, 1);
-                assert!(path_map.insert(scc_index, term_path_map).is_none());
-            } else {
-                // update path count map
-                let mut scc_reach_map: HashMap<ExecSccIndex, u128> = HashMap::new();
-                for exit_scc in outlet_map.values() {
-                    for (path_end_scc, path_end_reach_map) in path_map.iter() {
-                        if let Some(path_count) = path_end_reach_map.get(exit_scc) {
-                            // there is a way from this exit_scc to
-                            // path_end_scc, adding to existing count.
-                            let existing_count = scc_reach_map.entry(*path_end_scc).or_insert(0);
-                            *existing_count += path_count;
-                        }
-                    }
-                }
-
-                // merge into the path map
-                for (path_end_scc, path_end_reach_count) in scc_reach_map {
-                    assert!(path_map
-                        .get_mut(&path_end_scc)
-                        .unwrap()
-                        .insert(scc_index, path_end_reach_count)
-                        .is_none());
-                }
-            }
-        }
-
-        // derive end-to-end path count
-        let entry_scc = node_map.get(&self.get_entry_node()).unwrap();
-
-        let mut total_count = 0;
-        for path_end_reach_map in path_map.values() {
-            total_count += path_end_reach_map.get(entry_scc).unwrap();
-        }
-
-        total_count
-    }
-
+    /// convert the graph into Dot representation
     pub fn to_dot(&self) -> String {
         format!(
             "{:?}",
@@ -683,43 +553,194 @@ impl ExecGraph {
 
 /// This is a self-contained set of blocks (can be either a single block
 /// or a loop) (i.e., the SCC) in the super-CFG
-type ExecSccIndex = usize;
+type ExecSccId = usize;
+
+#[derive(Clone, Debug)]
+struct ExecScc {
+    scc_id: ExecSccId,
+    block_ids: HashSet<ExecBlockId>,
+}
+
+impl ExecScc {
+    pub fn new(scc_id: ExecSccId, block_ids: HashSet<ExecBlockId>) -> Self {
+        Self { scc_id, block_ids }
+    }
+}
 
 pub(crate) struct ExecSccGraph {
-    // used during the graph building progress
-    graph: Graph<HashSet<NodeIndex>, EdgeIndex>,
-    node_map: HashMap<ExecSccIndex, NodeIndex>,
-    // derived after graph building
-    root_node: ExecSccIndex,
-    leaf_nodes: Vec<ExecSccIndex>,
+    /// the graph structure
+    graph: Graph<ExecScc, EdgeIndex>,
+    /// a map mapping scc id to node index
+    node_map: HashMap<ExecSccId, NodeIndex>,
+    /// the scc id of the graph entry scc
+    entry_scc_id: ExecSccId,
+    /// a list of sccs that have no outgoing edges
+    leaf_scc_ids: Vec<ExecSccId>,
     /// linkage between exec graph to exec scc graph
-    linkage: HashMap<NodeIndex, ExecSccIndex>,
+    linkage: HashMap<NodeIndex, ExecSccId>,
 }
 
 impl ExecSccGraph {
-    pub fn new() -> Self {
+    fn empty() -> Self {
         Self {
             graph: Graph::new(),
             node_map: HashMap::new(),
             linkage: HashMap::new(),
-            root_node: 0,
-            leaf_nodes: vec![],
+            entry_scc_id: 0,
+            leaf_scc_ids: vec![],
         }
     }
 
+    fn add_scc(&mut self, scc: ExecScc) -> NodeIndex {
+        let exec_scc_id = scc.scc_id;
+        let node_index = self.graph.add_node(scc);
+        assert!(self.node_map.insert(exec_scc_id, node_index).is_none());
+        node_index
+    }
+
+    fn get_node_by_scc_id(&self, scc_id: ExecSccId) -> NodeIndex {
+        *self.node_map.get(&scc_id).unwrap()
+    }
+
+    fn get_entry_node(&self) -> NodeIndex {
+        self.get_node_by_scc_id(self.entry_scc_id)
+    }
+
+    /// build the scc graph out of the exec graph
+    pub fn new(exec_graph: &ExecGraph) -> Self {
+        let mut scc_graph = ExecSccGraph::empty();
+
+        // build the nodes and edges in the scc graph
+        for (scc_id, scc_nodes) in tarjan_scc(&exec_graph.graph).into_iter().enumerate() {
+            // ignore dead scc
+            let scc_is_unreachable = scc_nodes.iter().any(|node| {
+                exec_graph
+                    .dead_block_ids
+                    .contains(&exec_graph.get_block_id_by_node(*node))
+            });
+            if scc_is_unreachable {
+                continue;
+            }
+
+            // register scc to scc graph
+            let exec_scc = ExecScc::new(
+                scc_id,
+                HashSet::from_iter(
+                    scc_nodes
+                        .iter()
+                        .map(|node| exec_graph.get_block_id_by_node(*node)),
+                ),
+            );
+            let exec_scc_node = scc_graph.add_scc(exec_scc);
+
+            // map node to scc (must be done before edge collection)
+            for node in scc_nodes.iter() {
+                assert!(scc_graph.linkage.insert(*node, scc_id).is_none());
+            }
+
+            // collect edges branching out of this scc
+            let mut outlet_map: HashMap<EdgeIndex, ExecSccId> = HashMap::new();
+            for node in scc_nodes.iter() {
+                for edge in exec_graph
+                    .graph
+                    .edges_directed(*node, EdgeDirection::Outgoing)
+                {
+                    let scc_dst_id = *scc_graph.linkage.get(&edge.target()).unwrap();
+                    if scc_dst_id != scc_id {
+                        assert!(outlet_map.insert(edge.id(), scc_dst_id).is_none());
+                    }
+                }
+            }
+
+            // detect leaf scc
+            if outlet_map.is_empty() {
+                scc_graph.leaf_scc_ids.push(scc_id);
+            }
+
+            // add edges between sccs
+            for (exit_edge, exit_scc) in outlet_map {
+                scc_graph.graph.add_edge(
+                    exec_scc_node,
+                    scc_graph.get_node_by_scc_id(exit_scc),
+                    exit_edge,
+                );
+            }
+        }
+
+        // find the entry scc
+        scc_graph.entry_scc_id = *scc_graph.linkage.get(&exec_graph.get_entry_node()).unwrap();
+
+        // done
+        scc_graph
+    }
+
+    /// count paths
+    pub fn count_paths(&self) -> u128 {
+        // per each path_end_scc (i.e., a leaf node in the SCC graph),
+        // stores how many reachable paths from any_scc to path_end_scc
+        let mut path_map: HashMap<NodeIndex, HashMap<NodeIndex, u128>> = HashMap::new();
+
+        // go with reverse topological order
+        for node in toposort(&self.graph, None).unwrap().into_iter().rev() {
+            let mut out_edges_iter = self
+                .graph
+                .edges_directed(node, EdgeDirection::Outgoing)
+                .peekable();
+            if out_edges_iter.peek().is_none() {
+                // this is a termination scc
+                let mut term_path_map = HashMap::new();
+                term_path_map.insert(node, 1);
+                assert!(path_map.insert(node, term_path_map).is_none());
+            } else {
+                // update path count map
+                let mut scc_reach_map: HashMap<NodeIndex, u128> = HashMap::new();
+                for out_edge in out_edges_iter {
+                    for (path_end_scc, path_end_reach_map) in path_map.iter() {
+                        if let Some(path_count) = path_end_reach_map.get(&out_edge.target()) {
+                            // there is a way from this exit_scc to
+                            // path_end_scc, adding to existing count.
+                            let existing_count = scc_reach_map.entry(*path_end_scc).or_insert(0);
+                            *existing_count += path_count;
+                        }
+                    }
+                }
+
+                // merge into the path map
+                for (path_end_scc, path_end_reach_count) in scc_reach_map {
+                    assert!(path_map
+                        .get_mut(&path_end_scc)
+                        .unwrap()
+                        .insert(node, path_end_reach_count)
+                        .is_none());
+                }
+            }
+        }
+
+        // derive end-to-end path count
+        let entry_scc_node = self.get_entry_node();
+
+        let mut total_count = 0;
+        for path_end_reach_map in path_map.values() {
+            total_count += path_end_reach_map.get(&entry_scc_node).unwrap();
+        }
+
+        total_count
+    }
+
+    /// enumerate all paths from entry to the end
     pub fn enumerate_paths(&self) -> Vec<Vec<NodeIndex>> {
         let mut paths = vec![];
-        for leaf_node in self.leaf_nodes.iter() {
-            if *leaf_node == self.root_node {
+        for leaf_scc_id in self.leaf_scc_ids.iter() {
+            if *leaf_scc_id == self.entry_scc_id {
                 // the all_simple_paths does not count single node path
                 // we add it manually to reconcile with the output from
                 // the algorithm in scc_path_count
-                paths.push(vec![*self.node_map.get(&self.root_node).unwrap()]);
+                paths.push(vec![]);
             } else {
                 paths.extend(all_simple_paths::<Vec<NodeIndex>, _>(
                     &self.graph,
-                    *self.node_map.get(&self.root_node).unwrap(),
-                    *self.node_map.get(leaf_node).unwrap(),
+                    self.get_entry_node(),
+                    self.get_node_by_scc_id(*leaf_scc_id),
                     0,
                     None,
                 ));

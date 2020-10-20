@@ -8,7 +8,11 @@ use std::{fs::File, io::Write};
 
 use vm::file_format::CompiledScript;
 
-use crate::{sym_exec_graph::ExecGraph, sym_setup::SymSetup, utils};
+use crate::{
+    sym_exec_graph::{ExecGraph, ExecSccGraph},
+    sym_setup::SymSetup,
+    utils,
+};
 
 /// The default file name for the exec graph
 const EXEC_GRAPH_NAME: &str = "exec_graph.dot";
@@ -54,10 +58,10 @@ impl MoveSymbolizer {
         );
 
         // build the scc graph
-        let scc_graph = self.exec_graph.scc_graph();
+        let scc_graph = ExecSccGraph::new(&self.exec_graph);
 
         // count paths with our handwritten algorithm
-        let path_count = self.exec_graph.scc_path_count();
+        let path_count = scc_graph.count_paths();
         println!("{} paths in scc graph", path_count);
 
         // cross-checking with the petgraph's algorithm
