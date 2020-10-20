@@ -519,21 +519,22 @@ impl ExecGraph {
                 exit_nodes.push(node);
             }
         }
-        assert!(entry_node.is_some());
+        let entry_node = entry_node.unwrap();
 
         // set the entry block id
-        self.entry_block_id = self
-            .graph
-            .node_weight(entry_node.unwrap())
-            .unwrap()
-            .block_id;
+        self.entry_block_id = self.graph.node_weight(entry_node).unwrap().block_id;
 
         // find all dead blocks
-        for dead_node in dead_nodes {
-            let mut bfs = Bfs::new(&self.graph, dead_node);
-            while let Some(node) = bfs.next(&self.graph) {
-                self.dead_block_ids
-                    .insert(self.graph.node_weight(node).unwrap().block_id);
+        let mut reachable_nodes = HashSet::new();
+
+        let mut bfs = Bfs::new(&self.graph, entry_node);
+        while let Some(node) = bfs.next(&self.graph) {
+            reachable_nodes.insert(node);
+        }
+
+        for (block_id, node) in self.node_map.iter() {
+            if !reachable_nodes.contains(node) {
+                self.dead_block_ids.insert(*block_id);
             }
         }
     }
