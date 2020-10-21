@@ -120,7 +120,7 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     let test_workdir = join_path_items!(&*MOVE_FUNCTIONAL_TESTS_WORKDIR, &test_name);
 
     // setup the compiler
-    let mut controller = MoveController::new(test_workdir, true)?;
+    let mut controller = MoveController::new(test_workdir, false)?;
 
     // preload libraries, stdlib will be tracked
     controller.load(&[MOVE_STDLIB_BIN.to_owned()], true, true)?;

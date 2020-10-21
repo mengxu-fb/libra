@@ -433,7 +433,7 @@ impl MoveController {
                 symbolizer.save_exec_graph_as_dot()?;
             }
             if output_exec_graph_stats {
-                symbolizer.show_exec_graph_stats();
+                symbolizer.save_exec_graph_stats()?;
             }
         }
 
