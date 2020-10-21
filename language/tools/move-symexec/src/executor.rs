@@ -51,6 +51,7 @@ impl MoveExecutor {
         signers: &[AccountAddress],
         val_args: &[TransactionArgument],
         type_args: &[TypeTag],
+        expect_failure: bool,
         commit: bool,
     ) -> Result<()> {
         // serialize script
@@ -88,8 +89,12 @@ impl MoveExecutor {
 
         // handle errors
         if let Err(err) = result {
-            writeln!(stderr().lock(), "{}", err)?;
-            bail!("Unexpected failure in Move execution");
+            if expect_failure {
+                debug!("{}", err);
+            } else {
+                writeln!(stderr().lock(), "{}", err)?;
+                bail!("Unexpected failure in Move execution");
+            }
         };
 
         // collect effects

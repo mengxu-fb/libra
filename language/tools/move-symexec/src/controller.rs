@@ -166,6 +166,10 @@ enum OpCommand {
         #[structopt(long = "type-args", short = "t", parse(try_from_str = parse_type_tag))]
         type_args: Vec<TypeTag>,
 
+        /// Mark that this operation is expected to be failed or aborted
+        #[structopt(long = "expect-failure", short = "F")]
+        expect_failure: bool,
+
         /// Mark that this operation should have no impact on future
         /// operations.
         #[structopt(long = "dry-run", short = "x")]
@@ -376,15 +380,21 @@ impl MoveController {
         signers: &[AccountAddress],
         val_args: &[TransactionArgument],
         type_args: &[TypeTag],
+        expect_failure: bool,
         commit: bool,
     ) -> Result<()> {
         let compiled_scripts = self.get_compiled_scripts_all(None);
 
         let state = self.get_state_mut();
         for script in compiled_scripts.iter() {
-            state
-                .executor
-                .execute_script(script, signers, val_args, type_args, commit)?;
+            state.executor.execute_script(
+                script,
+                signers,
+                val_args,
+                type_args,
+                expect_failure,
+                commit,
+            )?;
         }
 
         Ok(())
@@ -645,8 +655,9 @@ impl MoveController {
                 signers,
                 val_args,
                 type_args,
+                expect_failure,
                 dry_run,
-            } => self.execute(&signers, &val_args, &type_args, !dry_run),
+            } => self.execute(&signers, &val_args, &type_args, expect_failure, !dry_run),
             OpCommand::Symbolize {
                 inclusion,
                 exclusion,
