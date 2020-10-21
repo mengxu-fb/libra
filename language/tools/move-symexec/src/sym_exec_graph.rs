@@ -6,13 +6,14 @@
 use log::debug;
 use petgraph::{
     algo::{all_simple_paths, tarjan_scc, toposort},
-    dot::{self, Dot},
+    dot::Dot,
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::{Bfs, DfsPostOrder, EdgeRef},
     EdgeDirection,
 };
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     iter::FromIterator,
 };
 
@@ -60,6 +61,28 @@ impl ExecBlock {
     }
 }
 
+impl fmt::Display for ExecBlock {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        // block head
+        writeln!(
+            f,
+            "[{} - {}::{}]",
+            self.block_id,
+            self.code_context,
+            self.code_offset
+                .map_or_else(|| String::from("None"), |offset| offset.to_string())
+        )?;
+
+        // block content
+        for instruction in self.instructions.iter() {
+            writeln!(f, "{:?}", instruction)?;
+        }
+
+        // done
+        Ok(())
+    }
+}
+
 /// This is the control flow (i.e., the edge) in the super-CFG.
 #[derive(Clone, Debug)]
 enum ExecFlowType {
@@ -91,6 +114,12 @@ impl ExecFlow {
             flow_dst,
             flow_type,
         }
+    }
+}
+
+impl fmt::Display for ExecFlow {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{:?}", self.flow_type)
     }
 }
 
@@ -542,11 +571,10 @@ impl ExecGraph {
     /// convert the graph into Dot representation
     pub fn to_dot(&self) -> String {
         format!(
-            "{:?}",
-            Dot::with_config(
-                &self.graph,
-                &[dot::Config::EdgeNoLabel, dot::Config::NodeIndexLabel],
-            )
+            "{}",
+            Dot::with_attr_getters(&self.graph, &[], &|_, _| "".to_string(), &|_, _| {
+                "shape=box".to_string()
+            },)
         )
     }
 }

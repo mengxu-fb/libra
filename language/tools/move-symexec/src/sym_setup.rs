@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use move_core_types::{
     account_address::AccountAddress,
@@ -27,6 +27,18 @@ pub(crate) enum CodeContext {
         module_id: ModuleId,
         function_id: Identifier,
     },
+}
+
+impl fmt::Display for CodeContext {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            CodeContext::Script => write!(f, "<script>"),
+            CodeContext::Module {
+                module_id,
+                function_id,
+            } => write!(f, "{}::{}", module_id, function_id),
+        }
+    }
 }
 
 /// unify script and module accesses
