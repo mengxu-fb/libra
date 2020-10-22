@@ -13,6 +13,7 @@ use vm::file_format::CompiledScript;
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
     sym_setup::SymSetup,
+    sym_vm::SymVM,
     utils,
 };
 
@@ -90,5 +91,10 @@ impl MoveSymbolizer {
 
         // done
         Ok(())
+    }
+
+    pub fn execute(&self) {
+        let vm = SymVM::new();
+        vm.interpret(&self.exec_graph);
     }
 }

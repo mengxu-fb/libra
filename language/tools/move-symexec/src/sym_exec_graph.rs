@@ -184,6 +184,10 @@ impl ExecGraph {
         self.graph.node_weight(node).unwrap()
     }
 
+    fn get_block_by_block_id(&self, block_id: ExecBlockId) -> &ExecBlock {
+        self.get_block_by_node(self.get_node_by_block_id(block_id))
+    }
+
     fn add_flow(
         &mut self,
         src_block_id: ExecBlockId,
@@ -702,6 +706,8 @@ pub(crate) struct ExecScc {
     scope_block_ids: HashSet<ExecBlockId>,
     /// The entry block in this scc
     entry_block_id: ExecBlockId,
+    /// Whether this scc is cyclic with a backedge to the entry block
+    is_cyclic_on_entry: bool,
 }
 
 impl ExecScc {
@@ -709,11 +715,13 @@ impl ExecScc {
         scc_id: ExecSccId,
         scope_block_ids: HashSet<ExecBlockId>,
         entry_block_id: ExecBlockId,
+        is_cyclic_on_entry: bool,
     ) -> Self {
         Self {
             scc_id,
             scope_block_ids,
             entry_block_id,
+            is_cyclic_on_entry,
         }
     }
 }
@@ -826,6 +834,7 @@ impl ExecSccGraph {
 
             // find the entry blocks in this scc
             let mut scc_entry_map: HashMap<ExecBlockId, HashSet<ExecBlockId>> = HashMap::new();
+            let mut scc_intra_edge_dst_block_ids = HashSet::new();
             for node in scc_nodes.iter() {
                 for edge in ref_graph
                     .graph
@@ -833,7 +842,10 @@ impl ExecSccGraph {
                 {
                     let (src_block_id, dst_block_id) = edge.weight();
                     if scope_block_ids.contains(src_block_id) {
-                        // ignore edges within this scc
+                        // ignore edges within this scc, just mark the
+                        // dst block id so we can tell whether this scc
+                        // is cyclic with a back edge to the entry block
+                        scc_intra_edge_dst_block_ids.insert(dst_block_id);
                         continue;
                     }
                     // found an incoming edge into this scc
@@ -883,6 +895,7 @@ impl ExecSccGraph {
                     scc_id,
                     scope_block_ids.clone(),
                     scc_entry_block_id,
+                    scc_intra_edge_dst_block_ids.contains(&scc_entry_block_id),
                 ));
 
                 // mark that all edges joining into this entry block are
@@ -990,6 +1003,106 @@ impl ExecSccGraph {
             }
         }
         paths
+    }
+}
+
+// Exec Graph iterator
+
+/// Stores the internal states of the ExecWalker
+struct ExecWalkerState {
+    /// The id of scc we are currently exploring, w.r.t. the parent scc
+    scc_id: Option<ExecSccId>,
+    /// The (sub) scc graph for this scc
+    scc_graph: ExecSccGraph,
+    /// A topological iterator for the (sub) scc_graph
+    node_iterator: std::vec::IntoIter<NodeIndex>,
+}
+
+impl ExecWalkerState {
+    pub fn new(scc_id: Option<ExecSccId>, ref_graph: &ExecRefGraph) -> Self {
+        let scc_graph = ExecSccGraph::new(&ref_graph);
+        let node_iterator = toposort(&scc_graph.graph, None).unwrap().into_iter();
+
+        Self {
+            scc_id,
+            scc_graph,
+            node_iterator,
+        }
+    }
+
+    pub fn next(&mut self) -> Option<&ExecScc> {
+        self.node_iterator
+            .next()
+            .map(move |node| self.scc_graph.get_scc_by_node(node))
+    }
+}
+
+/// An iterator that visits each scc in the graph in a topological order
+/// If this scc has a cycle, decend into this scc and iterate the scc
+pub(crate) struct ExecWalker<'a> {
+    exec_graph: &'a ExecGraph,
+    iter_stack: Vec<ExecWalkerState>,
+}
+
+enum CycleOrBlock<'a> {
+    Cycle(ExecWalkerState),
+    Block(&'a ExecBlock),
+}
+
+impl<'a> ExecWalker<'a> {
+    pub fn new(exec_graph: &'a ExecGraph) -> Self {
+        Self {
+            exec_graph,
+            iter_stack: vec![ExecWalkerState::new(
+                None,
+                &ExecRefGraph::from_graph(exec_graph),
+            )],
+        }
+    }
+
+    pub fn next(&mut self) -> Option<(Vec<ExecSccId>, &ExecBlock)> {
+        // if we have nothing in the stack, we are done with the walking
+        if self.iter_stack.is_empty() {
+            return None;
+        }
+
+        // otherwise, we may need to update the stack before returning
+        // the next block
+        let exec_graph = self.exec_graph;
+        let state = self.iter_stack.last_mut().unwrap();
+        let next_op = state.next().map(|scc| {
+            if scc.is_cyclic_on_entry {
+                CycleOrBlock::Cycle(ExecWalkerState::new(
+                    Some(scc.scc_id),
+                    &ExecRefGraph::from_graph_scc(exec_graph, scc),
+                ))
+            } else {
+                CycleOrBlock::Block(exec_graph.get_block_by_block_id(scc.entry_block_id))
+            }
+        });
+
+        match next_op {
+            None => {
+                // internal scc yields nothing, pop the stack
+                self.iter_stack.pop();
+                self.next()
+            }
+            Some(cycle_or_block) => match cycle_or_block {
+                CycleOrBlock::Cycle(state) => {
+                    // we are about to decend into a new cycle
+                    self.iter_stack.push(state);
+                    self.next()
+                }
+                CycleOrBlock::Block(block) => {
+                    let scc_id_stack = self
+                        .iter_stack
+                        .iter()
+                        .filter_map(|state| state.scc_id)
+                        .collect();
+                    Some((scc_id_stack, block))
+                }
+            },
+        }
     }
 }
 

@@ -11,6 +11,7 @@ pub mod executor;
 pub mod sym_setup;
 
 pub mod sym_exec_graph;
+pub mod sym_vm;
 
 pub mod symbolizer;
 

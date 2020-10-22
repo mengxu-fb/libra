@@ -445,6 +445,9 @@ impl MoveController {
             if output_exec_graph_stats {
                 symbolizer.save_exec_graph_stats()?;
             }
+
+            // run the symbolization procedure
+            symbolizer.execute();
         }
 
         // done
