@@ -11,7 +11,7 @@ use std::{fs::File, io::Write};
 use vm::file_format::CompiledScript;
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecSccGraph},
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
     sym_setup::SymSetup,
     utils,
 };
@@ -60,8 +60,11 @@ impl MoveSymbolizer {
             self.exec_graph.edge_count()
         );
 
+        // build the ref graph
+        let ref_graph = ExecRefGraph::from_graph(&self.exec_graph);
+
         // build the scc graph
-        let scc_graph = ExecSccGraph::new(&self.exec_graph);
+        let scc_graph = ExecSccGraph::new(&ref_graph);
 
         // count paths with our handwritten algorithm
         let path_count = scc_graph.count_paths();

@@ -30,8 +30,10 @@ use crate::sym_setup::{CodeContext, ExecUnit, SymSetup};
 type ExecBlockId = usize;
 
 #[derive(Clone, Debug)]
-struct ExecBlock {
+pub(crate) struct ExecBlock {
+    /// A unique identifier for the exec block
     block_id: ExecBlockId,
+    /// The context (module, function) where this block lives
     code_context: CodeContext,
     /// the starting offset of the instructions in code context
     /// A None code offset means that this must be an arbitrary block
@@ -39,6 +41,7 @@ struct ExecBlock {
     /// (However, not all arbitrary blocks have None as code_offset,
     /// those that do host instructions will have a valid code_offset)
     code_offset: Option<CodeOffset>,
+    /// The instructions within this basic block. It is OK to be empty.
     instructions: Vec<Bytecode>,
 }
 
@@ -85,7 +88,7 @@ impl fmt::Display for ExecBlock {
 
 /// This is the control flow (i.e., the edge) in the super-CFG.
 #[derive(Clone, Debug)]
-enum ExecFlowType {
+pub(crate) enum ExecFlowType {
     /// Fall through: the next instruction is PC + 1
     Fallthrough,
     /// Conditional or unconditional (if condition is None) branch
@@ -102,16 +105,23 @@ enum ExecFlowType {
 
 #[derive(Clone, Debug)]
 struct ExecFlow {
-    flow_src: ExecBlockId,
-    flow_dst: ExecBlockId,
+    /// The basic block where this flow goes from
+    src_block_id: ExecBlockId,
+    /// The basic block where this flow goes into
+    dst_block_id: ExecBlockId,
+    /// The type of this flow
     flow_type: ExecFlowType,
 }
 
 impl ExecFlow {
-    pub fn new(flow_src: ExecBlockId, flow_dst: ExecBlockId, flow_type: ExecFlowType) -> Self {
+    pub fn new(
+        src_block_id: ExecBlockId,
+        dst_block_id: ExecBlockId,
+        flow_type: ExecFlowType,
+    ) -> Self {
         Self {
-            flow_src,
-            flow_dst,
+            src_block_id,
+            dst_block_id,
             flow_type,
         }
     }
@@ -125,26 +135,26 @@ impl fmt::Display for ExecFlow {
 
 /// This is the information stored on the call stack
 struct CallSite {
-    /// context where this call is initiated
+    /// The context where this call is initiated
     context: CodeContext,
-    /// the exec block id for the entry block in this context
+    /// The exec block id for the entry block in this context
     init_block_id: ExecBlockId,
-    /// the exec block id where the call is initiated
+    /// The exec block id where the call is initiated
     call_block_id: ExecBlockId,
 }
 
 /// This is the super-CFG graph representation.
 #[derive(Clone, Debug)]
 pub(crate) struct ExecGraph {
-    /// the graph structure
+    /// The graph structure
     graph: Graph<ExecBlock, ExecFlow>,
-    /// a map mapping block id to node index
+    /// A map mapping block id to node index
     node_map: HashMap<ExecBlockId, NodeIndex>,
-    /// a map mapping a pair of connecting blocks to edge index
+    /// A map mapping a pair of connecting blocks to edge index
     edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
-    /// the block id of the graph entry block
+    /// The block id of the graph entry block
     entry_block_id: ExecBlockId,
-    /// a list of blocks that are unreachable from the entry block
+    /// A list of blocks that are unreachable from the entry block
     dead_block_ids: HashSet<ExecBlockId>,
 }
 
@@ -170,12 +180,8 @@ impl ExecGraph {
         *self.node_map.get(&block_id).unwrap()
     }
 
-    fn get_block_id_by_node(&self, node: NodeIndex) -> ExecBlockId {
-        self.graph.node_weight(node).unwrap().block_id
-    }
-
-    fn get_entry_node(&self) -> NodeIndex {
-        self.get_node_by_block_id(self.entry_block_id)
+    fn get_block_by_node(&self, node: NodeIndex) -> &ExecBlock {
+        self.graph.node_weight(node).unwrap()
     }
 
     fn add_flow(
@@ -347,7 +353,7 @@ impl ExecGraph {
             self.add_block(exec_block);
         }
 
-        // find entry block id and node
+        // find entry block id
         let cfg_entry_block_id = *inst_map
             .get(&cfg.block_start(cfg.entry_block_id()))
             .unwrap();
@@ -485,13 +491,13 @@ impl ExecGraph {
                 .first_edge(node, EdgeDirection::Incoming)
                 .is_none()
             {
-                match self.graph.node_weight(node).unwrap().code_offset {
+                match self.get_block_by_node(node).code_offset {
                     None => {
                         debug!(
                             "Found a dead exec block {}: this is \
                             likely caused by calling a function \
                             that only aborts but never returns.",
-                            self.get_block_id_by_node(node)
+                            self.get_block_by_node(node).block_id
                         );
                         dead_nodes.push(node);
                     }
@@ -505,7 +511,7 @@ impl ExecGraph {
                                 "Found a dead exec block {}: this is \
                                 likely caused by calling a function \
                                 that only aborts but never returns.",
-                                self.get_block_id_by_node(node)
+                                self.get_block_by_node(node).block_id
                             );
                             dead_nodes.push(node);
                         }
@@ -539,7 +545,7 @@ impl ExecGraph {
         let entry_node = entry_node.unwrap();
 
         // set the entry block id
-        self.entry_block_id = self.get_block_id_by_node(entry_node);
+        self.entry_block_id = self.get_block_by_node(entry_node).block_id;
 
         // find all dead blocks
         let mut reachable_nodes = HashSet::new();
@@ -579,13 +585,137 @@ impl ExecGraph {
     }
 }
 
+/// A shadow graph that may refer to whole or part (i.e., an scc) of
+/// the ExecGraph
+pub(crate) struct ExecRefGraph {
+    /// The graph structure
+    graph: Graph<ExecBlockId, (ExecBlockId, ExecBlockId)>,
+    /// A map mapping block id to node index
+    node_map: HashMap<ExecBlockId, NodeIndex>,
+    /// A map mapping a pair of connecting blocks to edge index
+    edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
+    /// The block id of the graph entry block
+    entry_block_id: ExecBlockId,
+}
+
+impl ExecRefGraph {
+    fn empty() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_map: HashMap::new(),
+            edge_map: HashMap::new(),
+            entry_block_id: 0,
+        }
+    }
+
+    fn add_block(&mut self, block_id: ExecBlockId) -> NodeIndex {
+        let node_index = self.graph.add_node(block_id);
+        assert!(self.node_map.insert(block_id, node_index).is_none());
+        node_index
+    }
+
+    fn get_node_by_block_id(&self, block_id: ExecBlockId) -> NodeIndex {
+        *self.node_map.get(&block_id).unwrap()
+    }
+
+    fn get_block_id_by_node(&self, node: NodeIndex) -> ExecBlockId {
+        *self.graph.node_weight(node).unwrap()
+    }
+
+    fn add_flow(&mut self, src_block_id: ExecBlockId, dst_block_id: ExecBlockId) -> EdgeIndex {
+        let edge_index = self.graph.add_edge(
+            self.get_node_by_block_id(src_block_id),
+            self.get_node_by_block_id(dst_block_id),
+            (src_block_id, dst_block_id),
+        );
+        assert!(self
+            .edge_map
+            .insert((src_block_id, dst_block_id), edge_index)
+            .is_none());
+        edge_index
+    }
+
+    fn populate(
+        &mut self,
+        exec_graph: &ExecGraph,
+        scope_block_ids: &HashSet<ExecBlockId>,
+        entry_block_id: ExecBlockId,
+        break_scc: bool, // break cycles connecting to entry node
+    ) {
+        // add nodes
+        for block_id in exec_graph.node_map.keys() {
+            if !scope_block_ids.contains(block_id) {
+                // only add blocks that belong to the scc
+                continue;
+            }
+            self.add_block(*block_id);
+        }
+
+        // add edges
+        for (src_block_id, dst_block_id) in exec_graph.edge_map.keys() {
+            if !scope_block_ids.contains(src_block_id) || !scope_block_ids.contains(dst_block_id) {
+                // only add edges that connects within the scc
+                continue;
+            }
+            if break_scc && *dst_block_id == entry_block_id {
+                // drop back edges to the entry block
+                continue;
+            }
+            self.add_flow(*src_block_id, *dst_block_id);
+        }
+    }
+
+    pub fn from_graph(exec_graph: &ExecGraph) -> Self {
+        let scope_block_ids = HashSet::from_iter(exec_graph.node_map.keys().copied())
+            .difference(&exec_graph.dead_block_ids)
+            .copied()
+            .collect();
+
+        let mut ref_graph = ExecRefGraph::empty();
+        ref_graph.populate(
+            exec_graph,
+            &scope_block_ids,
+            exec_graph.entry_block_id,
+            false,
+        );
+        ref_graph
+    }
+
+    pub fn from_graph_scc(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {
+        // need to find the entry block, and check the property that
+        // - there is one and only one entry block
+        let mut entry_block_id: Option<ExecBlockId> = None;
+        for (src_block_id, dst_block_id) in exec_graph.edge_map.keys() {
+            if !scc.block_ids.contains(src_block_id) && scc.block_ids.contains(dst_block_id) {
+                // found an incoming edge into the scc
+                match entry_block_id {
+                    None => {
+                        entry_block_id = Some(*dst_block_id);
+                    }
+                    Some(block_id) => {
+                        assert_eq!(block_id, *dst_block_id);
+                    }
+                };
+            }
+        }
+        // asserts that an entry block exists
+        let entry_block_id = entry_block_id.unwrap();
+
+        let mut ref_graph = ExecRefGraph::empty();
+        ref_graph.populate(exec_graph, &scc.block_ids, entry_block_id, true);
+        ref_graph
+    }
+}
+
 /// This is a self-contained set of blocks (can be either a single block
 /// or a loop) (i.e., the SCC) in the super-CFG
 type ExecSccId = usize;
 
 #[derive(Clone, Debug)]
-struct ExecScc {
+pub(crate) struct ExecScc {
+    /// A unique identifier for the scc
     scc_id: ExecSccId,
+    /// A set of block ids defining the scope of this scc
     block_ids: HashSet<ExecBlockId>,
 }
 
@@ -596,16 +726,20 @@ impl ExecScc {
 }
 
 pub(crate) struct ExecSccGraph {
-    /// the graph structure
-    graph: Graph<ExecScc, EdgeIndex>,
-    /// a map mapping scc id to node index
+    /// The graph structure
+    graph: Graph<ExecScc, (ExecBlockId, ExecBlockId)>,
+    /// A map mapping scc id to node index
     node_map: HashMap<ExecSccId, NodeIndex>,
-    /// the scc id of the graph entry scc
+    /// A map mapping a pair of connecting sccs to a set of edge indices
+    edge_map: HashMap<(ExecSccId, ExecSccId), HashSet<EdgeIndex>>,
+    /// The scc id of the graph entry scc
     entry_scc_id: ExecSccId,
-    /// a list of sccs that have no outgoing edges
+    /// A list of sccs that have no outgoing edges
     leaf_scc_ids: Vec<ExecSccId>,
-    /// linkage between exec graph to exec scc graph
-    linkage: HashMap<NodeIndex, ExecSccId>,
+    /// Node-level linkage between exec graph to this scc graph
+    linkage_node: HashMap<ExecBlockId, ExecSccId>,
+    /// Edge-level linkage between exec graph to this scc graph
+    linkage_edge: HashMap<(ExecBlockId, ExecBlockId), (ExecSccId, ExecSccId)>,
 }
 
 impl ExecSccGraph {
@@ -613,16 +747,25 @@ impl ExecSccGraph {
         Self {
             graph: Graph::new(),
             node_map: HashMap::new(),
-            linkage: HashMap::new(),
+            edge_map: HashMap::new(),
             entry_scc_id: 0,
             leaf_scc_ids: vec![],
+            linkage_node: HashMap::new(),
+            linkage_edge: HashMap::new(),
         }
     }
 
     fn add_scc(&mut self, scc: ExecScc) -> NodeIndex {
-        let exec_scc_id = scc.scc_id;
+        let scc_id = scc.scc_id;
+
+        // establish linkage
+        for block_id in scc.block_ids.iter() {
+            assert!(self.linkage_node.insert(*block_id, scc_id).is_none());
+        }
+
+        // add node to graph
         let node_index = self.graph.add_node(scc);
-        assert!(self.node_map.insert(exec_scc_id, node_index).is_none());
+        assert!(self.node_map.insert(scc_id, node_index).is_none());
         node_index
     }
 
@@ -634,48 +777,62 @@ impl ExecSccGraph {
         self.get_node_by_scc_id(self.entry_scc_id)
     }
 
+    fn add_flow(
+        &mut self,
+        src_scc_id: ExecSccId,
+        dst_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_block_id: ExecBlockId,
+    ) -> EdgeIndex {
+        // establish linkage
+        assert!(self
+            .linkage_edge
+            .insert((src_block_id, dst_block_id), (src_scc_id, dst_scc_id))
+            .is_none());
+
+        // add edge to graph
+        let edge_index = self.graph.add_edge(
+            self.get_node_by_scc_id(src_scc_id),
+            self.get_node_by_scc_id(dst_scc_id),
+            (src_block_id, dst_block_id),
+        );
+        self.edge_map
+            .entry((src_scc_id, dst_scc_id))
+            .or_insert_with(HashSet::new)
+            .insert(edge_index);
+        edge_index
+    }
+
     /// build the scc graph out of the exec graph
-    pub fn new(exec_graph: &ExecGraph) -> Self {
+    pub fn new(ref_graph: &ExecRefGraph) -> Self {
         let mut scc_graph = ExecSccGraph::empty();
 
         // build the nodes and edges in the scc graph
-        for (scc_id, scc_nodes) in tarjan_scc(&exec_graph.graph).into_iter().enumerate() {
-            // ignore dead scc
-            let scc_is_unreachable = scc_nodes.iter().any(|node| {
-                exec_graph
-                    .dead_block_ids
-                    .contains(&exec_graph.get_block_id_by_node(*node))
-            });
-            if scc_is_unreachable {
-                continue;
-            }
-
+        for (scc_id, scc_nodes) in tarjan_scc(&ref_graph.graph).into_iter().enumerate() {
             // register scc to scc graph
             let exec_scc = ExecScc::new(
                 scc_id,
                 HashSet::from_iter(
                     scc_nodes
                         .iter()
-                        .map(|node| exec_graph.get_block_id_by_node(*node)),
+                        .map(|node| ref_graph.get_block_id_by_node(*node)),
                 ),
             );
-            let exec_scc_node = scc_graph.add_scc(exec_scc);
-
-            // map node to scc (must be done before edge collection)
-            for node in scc_nodes.iter() {
-                assert!(scc_graph.linkage.insert(*node, scc_id).is_none());
-            }
+            scc_graph.add_scc(exec_scc);
 
             // collect edges branching out of this scc
-            let mut outlet_map: HashMap<EdgeIndex, ExecSccId> = HashMap::new();
+            let mut outlet_map: HashMap<(ExecBlockId, ExecBlockId), ExecSccId> = HashMap::new();
             for node in scc_nodes.iter() {
-                for edge in exec_graph
+                for edge in ref_graph
                     .graph
                     .edges_directed(*node, EdgeDirection::Outgoing)
                 {
-                    let scc_dst_id = *scc_graph.linkage.get(&edge.target()).unwrap();
-                    if scc_dst_id != scc_id {
-                        assert!(outlet_map.insert(edge.id(), scc_dst_id).is_none());
+                    let (src_block_id, dst_block_id) = edge.weight();
+                    let dst_scc_id = *scc_graph.linkage_node.get(dst_block_id).unwrap();
+                    if dst_scc_id != scc_id {
+                        assert!(outlet_map
+                            .insert((*src_block_id, *dst_block_id), dst_scc_id)
+                            .is_none());
                     }
                 }
             }
@@ -686,17 +843,16 @@ impl ExecSccGraph {
             }
 
             // add edges between sccs
-            for (exit_edge, exit_scc) in outlet_map {
-                scc_graph.graph.add_edge(
-                    exec_scc_node,
-                    scc_graph.get_node_by_scc_id(exit_scc),
-                    exit_edge,
-                );
+            for ((src_block_id, dst_block_id), exit_scc_id) in outlet_map {
+                scc_graph.add_flow(scc_id, exit_scc_id, src_block_id, dst_block_id);
             }
         }
 
         // find the entry scc
-        scc_graph.entry_scc_id = *scc_graph.linkage.get(&exec_graph.get_entry_node()).unwrap();
+        scc_graph.entry_scc_id = *scc_graph
+            .linkage_node
+            .get(&ref_graph.entry_block_id)
+            .unwrap();
 
         // done
         scc_graph
