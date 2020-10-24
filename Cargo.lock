@@ -4202,6 +4202,7 @@ name = "move-symexec"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "bindgen",
  "bytecode-verifier",
  "datatest-stable",
  "functional-tests",
