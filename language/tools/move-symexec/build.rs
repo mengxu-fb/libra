@@ -76,7 +76,7 @@ fn handle_dep_z3() {
         .expect("Couldn't write bindings!");
 
     // link against the z3 library
-    println!("cargo:rustc-link-lib=static={}", CARGO_DEPS_Z3);
+    println!("cargo:rustc-link-lib={}", CARGO_DEPS_Z3);
     println!(
         "cargo:rustc-link-search=native={}",
         z3_lib_path.into_os_string().into_string().unwrap()

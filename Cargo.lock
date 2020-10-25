@@ -4207,6 +4207,7 @@ dependencies = [
  "datatest-stable",
  "functional-tests",
  "language-e2e-tests",
+ "libc",
  "libra-types",
  "libra-vm",
  "libra-workspace-hack",
