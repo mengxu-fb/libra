@@ -14,6 +14,7 @@ use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
     sym_setup::SymSetup,
     sym_vm::SymVM,
+    sym_vm_types::SymTransactionArgument,
     utils,
 };
 
@@ -93,8 +94,8 @@ impl MoveSymbolizer {
         Ok(())
     }
 
-    pub fn execute(&self) {
+    pub fn execute(&self, sym_val_args: &[SymTransactionArgument]) {
         let vm = SymVM::new();
-        vm.interpret(&self.exec_graph);
+        vm.interpret(&self.exec_graph, sym_val_args);
     }
 }

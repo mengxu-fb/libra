@@ -30,6 +30,7 @@ use crate::{
     executor::MoveExecutor,
     sym_exec_graph::function_is_infinite_loop,
     sym_setup::{ExecUnit, SymSetup},
+    sym_vm_types::{parse_sym_transaction_argument, SymTransactionArgument},
     symbolizer::MoveSymbolizer,
     utils,
 };
@@ -150,19 +151,19 @@ enum OpCommand {
     Execute {
         /// Possibly-empty list of signers for the current transaction
         /// (e.g., `account` in `main(&account: signer)`).
-        /// Must match the number of signers expected by `script_file`.
+        /// Must match the number of signers expected by every script.
         #[structopt(long = "signers", short = "s", parse(try_from_str = AccountAddress::from_hex_literal))]
         signers: Vec<AccountAddress>,
 
         /// Possibly-empty list of arguments passed to the transaction
         /// (e.g., `i` in `main(i: u64)`).
-        /// Must match the arguments types expected by `script_file`.
+        /// Must match the arguments types expected by every script.
         #[structopt(long = "val-args", short = "v", parse(try_from_str = parse_transaction_argument))]
         val_args: Vec<TransactionArgument>,
 
         /// Possibly-empty list of type arguments passed to the
         /// transaction (e.g., `T` in `main<T>()`).
-        /// Must match the type arguments expected by `script_file`.
+        /// Must match the type arguments expected by every script.
         #[structopt(long = "type-args", short = "t", parse(try_from_str = parse_type_tag))]
         type_args: Vec<TypeTag>,
 
@@ -180,6 +181,17 @@ enum OpCommand {
     /// by inclusions and exclusions).
     #[structopt(name = "symbolize")]
     Symbolize {
+        /// Possibly-empty list of arguments passed to the transaction
+        /// (e.g., `i` in `main(i: u64)`).
+        /// - For concrete values, the format is C::<value>
+        ///  - The <value> must match the arguments types expected by
+        ///    every script.
+        /// - For symbolic values, the format is S::<var>
+        ///  - The <var> will be interpreted as a string and should not
+        ///    be unique cross other <var> declarations.
+        #[structopt(long = "sym-val-args", short = "v", parse(try_from_str = parse_sym_transaction_argument))]
+        sym_val_args: Vec<SymTransactionArgument>,
+
         /// List of function identifiers to be included for tracking
         /// and symbolic execution.
         #[structopt(long = "inclusion", short = "i", parse(try_from_str = FuncIdMatcher::new))]
@@ -402,6 +414,7 @@ impl MoveController {
 
     pub fn symbolize(
         &mut self,
+        sym_val_args: &[SymTransactionArgument],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
         all_scripts: bool,
@@ -447,7 +460,7 @@ impl MoveController {
             }
 
             // run the symbolization procedure
-            symbolizer.execute();
+            symbolizer.execute(sym_val_args);
         }
 
         // done
@@ -662,12 +675,14 @@ impl MoveController {
                 dry_run,
             } => self.execute(&signers, &val_args, &type_args, expect_failure, !dry_run),
             OpCommand::Symbolize {
+                sym_val_args,
                 inclusion,
                 exclusion,
                 all_scripts,
                 output_exec_graph,
                 output_exec_graph_stats,
             } => self.symbolize(
+                &sym_val_args,
                 inclusion.as_deref(),
                 Some(&exclusion),
                 all_scripts,

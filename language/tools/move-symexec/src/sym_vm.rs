@@ -6,6 +6,7 @@
 use crate::{
     sym_exec_graph::{ExecGraph, ExecWalker},
     sym_smtlib::SmtCtxt,
+    sym_vm_types::SymTransactionArgument,
 };
 
 /// The symbolic interpreter that examines instructions one by one
@@ -20,7 +21,7 @@ impl SymVM {
         }
     }
 
-    pub fn interpret(&self, exec_graph: &ExecGraph) {
+    pub fn interpret(&self, exec_graph: &ExecGraph, sym_val_args: &[SymTransactionArgument]) {
         // run the walker
         let mut walker = ExecWalker::new(exec_graph);
         while walker.next().is_some() {}

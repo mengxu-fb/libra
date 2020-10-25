@@ -83,7 +83,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
         // symbolize
         self.controller
-            .symbolize(None, Some(&[]), false, true, true)?;
+            .symbolize(&[], None, Some(&[]), false, true, true)?;
 
         // return results
         if !modules.is_empty() {
