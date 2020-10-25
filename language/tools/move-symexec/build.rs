@@ -50,14 +50,23 @@ fn get_dep_if_missing(dep: &str) -> PathBuf {
 fn handle_dep_z3() {
     // derive paths
     let z3_path = get_dep_if_missing(CARGO_DEPS_Z3);
-    let z3_header_path = z3_path.join(Z3_INCLUDE_DIR).join(Z3_C_HEADER);
-    let z3_lib_path = z3_path.join(Z3_BIN_DIR);
+    let z3_header_path = z3_path
+        .join(Z3_INCLUDE_DIR)
+        .join(Z3_C_HEADER)
+        .into_os_string()
+        .into_string()
+        .unwrap();
+    let z3_lib_path = z3_path
+        .join(Z3_BIN_DIR)
+        .into_os_string()
+        .into_string()
+        .unwrap();
 
     // generate bindings
     let bindings = bindgen::Builder::default()
         // The input header we would like to generate
         // bindings for.
-        .header(z3_header_path.into_os_string().into_string().unwrap())
+        .header(z3_header_path)
         // Tell cargo to invalidate the built crate whenever any of the
         // included header files changed.
         .parse_callbacks(Box::new(bindgen::CargoCallbacks))
@@ -77,10 +86,16 @@ fn handle_dep_z3() {
 
     // link against the z3 library
     println!("cargo:rustc-link-lib={}", CARGO_DEPS_Z3);
-    println!(
-        "cargo:rustc-link-search=native={}",
-        z3_lib_path.into_os_string().into_string().unwrap()
-    );
+    println!("cargo:rustc-link-search=native={}", z3_lib_path);
+
+    // pre-set the library path
+    if cfg!(target_os = "macos") {
+        println!("cargo:rustc-env=DYLD_FALLBACK_LIBRARY_PATH={}", z3_lib_path);
+    } else if cfg!(target_os = "linux") {
+        println!("cargo:rustc-env=LD_LIBRARY_PATH={}", z3_lib_path);
+    } else {
+        panic!("Currently only supported on MacOS and Linux");
+    }
 }
 
 fn main() {
