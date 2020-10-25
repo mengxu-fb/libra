@@ -3,14 +3,21 @@
 
 #![forbid(unsafe_code)]
 
-use crate::sym_exec_graph::{ExecGraph, ExecWalker};
+use crate::{
+    sym_exec_graph::{ExecGraph, ExecWalker},
+    sym_smtlib::SmtCtxt,
+};
 
 /// The symbolic interpreter that examines instructions one by one
-pub(crate) struct SymVM {}
+pub(crate) struct SymVM {
+    smt_ctxt: SmtCtxt,
+}
 
 impl SymVM {
     pub fn new() -> Self {
-        Self {}
+        Self {
+            smt_ctxt: SmtCtxt::new(),
+        }
     }
 
     pub fn interpret(&self, exec_graph: &ExecGraph) {

@@ -13,6 +13,8 @@ pub mod sym_setup;
 
 pub mod sym_exec_graph;
 pub mod sym_smtlib;
+pub mod sym_vm_types;
+
 pub mod sym_vm;
 
 pub mod symbolizer;
