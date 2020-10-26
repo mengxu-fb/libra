@@ -6,7 +6,7 @@
 use anyhow::{bail, Result};
 use once_cell::sync::Lazy;
 use std::{
-    collections::HashMap,
+    collections::{HashMap, HashSet},
     convert::TryFrom,
     io::Write,
     path::{Path, PathBuf},
@@ -59,6 +59,16 @@ static MOVE_FUNCTIONAL_TESTS_WORKDIR: Lazy<String> = Lazy::new(|| {
 
 /// An error mark that the test validator expects
 const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
+
+/// A blacklist of tests that we do not want to run
+const TEST_BLACKLIST: Lazy<HashSet<String>> = Lazy::new(|| {
+    vec![
+        // this test has intentional signer - value argument mismatch
+        join_path_items!("move", "signer", "address_arg_is_not_signer"),
+    ]
+    .into_iter()
+    .collect()
+});
 
 /// Piggyback on the test-infra to run tests
 struct MoveFunctionalTestCompiler<'a> {
@@ -124,7 +134,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
     fn hook_notify_precompiled_script(&mut self, input: &str) -> Result<()> {
         // find the script path
         let script_name = input.strip_prefix("stdlib_script::").unwrap();
-        let mut script_path = PathBuf::from(MOVE_STDLIB_BIN_SCRIPTS.to_owned());
+        let mut script_path = PathBuf::from(&*MOVE_STDLIB_BIN_SCRIPTS);
         script_path.push(format!(
             "{}.{}",
             self.stdlib_scripts.get(script_name).unwrap(),
@@ -173,8 +183,18 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     let test_name = test_path
         .strip_prefix(&*MOVE_FUNCTIONAL_TESTS)?
-        .with_extension("");
+        .with_extension("")
+        .into_os_string()
+        .into_string()
+        .unwrap();
 
+    // filter ignored test cases
+    if TEST_BLACKLIST.contains(&test_name) {
+        println!("Test case ignored: {}", test_name);
+        return Ok(());
+    }
+
+    // derive workdir
     let test_workdir = join_path_items!(&*MOVE_FUNCTIONAL_TESTS_WORKDIR, &test_name);
 
     // setup the compiler
