@@ -5,21 +5,34 @@
 
 use anyhow::{bail, Result};
 use once_cell::sync::Lazy;
-use std::{convert::TryFrom, io::Write, path::Path};
+use std::{
+    collections::HashMap,
+    convert::TryFrom,
+    io::Write,
+    path::{Path, PathBuf},
+};
 use tempfile::NamedTempFile;
 
+use compiled_stdlib::transaction_scripts::StdlibScript;
 use datatest_stable::{self, harness};
 use functional_tests::{
     compiler::{Compiler, ScriptOrModule},
     testsuite,
 };
-use libra_types::account_address::AccountAddress;
+use libra_types::{
+    account_address::AccountAddress,
+    transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
+};
 use move_lang::shared::Address;
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBSYMEXEC, MOVE_STDLIB_BIN},
+    configs::{
+        MOVE_BIN_EXT, MOVE_LIBNURSERY, MOVE_LIBSYMEXEC, MOVE_STDLIB_BIN_MODULES,
+        MOVE_STDLIB_BIN_SCRIPTS,
+    },
     controller::MoveController,
     join_path_items,
+    sym_vm_types::SymTransactionArgument,
 };
 
 /// Path to the directory of move-lang functional testsuites
@@ -50,6 +63,7 @@ const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 /// Piggyback on the test-infra to run tests
 struct MoveFunctionalTestCompiler<'a> {
     controller: &'a mut MoveController,
+    stdlib_scripts: HashMap<String, StdlibScript>,
 }
 
 impl Compiler for MoveFunctionalTestCompiler<'_> {
@@ -78,12 +92,8 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             bail!(MOVE_COMPILER_ERROR_MARK);
         }
 
-        // get the compiled units before symbolization
+        // get the compiled units
         let (mut modules, mut scripts) = self.controller.get_compiled_units_recent(None);
-
-        // symbolize
-        self.controller
-            .symbolize(&[], None, Some(&[]), false, true, true)?;
 
         // return results
         if !modules.is_empty() {
@@ -110,6 +120,54 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
     fn use_compiled_genesis(&self) -> bool {
         false
     }
+
+    fn hook_notify_precompiled_script(&mut self, input: &str) -> Result<()> {
+        // find the script path
+        let script_name = input.strip_prefix("stdlib_script::").unwrap();
+        let mut script_path = PathBuf::from(MOVE_STDLIB_BIN_SCRIPTS.to_owned());
+        script_path.push(format!(
+            "{}.{}",
+            self.stdlib_scripts.get(script_name).unwrap(),
+            MOVE_BIN_EXT
+        ));
+
+        // load in a separate session
+        self.controller.push()?;
+
+        // load the script
+        self.controller.load(
+            &[script_path.into_os_string().into_string().unwrap()],
+            true,
+            true,
+            true,
+        )
+    }
+
+    fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
+        // derive signers and symbolic value arguments
+        let (signers, val_args) = match txn.payload() {
+            TransactionPayload::Script(script) => (vec![txn.sender()], script.args()),
+            TransactionPayload::WriteSet(writeset) => match writeset {
+                WriteSetPayload::Script { execute_as, script } => {
+                    (vec![txn.sender(), *execute_as], script.args())
+                }
+                WriteSetPayload::Direct(_) => {
+                    panic!("Expect a script in transaction");
+                }
+            },
+            TransactionPayload::Module(_) => {
+                panic!("Expect a script in transaction");
+            }
+        };
+        let sym_val_args: Vec<SymTransactionArgument> = val_args
+            .iter()
+            .map(|arg| SymTransactionArgument::Concrete(arg.clone()))
+            .collect();
+
+        // symbolize it
+        self.controller
+            .symbolize(&signers, &sym_val_args, None, Some(&[]), false, true, true)
+    }
 }
 
 fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
@@ -123,7 +181,7 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     let mut controller = MoveController::new(test_workdir, false)?;
 
     // preload libraries, stdlib will be tracked
-    controller.load(&[MOVE_STDLIB_BIN.to_owned()], true, true)?;
+    controller.load(&[MOVE_STDLIB_BIN_MODULES.to_owned()], false, true, true)?;
     controller.compile(&[MOVE_LIBNURSERY.to_owned()], None, false, true)?;
     controller.compile(&[MOVE_LIBSYMEXEC.to_owned()], None, false, true)?;
 
@@ -131,6 +189,10 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     testsuite::functional_tests(
         MoveFunctionalTestCompiler {
             controller: &mut controller,
+            stdlib_scripts: StdlibScript::all()
+                .into_iter()
+                .map(|script| (script.name(), script))
+                .collect(),
         },
         test_path,
     )

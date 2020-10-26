@@ -4204,6 +4204,7 @@ dependencies = [
  "anyhow",
  "bindgen",
  "bytecode-verifier",
+ "compiled-stdlib",
  "datatest-stable",
  "functional-tests",
  "language-e2e-tests",

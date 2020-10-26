@@ -2,4 +2,4 @@ compile move_src --track
 execute -v 0u8
 execute -v 5u8
 execute -v 42u8 -F
-symbolize --output-exec-graph
+symbolize -v S::x --output-exec-graph

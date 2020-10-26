@@ -106,6 +106,10 @@ enum OpCommand {
         #[structopt()]
         input: Vec<String>,
 
+        /// Mark that the scripts will be loaded instead of modules.
+        #[structopt(long = "script", short = "s")]
+        script_loading: bool,
+
         /// Mark that the loaded Move modules will be tracked.
         #[structopt(long = "track", short = "t", conflicts_with = "dry-run")]
         track: bool,
@@ -181,6 +185,12 @@ enum OpCommand {
     /// by inclusions and exclusions).
     #[structopt(name = "symbolize")]
     Symbolize {
+        /// Possibly-empty list of signers for the current transaction
+        /// (e.g., `account` in `main(&account: signer)`).
+        /// Must match the number of signers expected by every script.
+        #[structopt(long = "signers", short = "s", parse(try_from_str = AccountAddress::from_hex_literal))]
+        signers: Vec<AccountAddress>,
+
         /// Possibly-empty list of arguments passed to the transaction
         /// (e.g., `i` in `main(i: u64)`).
         /// - For concrete values, the format is C::<value>
@@ -336,19 +346,38 @@ impl MoveController {
     }
 
     // core operations
-    pub fn load(&mut self, move_bin: &[String], track: bool, commit: bool) -> Result<()> {
+    pub fn load(
+        &mut self,
+        move_bin: &[String],
+        script_loading: bool,
+        track: bool,
+        commit: bool,
+    ) -> Result<()> {
         let state = self.get_state_mut();
 
-        let modules = state.builder.load_modules(move_bin, commit)?;
-        debug!("{} module(s) loaded", modules.len());
+        if script_loading {
+            let scripts = state.builder.load_scripts(move_bin)?;
+            debug!("{} script(s) loaded", scripts.len());
 
-        if commit {
-            state.executor.preload_modules(&modules);
-            state.compiled_modules.extend(
-                modules
-                    .into_iter()
-                    .map(|module| MarkedModule { module, track }),
-            );
+            if commit {
+                state.compiled_scripts.extend(
+                    scripts
+                        .into_iter()
+                        .map(|script| MarkedScript { script, track }),
+                );
+            }
+        } else {
+            let modules = state.builder.load_modules(move_bin, commit)?;
+            debug!("{} module(s) loaded", modules.len());
+
+            if commit {
+                state.executor.preload_modules(&modules);
+                state.compiled_modules.extend(
+                    modules
+                        .into_iter()
+                        .map(|module| MarkedModule { module, track }),
+                );
+            }
         }
 
         Ok(())
@@ -414,6 +443,7 @@ impl MoveController {
 
     pub fn symbolize(
         &mut self,
+        signers: &[AccountAddress],
         sym_val_args: &[SymTransactionArgument],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
@@ -460,7 +490,7 @@ impl MoveController {
             }
 
             // run the symbolization procedure
-            symbolizer.execute(sym_val_args);
+            symbolizer.execute(signers, sym_val_args);
         }
 
         // done
@@ -658,9 +688,10 @@ impl MoveController {
         match args.cmd {
             OpCommand::Load {
                 input,
+                script_loading,
                 track,
                 dry_run,
-            } => self.load(&input, track, !dry_run),
+            } => self.load(&input, script_loading, track, !dry_run),
             OpCommand::Compile {
                 input,
                 sender,
@@ -675,6 +706,7 @@ impl MoveController {
                 dry_run,
             } => self.execute(&signers, &val_args, &type_args, expect_failure, !dry_run),
             OpCommand::Symbolize {
+                signers,
                 sym_val_args,
                 inclusion,
                 exclusion,
@@ -682,6 +714,7 @@ impl MoveController {
                 output_exec_graph,
                 output_exec_graph_stats,
             } => self.symbolize(
+                &signers,
                 &sym_val_args,
                 inclusion.as_deref(),
                 Some(&exclusion),

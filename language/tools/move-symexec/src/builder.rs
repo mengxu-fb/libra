@@ -95,6 +95,28 @@ impl MoveBuilder {
         Ok(compiled_modules)
     }
 
+    pub fn load_scripts(&self, move_bin: &[String]) -> Result<Vec<CompiledScript>> {
+        // load
+        let compiled_scripts = move_lang::find_filenames(move_bin, |fpath| {
+            match fpath.extension().and_then(|s| s.to_str()) {
+                None => false,
+                Some(ext) => ext == MOVE_COMPILED_EXTENSION,
+            }
+        })?
+        .iter()
+        .map(|entry| {
+            CompiledScript::deserialize(
+                &fs::read(Path::new(entry))
+                    .expect("Error: unable to read from compiled script file"),
+            )
+            .expect("Error: unable to deserialize compiled script")
+        })
+        .collect();
+
+        // done
+        Ok(compiled_scripts)
+    }
+
     pub fn compile(
         &self,
         move_src: &[String],

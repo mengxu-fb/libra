@@ -8,6 +8,7 @@ use log::{debug, warn};
 use serde_json::{self, json};
 use std::{fs::File, io::Write};
 
+use move_core_types::account_address::AccountAddress;
 use vm::{
     access::ScriptAccess,
     file_format::{CompiledScript, Signature},
@@ -102,8 +103,8 @@ impl MoveSymbolizer {
         Ok(())
     }
 
-    pub fn execute(&self, sym_val_args: &[SymTransactionArgument]) {
+    pub fn execute(&self, signers: &[AccountAddress], sym_val_args: &[SymTransactionArgument]) {
         let vm = SymVM::new();
-        vm.interpret(&self.exec_graph, &self.val_arg_sigs, sym_val_args);
+        vm.interpret(&self.exec_graph, &self.val_arg_sigs, signers, sym_val_args);
     }
 }

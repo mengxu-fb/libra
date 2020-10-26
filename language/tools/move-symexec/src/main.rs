@@ -13,7 +13,7 @@ use std::{
 use structopt::StructOpt;
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBSYMEXEC, MOVE_STDLIB_BIN, MOVE_STDLIB_SRC},
+    configs::{MOVE_LIBNURSERY, MOVE_LIBSYMEXEC, MOVE_STDLIB_BIN_MODULES, MOVE_STDLIB_SRC_MODULES},
     controller::MoveController,
 };
 
@@ -106,9 +106,19 @@ fn main() -> Result<()> {
     debug!("setup");
     if !args.no_stdlib {
         if args.build_stdlib {
-            controller.compile(&[MOVE_STDLIB_SRC.to_owned()], None, args.track_stdlib, true)?;
+            controller.compile(
+                &[MOVE_STDLIB_SRC_MODULES.to_owned()],
+                None,
+                args.track_stdlib,
+                true,
+            )?;
         } else {
-            controller.load(&[MOVE_STDLIB_BIN.to_owned()], args.track_stdlib, true)?;
+            controller.load(
+                &[MOVE_STDLIB_BIN_MODULES.to_owned()],
+                false,
+                args.track_stdlib,
+                true,
+            )?;
         }
 
         if !args.no_libnursery {
