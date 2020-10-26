@@ -8,6 +8,7 @@ use anyhow::{bail, Result};
 use move_core_types::{
     parser::parse_transaction_argument, transaction_argument::TransactionArgument,
 };
+use vm::file_format::SignatureToken;
 
 use crate::sym_smtlib::{SmtCtxt, SmtExpr};
 
@@ -50,6 +51,21 @@ macro_rules! make_sym {
     };
 }
 
+macro_rules! make_sym_from_arg {
+    ($kind:tt, $ctxt:ident, $arg:ident, $func_const:tt, $func_var:tt) => {
+        match $arg {
+            SymTransactionArgument::Concrete(c_arg) => {
+                if let TransactionArgument::$kind(val) = c_arg {
+                    SymValue::$func_const($ctxt, *val)
+                } else {
+                    panic!("Mismatched types in symbolic argument");
+                }
+            }
+            SymTransactionArgument::Symbolic(var) => SymValue::$func_var($ctxt, var),
+        }
+    };
+}
+
 impl<'a> SymValue<'a> {
     // create bool
     pub fn bool_const(ctxt: &'a SmtCtxt, val: bool) -> Self {
@@ -83,6 +99,37 @@ impl<'a> SymValue<'a> {
 
     pub fn u128_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
         make_sym!(U128, ctxt, var, bitvec_var_u128)
+    }
+
+    // create from argument
+    fn bool_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(Bool, ctxt, arg, bool_const, bool_var)
+    }
+
+    fn u8_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(U8, ctxt, arg, u8_const, u8_var)
+    }
+
+    fn u64_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(U64, ctxt, arg, u64_const, u64_var)
+    }
+
+    fn u128_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(U128, ctxt, arg, u128_const, u128_var)
+    }
+
+    pub fn from_transaction_argument(
+        ctxt: &'a SmtCtxt,
+        sig: &SignatureToken,
+        arg: &SymTransactionArgument,
+    ) -> Self {
+        match sig {
+            SignatureToken::Bool => SymValue::bool_arg(ctxt, arg),
+            SignatureToken::U8 => SymValue::u8_arg(ctxt, arg),
+            SignatureToken::U64 => SymValue::u64_arg(ctxt, arg),
+            SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
+            _ => panic!("Not supported yet"), // TODO
+        }
     }
 }
 

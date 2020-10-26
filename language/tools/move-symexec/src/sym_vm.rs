@@ -11,7 +11,7 @@ use vm::file_format::{Signature, SignatureToken};
 use crate::{
     sym_exec_graph::{ExecGraph, ExecWalker},
     sym_smtlib::SmtCtxt,
-    sym_vm_types::SymTransactionArgument,
+    sym_vm_types::{SymTransactionArgument, SymValue},
 };
 
 /// The symbolic interpreter that examines instructions one by one
@@ -51,7 +51,7 @@ impl SymVM {
             if use_signers { signers.len() } else { 0 } + sym_val_args.len()
         );
 
-        if use_signers {
+        let arg_index_start = if use_signers {
             let num_signers = signers.len();
             debug_assert_ne!(num_signers, 0);
             debug_assert!(
@@ -60,7 +60,23 @@ impl SymVM {
                     _ => false,
                 })
             );
-        }
+            num_signers
+        } else {
+            0
+        };
+
+        // turn transaction argument into values
+        let sym_inputs: Vec<SymValue> = sym_val_args
+            .iter()
+            .enumerate()
+            .map(|(i, arg)| {
+                SymValue::from_transaction_argument(
+                    &self.smt_ctxt,
+                    val_arg_sigs.0.get(arg_index_start + i).unwrap(),
+                    arg,
+                )
+            })
+            .collect();
 
         // run the walker
         let mut walker = ExecWalker::new(exec_graph);
