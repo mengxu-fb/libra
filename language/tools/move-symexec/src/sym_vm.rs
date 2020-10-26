@@ -3,8 +3,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashSet;
-
 use move_core_types::account_address::AccountAddress;
 use vm::file_format::{Signature, SignatureToken};
 
@@ -18,15 +16,12 @@ use crate::{
 pub(crate) struct SymVM {
     /// A wrapper over the smt solver context manager
     smt_ctxt: SmtCtxt,
-    /// A map from variable names to exprs
-    vars_set: HashSet<String>,
 }
 
 impl SymVM {
     pub fn new() -> Self {
         Self {
             smt_ctxt: SmtCtxt::new(),
-            vars_set: HashSet::new(),
         }
     }
 
@@ -34,6 +29,7 @@ impl SymVM {
         &self,
         exec_graph: &ExecGraph,
         val_arg_sigs: &Signature,
+        init_locals_sigs: &Signature,
         signers: &[AccountAddress],
         sym_val_args: &[SymTransactionArgument],
     ) {

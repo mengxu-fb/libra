@@ -34,6 +34,7 @@ const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: u128 = std::u16::MAX as u128;
 pub(crate) struct MoveSymbolizer {
     workdir: String,
     val_arg_sigs: Signature,
+    init_local_sigs: Signature,
     exec_graph: ExecGraph,
 }
 
@@ -42,8 +43,9 @@ impl MoveSymbolizer {
         // prepare the directory
         utils::maybe_recreate_dir(&workdir)?;
 
-        // collect signature for the value arguments
+        // collect signatures
         let val_arg_sigs = script.signature_at(script.as_inner().parameters).clone();
+        let init_local_sigs = script.signature_at(script.code().locals).clone();
 
         // build execution graph
         let exec_graph = ExecGraph::new(setup, script);
@@ -52,6 +54,7 @@ impl MoveSymbolizer {
         Ok(Self {
             workdir,
             val_arg_sigs,
+            init_local_sigs,
             exec_graph,
         })
     }
@@ -105,6 +108,12 @@ impl MoveSymbolizer {
 
     pub fn execute(&self, signers: &[AccountAddress], sym_val_args: &[SymTransactionArgument]) {
         let vm = SymVM::new();
-        vm.interpret(&self.exec_graph, &self.val_arg_sigs, signers, sym_val_args);
+        vm.interpret(
+            &self.exec_graph,
+            &self.val_arg_sigs,
+            &self.init_local_sigs,
+            signers,
+            sym_val_args,
+        );
     }
 }
