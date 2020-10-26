@@ -121,7 +121,7 @@ enum SmtKind {
 }
 
 /// A wrapper over Z3_ast
-#[derive(Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct SmtExpr<'a> {
     ast: Z3_ast,
     ctxt: &'a SmtCtxt,

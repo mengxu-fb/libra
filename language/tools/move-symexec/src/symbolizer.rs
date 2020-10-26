@@ -8,7 +8,10 @@ use log::{debug, warn};
 use serde_json::{self, json};
 use std::{fs::File, io::Write};
 
-use vm::file_format::CompiledScript;
+use vm::{
+    access::ScriptAccess,
+    file_format::{CompiledScript, Signature},
+};
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
@@ -29,6 +32,7 @@ const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: u128 = std::u16::MAX as u128;
 #[derive(Clone, Debug)]
 pub(crate) struct MoveSymbolizer {
     workdir: String,
+    val_arg_sigs: Signature,
     exec_graph: ExecGraph,
 }
 
@@ -37,12 +41,16 @@ impl MoveSymbolizer {
         // prepare the directory
         utils::maybe_recreate_dir(&workdir)?;
 
+        // collect signature for the value arguments
+        let val_arg_sigs = script.signature_at(script.as_inner().parameters).clone();
+
         // build execution graph
         let exec_graph = ExecGraph::new(setup, script);
 
         // done
         Ok(Self {
             workdir,
+            val_arg_sigs,
             exec_graph,
         })
     }
@@ -96,6 +104,6 @@ impl MoveSymbolizer {
 
     pub fn execute(&self, sym_val_args: &[SymTransactionArgument]) {
         let vm = SymVM::new();
-        vm.interpret(&self.exec_graph, sym_val_args);
+        vm.interpret(&self.exec_graph, &self.val_arg_sigs, sym_val_args);
     }
 }
