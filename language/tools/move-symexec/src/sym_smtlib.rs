@@ -12,14 +12,17 @@ pub(crate) enum SmtResult {
     UNKNOWN,
 }
 
-/// A wrapper over Z3_context
+/// A context manager for all smt-related stuff
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SmtCtxt {
+    /// A wrapper over Z3_context
     ctxt: Z3_context,
+    /// Whether to simplify terms automatically
+    conf_auto_simplify: bool,
 }
 
 impl SmtCtxt {
-    pub fn new() -> Self {
+    pub fn new(conf_auto_simplify: bool) -> Self {
         let ctxt = unsafe {
             let cfg = Z3_mk_config();
             let ctx = Z3_mk_context(cfg);
@@ -27,7 +30,10 @@ impl SmtCtxt {
             ctx
         };
 
-        Self { ctxt }
+        Self {
+            ctxt,
+            conf_auto_simplify,
+        }
     }
 
     // create bools
@@ -144,6 +150,23 @@ impl SmtCtxt {
         }
     }
 
+    // simplification
+    fn simplify(&self, ast: Z3_ast, _kind: &SmtKind) -> Z3_ast {
+        // TODO: in theory, we could have dedicated simplification
+        // procedures depending on the kind of the ast. But for now,
+        // let's just use the default simplification procedure in Z3
+        unsafe { Z3_simplify(self.ctxt, ast) }
+    }
+
+    // post-processing for an ast out of some operation
+    fn postprocess(&self, ast: Z3_ast, kind: &SmtKind) -> Z3_ast {
+        if self.conf_auto_simplify {
+            self.simplify(ast, kind)
+        } else {
+            ast
+        }
+    }
+
     // sat solving
     pub fn solve(&self, constraints: &[&SmtExpr]) -> SmtResult {
         let asts: Vec<Z3_ast> = constraints.iter().map(|expr| expr.ast).collect();
@@ -202,10 +225,115 @@ pub(crate) struct SmtExpr<'a> {
     kind: SmtKind,
 }
 
+macro_rules! smt_unary_op_bool {
+    ($func:tt, $expr:ident) => {{
+        $expr.check_unary_op_bool();
+
+        let ctxt = $expr.ctxt;
+        let ast = unsafe { $func(ctxt.ctxt, $expr.ast) };
+
+        let kind = SmtKind::Bool;
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_bool {
+    ($func:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op_bool($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let terms: [Z3_ast; 2] = [$lhs.ast, $rhs.ast];
+        let ast = unsafe { $func(ctxt.ctxt, 2, terms.as_ptr()) };
+
+        let kind = SmtKind::Bool;
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_bitvec_to_bitvec {
+    ($func:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op_bitvec($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let ast = unsafe { $func(ctxt.ctxt, $lhs.ast, $rhs.ast) };
+
+        let kind = $lhs.kind.clone();
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_bitvec_to_bitvec_sign_split {
+    ($func_s:tt, $func_u:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op_bitvec($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let ast = if matches!($lhs.kind, SmtKind::Bitvec { signed, .. } if signed) {
+            unsafe { $func_s(ctxt.ctxt, $lhs.ast, $rhs.ast) }
+        } else {
+            unsafe { $func_u(ctxt.ctxt, $lhs.ast, $rhs.ast) }
+        };
+
+        let kind = $lhs.kind.clone();
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_bitvec_to_bool_sign_split {
+    ($func_s:tt, $func_u:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op_bitvec($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let ast = if matches!($lhs.kind, SmtKind::Bitvec { signed, .. } if signed) {
+            unsafe { $func_s(ctxt.ctxt, $lhs.ast, $rhs.ast) }
+        } else {
+            unsafe { $func_u(ctxt.ctxt, $lhs.ast, $rhs.ast) }
+        };
+
+        let kind = SmtKind::Bool;
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_generic_to_bool {
+    ($func:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let ast = unsafe { $func(ctxt.ctxt, $lhs.ast, $rhs.ast) };
+
+        let kind = SmtKind::Bool;
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
+macro_rules! smt_binary_op_generic_to_bool_by_term {
+    ($func:tt, $lhs:ident, $rhs:ident) => {{
+        $lhs.check_binary_op($rhs);
+
+        let ctxt = $lhs.ctxt;
+        let terms: [Z3_ast; 2] = [$lhs.ast, $rhs.ast];
+        let ast = unsafe { $func(ctxt.ctxt, 2, terms.as_ptr()) };
+
+        let kind = SmtKind::Bool;
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
+    }};
+}
+
 impl<'a> SmtExpr<'a> {
     // checking
     fn check_unary_op_bool(&self) {
         debug_assert!(matches!(self.kind, SmtKind::Bool));
+    }
+
+    fn check_unary_op_bitvec(&self) {
+        debug_assert!(matches!(self.kind, SmtKind::Bitvec { .. }));
     }
 
     fn check_binary_op(&self, rhs: &SmtExpr<'a>) {
@@ -225,124 +353,66 @@ impl<'a> SmtExpr<'a> {
 
     // bool logic operators
     pub fn and(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bool(rhs);
-        let terms: [Z3_ast; 2] = [self.ast, rhs.ast];
-        let ast = unsafe { Z3_mk_and(self.ctxt.ctxt, 2, terms.as_ptr()) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bool!(Z3_mk_and, self, rhs)
     }
 
     pub fn or(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bool(rhs);
-        let terms: [Z3_ast; 2] = [self.ast, rhs.ast];
-        let ast = unsafe { Z3_mk_or(self.ctxt.ctxt, 2, terms.as_ptr()) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bool!(Z3_mk_or, self, rhs)
     }
 
     pub fn not(&self) -> SmtExpr<'a> {
-        self.check_unary_op_bool();
-        let ast = unsafe { Z3_mk_not(self.ctxt.ctxt, self.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_unary_op_bool!(Z3_mk_not, self)
     }
 
     // bitvec arith operators
     pub fn add(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvadd(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvadd, self, rhs)
     }
 
     pub fn sub(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvsub(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvsub, self, rhs)
     }
 
     pub fn mul(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvmul(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvmul, self, rhs)
     }
 
     pub fn div(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvsdiv(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvudiv(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvsdiv, Z3_mk_bvudiv, self, rhs)
     }
 
     pub fn rem(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvsmod(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvurem(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvsmod, Z3_mk_bvurem, self, rhs)
     }
 
     // bitvec casting operators
     fn cast(&self, into_signed: bool, into_width: u16) -> SmtExpr<'a> {
+        self.check_unary_op_bitvec();
+
+        let ctxt = self.ctxt;
         let ast = match self.kind {
-            SmtKind::Bitvec { signed, width } => {
+            SmtKind::Bitvec { width, .. } => {
                 if width < into_width {
                     if into_signed {
-                        unsafe { Z3_mk_sign_ext(self.ctxt.ctxt, into_width as c_uint, self.ast) }
+                        unsafe { Z3_mk_sign_ext(ctxt.ctxt, into_width as c_uint, self.ast) }
                     } else {
-                        unsafe { Z3_mk_zero_ext(self.ctxt.ctxt, into_width as c_uint, self.ast) }
+                        unsafe { Z3_mk_zero_ext(ctxt.ctxt, into_width as c_uint, self.ast) }
                     }
                 } else if width > into_width {
-                    unsafe {
-                        Z3_mk_extract(self.ctxt.ctxt, (into_width - 1) as c_uint, 0, self.ast)
-                    }
+                    unsafe { Z3_mk_extract(ctxt.ctxt, (into_width - 1) as c_uint, 0, self.ast) }
                 } else {
                     self.ast
                 }
             }
             _ => panic!("Cast is only applicable to bitvec"),
         };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bitvec {
-                signed: into_signed,
-                width: into_width,
-            },
-        }
+
+        let kind = SmtKind::Bitvec {
+            signed: into_signed,
+            width: into_width,
+        };
+        let ast = ctxt.postprocess(ast, &kind);
+        SmtExpr { ast, ctxt, kind }
     }
 
     pub fn cast_u8(&self) -> SmtExpr<'a> {
@@ -359,135 +429,48 @@ impl<'a> SmtExpr<'a> {
 
     // bitvec bitwise operators
     pub fn bit_and(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvand(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvand, self, rhs)
     }
 
     pub fn bit_or(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvor(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvor, self, rhs)
     }
 
     pub fn bit_xor(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvxor(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvxor, self, rhs)
     }
 
     pub fn shl(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = unsafe { Z3_mk_bvshl(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvshl, self, rhs)
     }
 
     pub fn shr(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvashr(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvlshr(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: self.kind.clone(),
-        }
+        smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvashr, Z3_mk_bvlshr, self, rhs)
     }
 
     // bitvec comparison operators
     pub fn gt(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvsgt(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvugt(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsgt, Z3_mk_bvugt, self, rhs)
     }
 
     pub fn ge(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvsge(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvuge(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsge, Z3_mk_bvuge, self, rhs)
     }
 
     pub fn le(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvsle(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvule(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsle, Z3_mk_bvule, self, rhs)
     }
 
     pub fn lt(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bitvec(rhs);
-        let ast = if matches!(self.kind, SmtKind::Bitvec { signed, .. } if signed) {
-            unsafe { Z3_mk_bvslt(self.ctxt.ctxt, self.ast, rhs.ast) }
-        } else {
-            unsafe { Z3_mk_bvult(self.ctxt.ctxt, self.ast, rhs.ast) }
-        };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvslt, Z3_mk_bvult, self, rhs)
     }
 
     // equality operator (for both bool and bitvec)
     pub fn eq(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op(rhs);
-        let ast = unsafe { Z3_mk_eq(self.ctxt.ctxt, self.ast, rhs.ast) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_generic_to_bool!(Z3_mk_eq, self, rhs)
     }
 
     pub fn ne(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
-        self.check_binary_op_bool(rhs);
-        let terms: [Z3_ast; 2] = [self.ast, rhs.ast];
-        let ast = unsafe { Z3_mk_distinct(self.ctxt.ctxt, 2, terms.as_ptr()) };
-        SmtExpr {
-            ast,
-            ctxt: self.ctxt,
-            kind: SmtKind::Bool,
-        }
+        smt_binary_op_generic_to_bool_by_term!(Z3_mk_distinct, self, rhs)
     }
 }

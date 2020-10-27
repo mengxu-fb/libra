@@ -12,6 +12,9 @@ use crate::{
     sym_vm_types::{SymTransactionArgument, SymValue},
 };
 
+/// Config: whether to simplify smt expressions upon construction
+const CONF_SMT_AUTO_SIMPLIFY: bool = true;
+
 /// The symbolic interpreter that examines instructions one by one
 pub(crate) struct SymVM {
     /// A wrapper over the smt solver context manager
@@ -21,7 +24,7 @@ pub(crate) struct SymVM {
 impl SymVM {
     pub fn new() -> Self {
         Self {
-            smt_ctxt: SmtCtxt::new(),
+            smt_ctxt: SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY),
         }
     }
 
