@@ -1,0 +1,4 @@
+compile move_src --track
+execute -v x\"00\" -F
+execute -v x\"42\"
+symbolize -v S::x --output-exec-graph
