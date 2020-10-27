@@ -4,13 +4,14 @@
 #![forbid(unsafe_code)]
 
 use anyhow::{bail, Result};
+use itertools::Itertools;
 
 use move_core_types::{
     parser::parse_transaction_argument, transaction_argument::TransactionArgument,
 };
 use vm::file_format::SignatureToken;
 
-use crate::sym_smtlib::{SmtCtxt, SmtExpr};
+use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult};
 
 /// Guarded symbolic representation. Each symboilc expression is guarded
 /// by a condition over the variables.
@@ -27,20 +28,13 @@ pub(crate) struct SymRepr<'a> {
 }
 
 /// A symbolic mimic of the move_vm_types::values::Value.
-pub(crate) enum SymValue<'a> {
-    Invalid,
-
-    Bool { repr: SymRepr<'a> },
-
-    U8 { repr: SymRepr<'a> },
-    U64 { repr: SymRepr<'a> },
-    U128 { repr: SymRepr<'a> },
-    // TODO: more to be added
+pub(crate) struct SymValue<'a> {
+    repr: SymRepr<'a>,
 }
 
-macro_rules! make_sym {
-    ($kind:tt, $ctxt:ident, $v:ident, $func:tt) => {
-        SymValue::$kind {
+macro_rules! make_sym_primitive {
+    ($ctxt:ident, $v:ident, $func:tt) => {
+        SymValue {
             repr: SymRepr {
                 variants: vec![SymVariant {
                     expr: $ctxt.$func($v),
@@ -69,36 +63,36 @@ macro_rules! make_sym_from_arg {
 impl<'a> SymValue<'a> {
     // create bool
     pub fn bool_const(ctxt: &'a SmtCtxt, val: bool) -> Self {
-        make_sym!(Bool, ctxt, val, bool_const)
+        make_sym_primitive!(ctxt, val, bool_const)
     }
 
     pub fn bool_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym!(Bool, ctxt, var, bool_var)
+        make_sym_primitive!(ctxt, var, bool_var)
     }
 
     // create bitvec
     pub fn u8_const(ctxt: &'a SmtCtxt, val: u8) -> Self {
-        make_sym!(U8, ctxt, val, bitvec_const_u8)
+        make_sym_primitive!(ctxt, val, bitvec_const_u8)
     }
 
     pub fn u64_const(ctxt: &'a SmtCtxt, val: u64) -> Self {
-        make_sym!(U64, ctxt, val, bitvec_const_u64)
+        make_sym_primitive!(ctxt, val, bitvec_const_u64)
     }
 
     pub fn u128_const(ctxt: &'a SmtCtxt, val: u128) -> Self {
-        make_sym!(U128, ctxt, val, bitvec_const_u128)
+        make_sym_primitive!(ctxt, val, bitvec_const_u128)
     }
 
     pub fn u8_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym!(U8, ctxt, var, bitvec_var_u8)
+        make_sym_primitive!(ctxt, var, bitvec_var_u8)
     }
 
     pub fn u64_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym!(U64, ctxt, var, bitvec_var_u64)
+        make_sym_primitive!(ctxt, var, bitvec_var_u64)
     }
 
     pub fn u128_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym!(U128, ctxt, var, bitvec_var_u128)
+        make_sym_primitive!(ctxt, var, bitvec_var_u128)
     }
 
     // create from argument

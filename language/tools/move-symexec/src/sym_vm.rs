@@ -74,6 +74,11 @@ impl SymVM {
             })
             .collect();
 
+        // TODO: code for exploration
+        for sig in init_locals_sigs.0.iter() {
+            println!("{:?}", sig);
+        }
+
         // run the walker
         let mut walker = ExecWalker::new(exec_graph);
         while walker.next().is_some() {}

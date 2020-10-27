@@ -5,6 +5,13 @@ use std::{ffi::CString, os::raw::c_uint};
 
 use crate::deps_z3::*;
 
+/// Possibe results from the sat solver
+pub(crate) enum SmtResult {
+    SAT,
+    UNSAT,
+    UNKNOWN,
+}
+
 /// A wrapper over Z3_context
 #[derive(Debug, Eq, PartialEq)]
 pub(crate) struct SmtCtxt {
@@ -38,32 +45,28 @@ impl SmtCtxt {
     }
 
     pub fn bool_var(&self, var: &str) -> SmtExpr {
+        let kind = SmtKind::Bool;
         let c_str = CString::new(var).unwrap();
         let ast = unsafe {
             let symbol = Z3_mk_string_symbol(self.ctxt, c_str.as_ptr());
-            Z3_mk_const(self.ctxt, symbol, Z3_mk_bool_sort(self.ctxt))
+            Z3_mk_const(self.ctxt, symbol, kind.to_z3_sort(self))
         };
         SmtExpr {
             ast,
             ctxt: self,
-            kind: SmtKind::Bool,
+            kind,
         }
     }
 
     // create bitvecs
     fn bitvec_const<T: ToString>(&self, val: T, signed: bool, width: u16) -> SmtExpr {
+        let kind = SmtKind::Bitvec { signed, width };
         let str_repr = CString::new(val.to_string()).unwrap();
-        let ast = unsafe {
-            Z3_mk_numeral(
-                self.ctxt,
-                str_repr.as_ptr(),
-                Z3_mk_bv_sort(self.ctxt, width as c_uint),
-            )
-        };
+        let ast = unsafe { Z3_mk_numeral(self.ctxt, str_repr.as_ptr(), kind.to_z3_sort(self)) };
         SmtExpr {
             ast,
             ctxt: self,
-            kind: SmtKind::Bitvec { signed, width },
+            kind,
         }
     }
 
@@ -80,15 +83,16 @@ impl SmtCtxt {
     }
 
     fn bitvec_var(&self, var: &str, signed: bool, width: u16) -> SmtExpr {
+        let kind = SmtKind::Bitvec { signed, width };
         let c_str = CString::new(var).unwrap();
         let ast = unsafe {
             let symbol = Z3_mk_string_symbol(self.ctxt, c_str.as_ptr());
-            Z3_mk_const(self.ctxt, symbol, Z3_mk_bv_sort(self.ctxt, width as c_uint))
+            Z3_mk_const(self.ctxt, symbol, kind.to_z3_sort(self))
         };
         SmtExpr {
             ast,
             ctxt: self,
-            kind: SmtKind::Bitvec { signed, width },
+            kind,
         }
     }
 
@@ -103,6 +107,61 @@ impl SmtCtxt {
     pub fn bitvec_var_u128(&self, var: &str) -> SmtExpr {
         self.bitvec_var(var, false, 128)
     }
+
+    // create vectors (i.e., sequences)
+    pub fn vector_const(&self, element_kind: &SmtKind, vals: &[SmtExpr]) -> SmtExpr {
+        debug_assert!(vals.iter().all(|expr| expr.kind == *element_kind));
+
+        let kind = SmtKind::Vector {
+            element_kind: Box::new(element_kind.clone()),
+        };
+        let unit_exprs: Vec<Z3_ast> = vals
+            .iter()
+            .map(|expr| unsafe { Z3_mk_seq_unit(self.ctxt, expr.ast) })
+            .collect();
+        let ast =
+            unsafe { Z3_mk_seq_concat(self.ctxt, unit_exprs.len() as c_uint, unit_exprs.as_ptr()) };
+        SmtExpr {
+            ast,
+            ctxt: self,
+            kind,
+        }
+    }
+
+    pub fn vector_var(&self, element_kind: &SmtKind, var: &str) -> SmtExpr {
+        let kind = SmtKind::Vector {
+            element_kind: Box::new(element_kind.clone()),
+        };
+        let c_str = CString::new(var).unwrap();
+        let ast = unsafe {
+            let symbol = Z3_mk_string_symbol(self.ctxt, c_str.as_ptr());
+            Z3_mk_const(self.ctxt, symbol, kind.to_z3_sort(self))
+        };
+        SmtExpr {
+            ast,
+            ctxt: self,
+            kind,
+        }
+    }
+
+    // sat solving
+    pub fn solve(&self, constraints: &[&SmtExpr]) -> SmtResult {
+        let asts: Vec<Z3_ast> = constraints.iter().map(|expr| expr.ast).collect();
+        let result = unsafe {
+            let solver = Z3_mk_solver(self.ctxt);
+            Z3_solver_check_assumptions(self.ctxt, solver, asts.len() as c_uint, asts.as_ptr())
+        };
+
+        // convert to enum
+        if result == Z3_lbool_Z3_L_TRUE {
+            SmtResult::SAT
+        } else if result == Z3_lbool_Z3_L_FALSE {
+            SmtResult::UNSAT
+        } else {
+            debug_assert_eq!(result, Z3_lbool_Z3_L_UNDEF);
+            SmtResult::UNKNOWN
+        }
+    }
 }
 
 impl Drop for SmtCtxt {
@@ -115,9 +174,24 @@ impl Drop for SmtCtxt {
 
 /// Make the type of SmtExpr explicit
 #[derive(Clone, Debug, Eq, PartialEq)]
-enum SmtKind {
+pub(crate) enum SmtKind {
     Bool,
     Bitvec { signed: bool, width: u16 },
+    Vector { element_kind: Box<SmtKind> },
+    // TODO: more types to be added
+}
+
+impl SmtKind {
+    // z3 linkage
+    fn to_z3_sort(&self, ctxt: &SmtCtxt) -> Z3_sort {
+        match self {
+            SmtKind::Bool => unsafe { Z3_mk_bool_sort(ctxt.ctxt) },
+            SmtKind::Bitvec { width, .. } => unsafe { Z3_mk_bv_sort(ctxt.ctxt, *width as c_uint) },
+            SmtKind::Vector { element_kind } => unsafe {
+                Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
+            },
+        }
+    }
 }
 
 /// A wrapper over Z3_ast
