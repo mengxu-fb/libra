@@ -115,7 +115,7 @@ impl SmtCtxt {
     }
 
     // create vectors (i.e., sequences)
-    pub fn vector_const(&self, element_kind: &SmtKind, vals: &[SmtExpr]) -> SmtExpr {
+    pub fn vector_const(&self, element_kind: &SmtKind, vals: &[&SmtExpr]) -> SmtExpr {
         debug_assert!(vals.iter().all(|expr| expr.kind == *element_kind));
 
         let kind = SmtKind::Vector {
@@ -213,6 +213,28 @@ impl SmtKind {
             SmtKind::Vector { element_kind } => unsafe {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
+        }
+    }
+
+    // utilitoes
+    fn bitvec_u8() -> Self {
+        SmtKind::Bitvec {
+            signed: false,
+            width: 8,
+        }
+    }
+
+    fn bitvec_u64() -> Self {
+        SmtKind::Bitvec {
+            signed: false,
+            width: 64,
+        }
+    }
+
+    fn bitvec_u128() -> Self {
+        SmtKind::Bitvec {
+            signed: false,
+            width: 128,
         }
     }
 }
@@ -716,6 +738,25 @@ mod tests {
             prove_eq!(ctxt, &expr_u8_x.cast_u8(), &expr_u8_x);
             prove_eq!(ctxt, &expr_u8_x.cast_u64().cast_u8(), &expr_u8_x);
             prove_eq!(ctxt, &expr_u8_x.cast_u128().cast_u8(), &expr_u8_x);
+        }
+    }
+
+    #[test]
+    fn test_vector() {
+        for ctxt in ctxt_variants().iter() {
+            // constants
+            let expr_u8_0 = ctxt.bitvec_const_u8(0);
+            let expr_u8_1 = ctxt.bitvec_const_u8(1);
+            let expr_vec_u8_00_01 =
+                ctxt.vector_const(&SmtKind::bitvec_u8(), &[&expr_u8_0, &expr_u8_1]);
+            prove_eq!(ctxt, &expr_vec_u8_00_01, &expr_vec_u8_00_01);
+
+            // variable
+            let expr_vec_u8_x = ctxt.vector_var(&SmtKind::bitvec_u8(), "x");
+            prove_eq!(ctxt, &expr_vec_u8_x, &expr_vec_u8_x);
+
+            // EQ || NE
+            prove_qn!(ctxt, &expr_vec_u8_00_01, &expr_vec_u8_x);
         }
     }
 }
