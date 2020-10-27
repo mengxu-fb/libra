@@ -394,9 +394,13 @@ impl<'a> SmtExpr<'a> {
             SmtKind::Bitvec { width, .. } => {
                 if width < into_width {
                     if into_signed {
-                        unsafe { Z3_mk_sign_ext(ctxt.ctxt, into_width as c_uint, self.ast) }
+                        unsafe {
+                            Z3_mk_sign_ext(ctxt.ctxt, (into_width - width) as c_uint, self.ast)
+                        }
                     } else {
-                        unsafe { Z3_mk_zero_ext(ctxt.ctxt, into_width as c_uint, self.ast) }
+                        unsafe {
+                            Z3_mk_zero_ext(ctxt.ctxt, (into_width - width) as c_uint, self.ast)
+                        }
                     }
                 } else if width > into_width {
                     unsafe { Z3_mk_extract(ctxt.ctxt, (into_width - 1) as c_uint, 0, self.ast) }
@@ -539,6 +543,25 @@ mod tests {
         };
     }
 
+    macro_rules! prove_eq {
+        ($ctxt:ident, $lhs:expr, $rhs:expr) => {
+            prove_true!($ctxt, &$lhs.eq($rhs));
+        };
+    }
+
+    macro_rules! prove_ne {
+        ($ctxt:ident, $lhs:expr, $rhs:expr) => {
+            prove_true!($ctxt, &$lhs.ne($rhs));
+        };
+    }
+
+    macro_rules! prove_qn {
+        ($ctxt:ident, $lhs:expr, $rhs:expr) => {
+            prove_maybe!($ctxt, &$lhs.eq($rhs));
+            prove_maybe!($ctxt, &$lhs.ne($rhs));
+        };
+    }
+
     #[test]
     fn test_bool() {
         for ctxt in ctxt_variants().iter() {
@@ -574,6 +597,125 @@ mod tests {
             prove_false!(ctxt, &expr_f.or(&expr_f));
             prove_true!(ctxt, &expr_t.or(&expr_x));
             prove_maybe!(ctxt, &expr_f.or(&expr_x));
+        }
+    }
+
+    #[test]
+    fn test_bitvec() {
+        // since Move has unsigned integers only, we focus on the
+        // test of unsigned integer as well
+        for ctxt in ctxt_variants().iter() {
+            // constants
+            let expr_u8_0 = ctxt.bitvec_const_u8(0);
+            let expr_u8_1 = ctxt.bitvec_const_u8(1);
+            let expr_u8_255 = ctxt.bitvec_const_u8(255);
+
+            // variable
+            let expr_u8_x = ctxt.bitvec_var_u8("x");
+            prove_qn!(ctxt, &expr_u8_x, &expr_u8_0);
+
+            // ADD
+            prove_eq!(ctxt, &expr_u8_0.add(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.add(&expr_u8_1), &expr_u8_1);
+            prove_eq!(ctxt, &expr_u8_0.add(&expr_u8_x), &expr_u8_x);
+            prove_ne!(ctxt, &expr_u8_1.add(&expr_u8_x), &expr_u8_x); // may overflow
+            prove_ne!(ctxt, &expr_u8_255.add(&expr_u8_x), &expr_u8_x); // may overflow
+
+            // SUB
+            prove_eq!(ctxt, &expr_u8_0.sub(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.sub(&expr_u8_1), &expr_u8_255);
+            prove_qn!(ctxt, &expr_u8_0.sub(&expr_u8_x), &expr_u8_x);
+            prove_ne!(ctxt, &expr_u8_1.sub(&expr_u8_x), &expr_u8_x); // may overflow
+            prove_ne!(ctxt, &expr_u8_255.add(&expr_u8_x), &expr_u8_x); // may overflow
+
+            // MUL
+            prove_eq!(ctxt, &expr_u8_0.mul(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.mul(&expr_u8_1), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.mul(&expr_u8_x), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_1.mul(&expr_u8_x), &expr_u8_x); // may overflow
+            prove_qn!(ctxt, &expr_u8_255.mul(&expr_u8_x), &expr_u8_x); // may overflow
+
+            // DIV
+            prove_ne!(ctxt, &expr_u8_0.div(&expr_u8_0), &expr_u8_0); // div by zero
+            prove_eq!(ctxt, &expr_u8_0.div(&expr_u8_1), &expr_u8_0);
+            prove_qn!(ctxt, &expr_u8_0.div(&expr_u8_x), &expr_u8_0); // may div by zero
+            prove_qn!(ctxt, &expr_u8_1.div(&expr_u8_x), &expr_u8_x); // may div by zero
+            prove_ne!(ctxt, &expr_u8_255.div(&expr_u8_x), &expr_u8_x); // may div by zero
+
+            // MOD
+            prove_eq!(ctxt, &expr_u8_0.rem(&expr_u8_0), &expr_u8_0); // div by zero
+            prove_eq!(ctxt, &expr_u8_0.rem(&expr_u8_1), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.rem(&expr_u8_x), &expr_u8_0); // may div by zero
+            prove_ne!(ctxt, &expr_u8_1.rem(&expr_u8_x), &expr_u8_x); // may div by zero
+            prove_ne!(ctxt, &expr_u8_255.rem(&expr_u8_x), &expr_u8_x); // may div by zero
+
+            // BIT_AND
+            prove_eq!(ctxt, &expr_u8_0.bit_and(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.bit_and(&expr_u8_1), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.bit_and(&expr_u8_x), &expr_u8_0);
+            prove_qn!(ctxt, &expr_u8_1.bit_and(&expr_u8_x), &expr_u8_x);
+            prove_eq!(ctxt, &expr_u8_255.bit_and(&expr_u8_x), &expr_u8_x);
+
+            // BIT_OR
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_1), &expr_u8_1);
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_x), &expr_u8_x);
+            prove_qn!(ctxt, &expr_u8_1.bit_or(&expr_u8_x), &expr_u8_x);
+            prove_eq!(ctxt, &expr_u8_255.bit_or(&expr_u8_x), &expr_u8_255);
+
+            // BIT_XOR
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_1), &expr_u8_1);
+            prove_eq!(ctxt, &expr_u8_0.bit_or(&expr_u8_x), &expr_u8_x);
+            prove_qn!(ctxt, &expr_u8_1.bit_or(&expr_u8_x), &expr_u8_x);
+            prove_qn!(ctxt, &expr_u8_255.bit_or(&expr_u8_x), &expr_u8_x);
+
+            // SHL
+            prove_eq!(ctxt, &expr_u8_0.shl(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.shl(&expr_u8_1), &expr_u8_0);
+            prove_qn!(ctxt, &expr_u8_0.shl(&expr_u8_x), &expr_u8_x);
+            prove_ne!(ctxt, &expr_u8_1.shl(&expr_u8_x), &expr_u8_x);
+            prove_ne!(ctxt, &expr_u8_255.shl(&expr_u8_x), &expr_u8_x);
+
+            // SHR
+            prove_eq!(ctxt, &expr_u8_0.shr(&expr_u8_0), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.shr(&expr_u8_1), &expr_u8_0);
+            prove_eq!(ctxt, &expr_u8_0.shr(&expr_u8_x), &expr_u8_0);
+            prove_ne!(ctxt, &expr_u8_1.shr(&expr_u8_x), &expr_u8_x);
+            prove_ne!(ctxt, &expr_u8_255.shr(&expr_u8_x), &expr_u8_x);
+
+            // GT
+            prove_false!(ctxt, &expr_u8_0.gt(&expr_u8_0));
+            prove_false!(ctxt, &expr_u8_0.gt(&expr_u8_1));
+            prove_false!(ctxt, &expr_u8_0.gt(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_1.gt(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_255.gt(&expr_u8_x));
+
+            // GE
+            prove_true!(ctxt, &expr_u8_0.ge(&expr_u8_0));
+            prove_false!(ctxt, &expr_u8_0.ge(&expr_u8_1));
+            prove_maybe!(ctxt, &expr_u8_0.ge(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_1.ge(&expr_u8_x));
+            prove_true!(ctxt, &expr_u8_255.ge(&expr_u8_x));
+
+            // LE
+            prove_true!(ctxt, &expr_u8_0.le(&expr_u8_0));
+            prove_true!(ctxt, &expr_u8_0.le(&expr_u8_1));
+            prove_true!(ctxt, &expr_u8_0.le(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_1.le(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_255.le(&expr_u8_x));
+
+            // LT
+            prove_false!(ctxt, &expr_u8_0.lt(&expr_u8_0));
+            prove_true!(ctxt, &expr_u8_0.lt(&expr_u8_1));
+            prove_maybe!(ctxt, &expr_u8_0.lt(&expr_u8_x));
+            prove_maybe!(ctxt, &expr_u8_1.lt(&expr_u8_x));
+            prove_false!(ctxt, &expr_u8_255.lt(&expr_u8_x));
+
+            // CAST
+            prove_eq!(ctxt, &expr_u8_x.cast_u8(), &expr_u8_x);
+            prove_eq!(ctxt, &expr_u8_x.cast_u64().cast_u8(), &expr_u8_x);
+            prove_eq!(ctxt, &expr_u8_x.cast_u128().cast_u8(), &expr_u8_x);
         }
     }
 }
