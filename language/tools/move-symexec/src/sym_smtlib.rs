@@ -352,16 +352,16 @@ impl<'a> SmtExpr<'a> {
     }
 
     // bool logic operators
+    pub fn not(&self) -> SmtExpr<'a> {
+        smt_unary_op_bool!(Z3_mk_not, self)
+    }
+
     pub fn and(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
         smt_binary_op_bool!(Z3_mk_and, self, rhs)
     }
 
     pub fn or(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
         smt_binary_op_bool!(Z3_mk_or, self, rhs)
-    }
-
-    pub fn not(&self) -> SmtExpr<'a> {
-        smt_unary_op_bool!(Z3_mk_not, self)
     }
 
     // bitvec arith operators
@@ -472,5 +472,108 @@ impl<'a> SmtExpr<'a> {
 
     pub fn ne(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
         smt_binary_op_generic_to_bool_by_term!(Z3_mk_distinct, self, rhs)
+    }
+}
+
+// unit testing for the smtlib
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ctxt_variants() -> Vec<SmtCtxt> {
+        vec![SmtCtxt::new(true), SmtCtxt::new(false)]
+    }
+
+    macro_rules! prove {
+        ($ctxt:ident, $pat_true:pat, $pat_false:pat, $pred:expr) => {
+            assert!(matches!(
+                $ctxt.solve(&[$pred]),
+                $pat_true
+            ));
+            assert!(matches!(
+                $ctxt.solve(&[&$pred.not()]),
+                $pat_false
+            ));
+        };
+        ($ctxt: ident, $pat_true:pat, $pat_false:pat, $pred:expr, $( $cond:expr ),+) => {
+            assert!(matches!(
+                $ctxt.solve(&[$pred, $( $cond ),+]),
+                $pat_true
+            ));
+            assert!(matches!(
+                $ctxt.solve(&[
+                    &[$( $cond ),+]
+                        .iter()
+                        .fold($pred.clone(), |acc, cur| {acc.and(cur)})
+                        .not()
+                ]),
+                $pat_false
+            ));
+        };
+    }
+
+    macro_rules! prove_true {
+        ($ctxt:ident, $pred:expr) => {
+            prove!($ctxt, SmtResult::SAT, SmtResult::UNSAT, $pred)
+        };
+        ($ctxt: ident, $pred:expr, $( $cond:expr ),+) => {
+            prove!($ctxt, SmtResult::SAT, SmtResult::UNSAT, $pred, $( $cond ),+)
+        };
+    }
+
+    macro_rules! prove_false {
+        ($ctxt:ident, $pred:expr) => {
+            prove!($ctxt, SmtResult::UNSAT, SmtResult::SAT, $pred)
+        };
+        ($ctxt: ident, $pred:expr, $( $cond:expr ),+) => {
+            prove!($ctxt, SmtResult::UNSAT, SmtResult::SAT, $pred, $( $cond ),+)
+        };
+    }
+
+    macro_rules! prove_maybe {
+        ($ctxt:ident, $pred:expr) => {
+            prove!($ctxt, SmtResult::SAT, SmtResult::SAT, $pred)
+        };
+        ($ctxt: ident, $pred:expr, $( $cond:expr ),+) => {
+            prove!($ctxt, SmtResult::SAT, SmtResult::SAT, $pred, $( $cond ),+)
+        };
+    }
+
+    #[test]
+    fn test_bool() {
+        for ctxt in ctxt_variants().iter() {
+            // a true constant
+            let expr_t = ctxt.bool_const(true);
+            prove_true!(ctxt, &expr_t);
+
+            // a false constant
+            let expr_f = ctxt.bool_const(false);
+            prove_false!(ctxt, &expr_f);
+
+            // a variable
+            let expr_x = ctxt.bool_var("x");
+            prove_maybe!(ctxt, &expr_x);
+
+            // NOT
+            prove_false!(ctxt, &expr_t.not());
+            prove_true!(ctxt, &expr_f.not());
+            prove_maybe!(ctxt, &expr_x.not());
+
+            // AND
+            prove_true!(ctxt, &expr_t.and(&expr_t));
+            prove_false!(ctxt, &expr_t.and(&expr_f));
+            prove_false!(ctxt, &expr_f.and(&expr_t));
+            prove_false!(ctxt, &expr_f.and(&expr_f));
+            prove_maybe!(ctxt, &expr_t.and(&expr_x));
+            prove_false!(ctxt, &expr_f.and(&expr_x));
+
+            // OR
+            prove_true!(ctxt, &expr_t.or(&expr_t));
+            prove_true!(ctxt, &expr_t.or(&expr_f));
+            prove_true!(ctxt, &expr_f.or(&expr_t));
+            prove_false!(ctxt, &expr_f.or(&expr_f));
+            prove_true!(ctxt, &expr_t.or(&expr_x));
+            prove_maybe!(ctxt, &expr_f.or(&expr_x));
+        }
     }
 }
