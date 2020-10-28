@@ -116,6 +116,10 @@ impl SmtCtxt {
     }
 
     // create vectors (i.e., sequences)
+
+    /// Create a vector with pre-defined contents (and hence, length).
+    /// Although the function is named const, the contents are
+    /// essentially smt expressions and thus, may include variables.
     pub fn vector_const(&self, element_kind: &SmtKind, vals: &[&SmtExpr]) -> SmtExpr {
         debug_assert!(vals.iter().all(|expr| expr.kind == *element_kind));
 
@@ -135,6 +139,7 @@ impl SmtCtxt {
         }
     }
 
+    /// Create a vector with variable content and length.
     pub fn vector_var(&self, element_kind: &SmtKind, var: &str) -> SmtExpr {
         let kind = SmtKind::Vector {
             element_kind: Box::new(element_kind.clone()),

@@ -11,7 +11,7 @@ use move_core_types::{
 };
 use vm::file_format::SignatureToken;
 
-use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtResult};
+use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult};
 
 /// Guarded symbolic representation. Each symboilc expression is guarded
 /// by a condition over the variables.
@@ -32,11 +32,11 @@ pub struct SymValue<'a> {
 // TODO: make SymValue pub(crate)
 
 macro_rules! make_sym_primitive {
-    ($ctxt:ident, $v:ident, $func:tt) => {
+    ($ctxt:ident, $v:ident, $func:tt $(,$extra:ident)*) => {
         SymValue {
             ctxt: $ctxt,
             variants: vec![SymRepr {
-                expr: $ctxt.$func($v),
+                expr: $ctxt.$func($($extra,)* $v),
                 cond: $ctxt.bool_const(true),
             }],
         }
@@ -48,7 +48,7 @@ macro_rules! make_sym_from_arg {
         match $arg {
             SymTransactionArgument::Concrete(c_arg) => {
                 if let TransactionArgument::$kind(val) = c_arg {
-                    SymValue::$func_const($ctxt, *val)
+                    SymValue::$func_const($ctxt, val.clone())
                 } else {
                     panic!("Mismatched types in symbolic argument");
                 }
@@ -111,6 +111,29 @@ impl<'a> SymValue<'a> {
         make_sym_primitive!(ctxt, var, bitvec_var_u128)
     }
 
+    // create vector
+    pub fn vector_const(ctxt: &'a SmtCtxt, element_kind: &SmtKind, vals: &[&SymValue<'a>]) -> Self {
+        SymValue::op(ctxt, vals, |exprs| ctxt.vector_const(element_kind, exprs))
+    }
+
+    pub fn vector_var(ctxt: &'a SmtCtxt, element_kind: &SmtKind, var: &str) -> Self {
+        make_sym_primitive!(ctxt, var, vector_var, element_kind)
+    }
+
+    // create vector (utilities)
+    fn vector_u8_const(ctxt: &'a SmtCtxt, vals: Vec<u8>) -> Self {
+        let elements: Vec<SymValue> = vals
+            .iter()
+            .map(|val| SymValue::u8_const(ctxt, *val))
+            .collect();
+        let element_refs: Vec<&SymValue> = elements.iter().collect();
+        SymValue::vector_const(ctxt, &SmtKind::bitvec_u8(), &element_refs)
+    }
+
+    fn vector_u8_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
+        SymValue::vector_var(ctxt, &SmtKind::bitvec_u8(), var)
+    }
+
     // create from argument
     fn bool_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
         make_sym_from_arg!(Bool, ctxt, arg, bool_const, bool_var)
@@ -128,6 +151,10 @@ impl<'a> SymValue<'a> {
         make_sym_from_arg!(U128, ctxt, arg, u128_const, u128_var)
     }
 
+    fn vector_u8_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(U8Vector, ctxt, arg, vector_u8_const, vector_u8_var)
+    }
+
     pub fn from_transaction_argument(
         ctxt: &'a SmtCtxt,
         sig: &SignatureToken,
@@ -138,7 +165,14 @@ impl<'a> SymValue<'a> {
             SignatureToken::U8 => SymValue::u8_arg(ctxt, arg),
             SignatureToken::U64 => SymValue::u64_arg(ctxt, arg),
             SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
-            _ => panic!("Not supported yet"), // TODO
+            SignatureToken::Vector(element) => {
+                // the only supported vector element type from
+                // TransactionArgument is U8Vector, hence the assert.
+                debug_assert_eq!(**element, SignatureToken::U8);
+                SymValue::vector_u8_arg(ctxt, arg)
+            }
+            // TODO for Address (did not see a case how it is used)
+            _ => panic!("Invalid signature type for value argument"),
         }
     }
 
