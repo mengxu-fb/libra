@@ -20,6 +20,7 @@ pub struct SmtCtxt {
     /// Whether to simplify terms automatically
     conf_auto_simplify: bool,
 }
+// TODO: make SmtCtxt, SmtKind, SmtExpr all pub(crate)
 
 impl SmtCtxt {
     pub fn new(conf_auto_simplify: bool) -> Self {

@@ -65,7 +65,7 @@ impl SymVM {
         };
 
         // turn transaction argument into values
-        let sym_inputs: Vec<SymValue> = sym_val_args
+        let _sym_inputs: Vec<SymValue> = sym_val_args
             .iter()
             .enumerate()
             .map(|(i, arg)| {

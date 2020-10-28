@@ -21,7 +21,7 @@ struct SymRepr<'a> {
 }
 
 /// A symbolic mimic of the move_vm_types::values::Value.
-pub(crate) struct SymValue<'a> {
+pub struct SymValue<'a> {
     /// A reference to the smt context
     ctxt: &'a SmtCtxt,
     /// A collection of guarded expressions describing all possibilities
@@ -29,6 +29,7 @@ pub(crate) struct SymValue<'a> {
     /// conditions associated with each variant.
     variants: Vec<SymRepr<'a>>,
 }
+// TODO: make SymValue pub(crate)
 
 macro_rules! make_sym_primitive {
     ($ctxt:ident, $v:ident, $func:tt) => {
@@ -55,6 +56,24 @@ macro_rules! make_sym_from_arg {
             SymTransactionArgument::Symbolic(var) => SymValue::$func_var($ctxt, var),
         }
     };
+}
+
+macro_rules! sym_op_unary {
+    ($func:tt, $sym:ident) => {{
+        SymValue::op($sym.ctxt, &[$sym], |parts| {
+            debug_assert_eq!(parts.len(), 1);
+            parts[0].$func()
+        })
+    }};
+}
+
+macro_rules! sym_op_binary {
+    ($func:tt, $lhs:ident, $rhs:ident) => {{
+        SymValue::op($lhs.ctxt, &[$lhs, $rhs], |parts| {
+            debug_assert_eq!(parts.len(), 2);
+            parts[0].$func(parts[1])
+        })
+    }};
 }
 
 impl<'a> SymValue<'a> {
@@ -128,6 +147,9 @@ impl<'a> SymValue<'a> {
     where
         F: Fn(&[&SmtExpr<'a>]) -> SmtExpr<'a>,
     {
+        // check consistency of ctxt
+        debug_assert!(operands.iter().all(|sym| sym.ctxt == ctxt));
+
         // variants for the result
         let mut variants: Vec<SymRepr<'a>> = vec![];
 
@@ -188,11 +210,16 @@ impl<'a> SymValue<'a> {
     }
 
     // bool operation
+    pub fn not(&self) -> SymValue<'a> {
+        sym_op_unary!(not, self)
+    }
+
     pub fn and(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        SymValue::op(self.ctxt, &[self, rhs], |parts| {
-            debug_assert_eq!(parts.len(), 2);
-            parts[0].and(parts[1])
-        })
+        sym_op_binary!(and, self, rhs)
+    }
+
+    pub fn or(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(or, self, rhs)
     }
 }
 
