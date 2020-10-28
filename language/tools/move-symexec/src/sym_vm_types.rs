@@ -11,36 +11,33 @@ use move_core_types::{
 };
 use vm::file_format::SignatureToken;
 
-use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult};
+use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtResult};
 
 /// Guarded symbolic representation. Each symboilc expression is guarded
 /// by a condition over the variables.
-struct SymVariant<'a> {
+struct SymRepr<'a> {
     expr: SmtExpr<'a>,
     cond: SmtExpr<'a>,
 }
 
-/// A collection of guarded expressions describing all possibilities
-/// (i.e., variants) this value may take as well as all the condition
-/// associated with each variant.
-pub(crate) struct SymRepr<'a> {
-    variants: Vec<SymVariant<'a>>,
-}
-
 /// A symbolic mimic of the move_vm_types::values::Value.
 pub(crate) struct SymValue<'a> {
-    repr: SymRepr<'a>,
+    /// A reference to the smt context
+    ctxt: &'a SmtCtxt,
+    /// A collection of guarded expressions describing all possibilities
+    /// (i.e., all variants) this value may take as well as all the
+    /// conditions associated with each variant.
+    variants: Vec<SymRepr<'a>>,
 }
 
 macro_rules! make_sym_primitive {
     ($ctxt:ident, $v:ident, $func:tt) => {
         SymValue {
-            repr: SymRepr {
-                variants: vec![SymVariant {
-                    expr: $ctxt.$func($v),
-                    cond: $ctxt.bool_const(true),
-                }],
-            },
+            ctxt: $ctxt,
+            variants: vec![SymRepr {
+                expr: $ctxt.$func($v),
+                cond: $ctxt.bool_const(true),
+            }],
         }
     };
 }
@@ -124,6 +121,78 @@ impl<'a> SymValue<'a> {
             SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
             _ => panic!("Not supported yet"), // TODO
         }
+    }
+
+    // operations
+    fn op<F>(ctxt: &'a SmtCtxt, operands: &[&SymValue<'a>], func: F) -> Self
+    where
+        F: Fn(&[&SmtExpr<'a>]) -> SmtExpr<'a>,
+    {
+        // variants for the result
+        let mut variants: Vec<SymRepr<'a>> = vec![];
+
+        // get the cartesian product of all operands
+        let prod = operands
+            .iter()
+            .map(|sym| sym.variants.iter())
+            .multi_cartesian_product();
+
+        // iterate over all possible combinations
+        for combo in prod {
+            // derive new condition
+            let cond = combo
+                .iter()
+                .fold(ctxt.bool_const(true), |acc, variant| acc.and(&variant.cond));
+
+            // check feasibility
+            let feasible = match ctxt.solve(&[&cond]) {
+                SmtResult::SAT => true,
+                SmtResult::UNSAT => false,
+                SmtResult::UNKNOWN => {
+                    // TODO: assume that things are decidable for now
+                    panic!("SMT solver returns an unknown result");
+                }
+            };
+
+            if !feasible {
+                continue;
+            }
+
+            // derive the new expression
+            let parts: Vec<&SmtExpr> = combo.iter().map(|variant| &variant.expr).collect();
+            let expr = (func)(&parts);
+
+            // check duplicates
+            let dup = variants.iter_mut().find(|repr| {
+                match ctxt.solve(&[&repr.expr.ne(&expr)]) {
+                    SmtResult::SAT => false,
+                    SmtResult::UNSAT => true,
+                    SmtResult::UNKNOWN => {
+                        // TODO: assume that things are decidable for now
+                        panic!("SMT solver returns an unknown result");
+                    }
+                }
+            });
+
+            if let Some(item) = dup {
+                // join the conditions
+                item.cond = item.cond.or(&cond);
+            } else {
+                // add a new variant
+                variants.push(SymRepr { expr, cond });
+            }
+        }
+
+        // done
+        Self { ctxt, variants }
+    }
+
+    // bool operation
+    pub fn and(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        SymValue::op(self.ctxt, &[self, rhs], |parts| {
+            debug_assert_eq!(parts.len(), 2);
+            parts[0].and(parts[1])
+        })
     }
 }
 
