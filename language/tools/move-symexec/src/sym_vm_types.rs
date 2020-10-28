@@ -209,7 +209,7 @@ impl<'a> SymValue<'a> {
         Self { ctxt, variants }
     }
 
-    // bool operation
+    // bool operations
     pub fn not(&self) -> SymValue<'a> {
         sym_op_unary!(not, self)
     }
@@ -220,6 +220,84 @@ impl<'a> SymValue<'a> {
 
     pub fn or(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
         sym_op_binary!(or, self, rhs)
+    }
+
+    // bitvec operations
+    pub fn add(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(add, self, rhs)
+    }
+
+    pub fn sub(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(sub, self, rhs)
+    }
+
+    pub fn mul(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(mul, self, rhs)
+    }
+
+    pub fn div(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(div, self, rhs)
+    }
+
+    pub fn rem(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(rem, self, rhs)
+    }
+
+    pub fn cast_u8(&self) -> SymValue<'a> {
+        sym_op_unary!(cast_u8, self)
+    }
+
+    pub fn cast_u64(&self) -> SymValue<'a> {
+        sym_op_unary!(cast_u64, self)
+    }
+
+    pub fn cast_u128(&self) -> SymValue<'a> {
+        sym_op_unary!(cast_u128, self)
+    }
+
+    pub fn bit_and(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_and, self, rhs)
+    }
+
+    pub fn bit_or(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_or, self, rhs)
+    }
+
+    pub fn bit_xor(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_xor, self, rhs)
+    }
+
+    pub fn shl(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(shl, self, rhs)
+    }
+
+    pub fn shr(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(shr, self, rhs)
+    }
+
+    pub fn gt(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(gt, self, rhs)
+    }
+
+    pub fn ge(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(ge, self, rhs)
+    }
+
+    pub fn le(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(le, self, rhs)
+    }
+
+    pub fn lt(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(lt, self, rhs)
+    }
+
+    // generic operations
+    pub fn eq(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(eq, self, rhs)
+    }
+
+    pub fn ne(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
+        sym_op_binary!(ne, self, rhs)
     }
 }
 
