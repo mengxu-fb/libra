@@ -3,7 +3,13 @@
 
 use std::{cmp::Ordering, ffi::CString, os::raw::c_uint};
 
+use move_core_types::account_address::AccountAddress;
+
 use crate::deps_z3::*;
+
+/// configs
+const ORIGIN_ADDRESS_WIDTH: u16 = 128;
+const BITVEC_ADDRESS_WIDTH: u16 = 256;
 
 /// Possibe results from the sat solver
 pub enum SmtResult {
@@ -115,6 +121,35 @@ impl SmtCtxt {
         self.bitvec_var(var, false, 128)
     }
 
+    // create address
+    pub fn address_const(&self, val: AccountAddress) -> SmtExpr {
+        let (addr, _) = val
+            .to_u8()
+            .iter()
+            .rev()
+            .fold((0u128, 0u128), |(acc, mul), v| {
+                (acc + ((*v as u128) << mul), mul + 8)
+            });
+
+        // push the address to the higher bits
+        self.bitvec_const(addr, false, ORIGIN_ADDRESS_WIDTH)
+            .shl(&self.bitvec_const(
+                BITVEC_ADDRESS_WIDTH - ORIGIN_ADDRESS_WIDTH,
+                false,
+                ORIGIN_ADDRESS_WIDTH,
+            ))
+    }
+
+    pub fn address_var(&self, var: &str) -> SmtExpr {
+        // push the address to the higher bits
+        self.bitvec_var(var, false, ORIGIN_ADDRESS_WIDTH)
+            .shl(&self.bitvec_const(
+                BITVEC_ADDRESS_WIDTH - ORIGIN_ADDRESS_WIDTH,
+                false,
+                ORIGIN_ADDRESS_WIDTH,
+            ))
+    }
+
     // create vectors (i.e., sequences)
 
     /// Create a vector with pre-defined contents (and hence, length).
@@ -206,6 +241,7 @@ impl Drop for SmtCtxt {
 pub enum SmtKind {
     Bool,
     Bitvec { signed: bool, width: u16 },
+    Address,
     Vector { element_kind: Box<SmtKind> },
     // TODO: more types to be added
 }
@@ -216,6 +252,7 @@ impl SmtKind {
         match self {
             SmtKind::Bool => unsafe { Z3_mk_bool_sort(ctxt.ctxt) },
             SmtKind::Bitvec { width, .. } => unsafe { Z3_mk_bv_sort(ctxt.ctxt, *width as c_uint) },
+            SmtKind::Address => SmtKind::bitvec_address().to_z3_sort(ctxt),
             SmtKind::Vector { element_kind } => unsafe {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
@@ -241,6 +278,13 @@ impl SmtKind {
         SmtKind::Bitvec {
             signed: false,
             width: 128,
+        }
+    }
+
+    pub fn bitvec_address() -> Self {
+        SmtKind::Bitvec {
+            signed: false,
+            width: BITVEC_ADDRESS_WIDTH,
         }
     }
 }
@@ -511,6 +555,16 @@ impl<'a> SmtExpr<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn assumptions() {
+        // check that we are using twice the number of bits for address
+        assert_eq!(
+            size_of::<AccountAddress>() * 8,
+            ORIGIN_ADDRESS_WIDTH as usize
+        );
+    }
 
     fn ctxt_variants() -> Vec<SmtCtxt> {
         vec![SmtCtxt::new(true), SmtCtxt::new(false)]

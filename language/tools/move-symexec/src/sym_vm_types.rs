@@ -7,7 +7,8 @@ use anyhow::{bail, Result};
 use itertools::Itertools;
 
 use move_core_types::{
-    parser::parse_transaction_argument, transaction_argument::TransactionArgument,
+    account_address::AccountAddress, parser::parse_transaction_argument,
+    transaction_argument::TransactionArgument,
 };
 use vm::file_format::SignatureToken;
 
@@ -111,6 +112,15 @@ impl<'a> SymValue<'a> {
         make_sym_primitive!(ctxt, var, bitvec_var_u128)
     }
 
+    // create address
+    pub fn address_const(ctxt: &'a SmtCtxt, val: AccountAddress) -> Self {
+        make_sym_primitive!(ctxt, val, address_const)
+    }
+
+    pub fn address_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
+        make_sym_primitive!(ctxt, var, address_var)
+    }
+
     // create vector
     pub fn vector_const(ctxt: &'a SmtCtxt, element_kind: &SmtKind, vals: &[&SymValue<'a>]) -> Self {
         SymValue::op(ctxt, vals, |exprs| ctxt.vector_const(element_kind, exprs))
@@ -151,6 +161,10 @@ impl<'a> SymValue<'a> {
         make_sym_from_arg!(U128, ctxt, arg, u128_const, u128_var)
     }
 
+    fn address_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
+        make_sym_from_arg!(Address, ctxt, arg, address_const, address_var)
+    }
+
     fn vector_u8_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
         make_sym_from_arg!(U8Vector, ctxt, arg, vector_u8_const, vector_u8_var)
     }
@@ -165,13 +179,13 @@ impl<'a> SymValue<'a> {
             SignatureToken::U8 => SymValue::u8_arg(ctxt, arg),
             SignatureToken::U64 => SymValue::u64_arg(ctxt, arg),
             SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
+            SignatureToken::Address => SymValue::address_arg(ctxt, arg),
             SignatureToken::Vector(element) => {
                 // the only supported vector element type from
                 // TransactionArgument is U8Vector, hence the assert.
                 debug_assert_eq!(**element, SignatureToken::U8);
                 SymValue::vector_u8_arg(ctxt, arg)
             }
-            // TODO for Address (did not see a case how it is used)
             _ => panic!("Invalid signature type for value argument"),
         }
     }
