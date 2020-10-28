@@ -6,7 +6,7 @@ use std::{ffi::CString, os::raw::c_uint};
 use crate::deps_z3::*;
 
 /// Possibe results from the sat solver
-pub(crate) enum SmtResult {
+pub enum SmtResult {
     SAT,
     UNSAT,
     UNKNOWN,
@@ -14,7 +14,7 @@ pub(crate) enum SmtResult {
 
 /// A context manager for all smt-related stuff
 #[derive(Debug, Eq, PartialEq)]
-pub(crate) struct SmtCtxt {
+pub struct SmtCtxt {
     /// A wrapper over Z3_context
     ctxt: Z3_context,
     /// Whether to simplify terms automatically
@@ -197,7 +197,7 @@ impl Drop for SmtCtxt {
 
 /// Make the type of SmtExpr explicit
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) enum SmtKind {
+pub enum SmtKind {
     Bool,
     Bitvec { signed: bool, width: u16 },
     Vector { element_kind: Box<SmtKind> },
@@ -216,22 +216,22 @@ impl SmtKind {
         }
     }
 
-    // utilitoes
-    fn bitvec_u8() -> Self {
+    // shortcuts
+    pub fn bitvec_u8() -> Self {
         SmtKind::Bitvec {
             signed: false,
             width: 8,
         }
     }
 
-    fn bitvec_u64() -> Self {
+    pub fn bitvec_u64() -> Self {
         SmtKind::Bitvec {
             signed: false,
             width: 64,
         }
     }
 
-    fn bitvec_u128() -> Self {
+    pub fn bitvec_u128() -> Self {
         SmtKind::Bitvec {
             signed: false,
             width: 128,
@@ -241,7 +241,7 @@ impl SmtKind {
 
 /// A wrapper over Z3_ast
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub(crate) struct SmtExpr<'a> {
+pub struct SmtExpr<'a> {
     ast: Z3_ast,
     ctxt: &'a SmtCtxt,
     kind: SmtKind,
