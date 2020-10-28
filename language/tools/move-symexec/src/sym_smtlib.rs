@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{ffi::CString, os::raw::c_uint};
+use std::{cmp::Ordering, ffi::CString, os::raw::c_uint};
 
 use crate::deps_z3::*;
 
@@ -414,8 +414,11 @@ impl<'a> SmtExpr<'a> {
 
         let ctxt = self.ctxt;
         let ast = match self.kind {
-            SmtKind::Bitvec { width, .. } => {
-                if width < into_width {
+            SmtKind::Bitvec { width, .. } => match width.cmp(&into_width) {
+                Ordering::Greater => unsafe {
+                    Z3_mk_extract(ctxt.ctxt, (into_width - 1) as c_uint, 0, self.ast)
+                },
+                Ordering::Less => {
                     if into_signed {
                         unsafe {
                             Z3_mk_sign_ext(ctxt.ctxt, (into_width - width) as c_uint, self.ast)
@@ -425,12 +428,9 @@ impl<'a> SmtExpr<'a> {
                             Z3_mk_zero_ext(ctxt.ctxt, (into_width - width) as c_uint, self.ast)
                         }
                     }
-                } else if width > into_width {
-                    unsafe { Z3_mk_extract(ctxt.ctxt, (into_width - 1) as c_uint, 0, self.ast) }
-                } else {
-                    self.ast
                 }
-            }
+                Ordering::Equal => self.ast,
+            },
             _ => panic!("Cast is only applicable to bitvec"),
         };
 

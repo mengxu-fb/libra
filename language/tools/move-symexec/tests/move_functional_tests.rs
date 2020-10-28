@@ -61,7 +61,7 @@ static MOVE_FUNCTIONAL_TESTS_WORKDIR: Lazy<String> = Lazy::new(|| {
 const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 
 /// A blacklist of tests that we do not want to run
-const TEST_BLACKLIST: Lazy<HashSet<String>> = Lazy::new(|| {
+static TEST_BLACKLIST: Lazy<HashSet<String>> = Lazy::new(|| {
     vec![
         // this test has intentional signer - value argument mismatch
         join_path_items!("move", "signer", "address_arg_is_not_signer"),
