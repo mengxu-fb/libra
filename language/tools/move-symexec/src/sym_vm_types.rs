@@ -196,7 +196,7 @@ impl<'a> SymValue<'a> {
         F: Fn(&[&SmtExpr<'a>]) -> SmtExpr<'a>,
     {
         // check consistency of ctxt
-        debug_assert!(operands.iter().all(|sym| sym.ctxt == ctxt));
+        debug_assert!(operands.iter().all(|sym| ctxt.smt_ctxt_matches(sym.ctxt)));
 
         // variants for the result
         let mut variants: Vec<SymRepr<'a>> = vec![];

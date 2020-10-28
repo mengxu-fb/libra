@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{cmp::Ordering, ffi::CString, os::raw::c_uint};
+use std::{cmp::Ordering, collections::HashMap, ffi::CString, os::raw::c_uint};
 
 use move_core_types::account_address::AccountAddress;
 
@@ -18,11 +18,20 @@ pub enum SmtResult {
     UNKNOWN,
 }
 
+#[derive(Debug)]
+struct SmtStructInfo {
+    sort: Z3_sort,
+    constructor: Z3_func_decl,
+    field_getters: Vec<Z3_func_decl>,
+}
+
 /// A context manager for all smt-related stuff
-#[derive(Debug, Eq, PartialEq)]
+#[derive(Debug)]
 pub struct SmtCtxt {
     /// A wrapper over Z3_context
     ctxt: Z3_context,
+    /// A map of pre-defined structs
+    struct_map: HashMap<String, SmtStructInfo>,
     /// Whether to simplify terms automatically
     conf_auto_simplify: bool,
 }
@@ -39,8 +48,14 @@ impl SmtCtxt {
 
         Self {
             ctxt,
+            struct_map: HashMap::new(),
             conf_auto_simplify,
         }
+    }
+
+    // context check
+    pub fn smt_ctxt_matches(&self, ctxt: &SmtCtxt) -> bool {
+        self.ctxt == ctxt.ctxt
     }
 
     // create bools
@@ -240,9 +255,18 @@ impl Drop for SmtCtxt {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmtKind {
     Bool,
-    Bitvec { signed: bool, width: u16 },
+    Bitvec {
+        signed: bool,
+        width: u16,
+    },
     Address,
-    Vector { element_kind: Box<SmtKind> },
+    Vector {
+        element_kind: Box<SmtKind>,
+    },
+    Struct {
+        name: String,
+        field_kinds: Vec<SmtKind>,
+    },
     // TODO: more types to be added
 }
 
@@ -256,6 +280,7 @@ impl SmtKind {
             SmtKind::Vector { element_kind } => unsafe {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
+            SmtKind::Struct { name, .. } => ctxt.struct_map.get(name).unwrap().sort,
         }
     }
 
@@ -290,7 +315,7 @@ impl SmtKind {
 }
 
 /// A wrapper over Z3_ast
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct SmtExpr<'a> {
     ast: Z3_ast,
     ctxt: &'a SmtCtxt,
@@ -409,7 +434,7 @@ impl<'a> SmtExpr<'a> {
     }
 
     fn check_binary_op(&self, rhs: &SmtExpr<'a>) {
-        debug_assert_eq!(self.ctxt, rhs.ctxt);
+        debug_assert!(self.ctxt.smt_ctxt_matches(rhs.ctxt));
         debug_assert_eq!(self.kind, rhs.kind);
     }
 
