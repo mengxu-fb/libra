@@ -6,6 +6,7 @@
 PKG=z3-4.8.9-x64-osx-10.14.6
 DIR=$(dirname "$0")
 
+mkdir -p ${DIR}/deps
 pushd ${DIR}/deps
 
 curl -LO https://github.com/Z3Prover/z3/releases/download/z3-4.8.9/${PKG}.zip
