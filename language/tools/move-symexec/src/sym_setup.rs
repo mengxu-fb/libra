@@ -15,8 +15,8 @@ use vm::{
     file_format::{
         AddressIdentifierIndex, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        IdentifierIndex, ModuleHandle, ModuleHandleIndex, StructDefinition, StructFieldInformation,
-        TypeSignature,
+        IdentifierIndex, ModuleHandle, ModuleHandleIndex, SignatureToken, StructDefinition,
+        StructFieldInformation, TypeSignature,
     },
 };
 
@@ -131,7 +131,7 @@ impl ExecUnit<'_> {
 /// components of the symbolic executor.
 pub(crate) struct SymSetup<'a> {
     loaded_modules: HashMap<ModuleId, &'a CompiledModule>,
-    declared_structs:
+    defined_structs:
         HashMap<ModuleId, HashMap<Identifier, Option<HashMap<Identifier, TypeSignature>>>>,
     tracked_functions: HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>>,
 }
@@ -142,16 +142,103 @@ impl<'a> SymSetup<'a> {
         tracked_functions: HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>>,
     ) -> Self {
         // derive loaded modules
-        let loaded_modules = modules
+        let loaded_modules: HashMap<ModuleId, &'a CompiledModule> = modules
             .iter()
             .map(|module| (module.self_id(), *module))
             .collect();
 
         // collect struct definitions
-        let mut declared_structs: HashMap<
-            ModuleId,
-            HashMap<Identifier, Option<HashMap<Identifier, TypeSignature>>>,
-        > = HashMap::new();
+        let defined_structs = SymSetup::collect_defined_structs(modules);
+
+        // done
+        let setup = Self {
+            loaded_modules,
+            defined_structs,
+            tracked_functions,
+        };
+
+        // checks
+        setup.check_defined_structs();
+
+        // return
+        setup
+    }
+
+    // getters
+    pub fn num_defined_structs(&self) -> usize {
+        self.defined_structs.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    pub fn num_tracked_functions(&self) -> usize {
+        self.tracked_functions.iter().map(|(_, v)| v.len()).sum()
+    }
+
+    pub fn get_exec_unit_by_context(&self, context: &CodeContext) -> Option<&ExecUnit> {
+        match context {
+            CodeContext::Script => None,
+            CodeContext::Module {
+                module_id,
+                function_id,
+            } => self
+                .tracked_functions
+                .get(module_id)
+                .map(|func_map| func_map.get(function_id))
+                .flatten(),
+        }
+    }
+
+    // checkers
+    fn check_defined_structs(&self) {
+        // check that all indirect structs are also included
+        for (module_id, module_structs) in self.defined_structs.iter() {
+            let module = self.loaded_modules.get(module_id).unwrap();
+            for struct_fields_opt in module_structs.values() {
+                if let Some(struct_fields) = struct_fields_opt {
+                    for field_type in struct_fields.values() {
+                        self.check_defined_structs_field_sig(module, &field_type.0);
+                    }
+                }
+            }
+        }
+    }
+
+    fn check_defined_structs_field_sig(&self, module: &'a CompiledModule, sig: &SignatureToken) {
+        match sig {
+            SignatureToken::Bool
+            | SignatureToken::U8
+            | SignatureToken::U64
+            | SignatureToken::U128
+            | SignatureToken::Address
+            | SignatureToken::Signer
+            | SignatureToken::TypeParameter(_) => {}
+            SignatureToken::Vector(element_sig) => {
+                self.check_defined_structs_field_sig(module, element_sig.as_ref())
+            }
+            SignatureToken::Struct(handle_index)
+            | SignatureToken::StructInstantiation(handle_index, ..) => {
+                let struct_handle = module.struct_handle_at(*handle_index);
+                let struct_name = module.identifier_at(struct_handle.name);
+                let module_handle = module.module_handle_at(struct_handle.module);
+                let module_id = module.module_id_for_handle(module_handle);
+                debug_assert!(self
+                    .defined_structs
+                    .get(&module_id)
+                    .unwrap()
+                    .contains_key(struct_name));
+            }
+            SignatureToken::Reference(referred_sig)
+            | SignatureToken::MutableReference(referred_sig) => {
+                self.check_defined_structs_field_sig(module, referred_sig.as_ref())
+            }
+        }
+    }
+
+    // struct
+    fn collect_defined_structs(
+        modules: &[&'a CompiledModule],
+    ) -> HashMap<ModuleId, HashMap<Identifier, Option<HashMap<Identifier, TypeSignature>>>> {
+        let mut defined_structs = HashMap::new();
+
         for module in modules {
             let mut module_structs = HashMap::new();
             for struct_def in module.struct_defs() {
@@ -178,42 +265,13 @@ impl<'a> SymSetup<'a> {
                 debug_assert!(exists.is_none());
             }
 
-            let exists = declared_structs.insert(module.self_id(), module_structs);
+            let exists = defined_structs.insert(module.self_id(), module_structs);
             debug_assert!(exists.is_none());
         }
 
-        // done
-        Self {
-            loaded_modules,
-            declared_structs,
-            tracked_functions,
-        }
+        defined_structs
     }
 
-    // getters
-    pub fn num_declared_structs(&self) -> usize {
-        self.declared_structs.iter().map(|(_, v)| v.len()).sum()
-    }
-
-    pub fn num_tracked_functions(&self) -> usize {
-        self.tracked_functions.iter().map(|(_, v)| v.len()).sum()
-    }
-
-    pub fn get_exec_unit_by_context(&self, context: &CodeContext) -> Option<&ExecUnit> {
-        match context {
-            CodeContext::Script => None,
-            CodeContext::Module {
-                module_id,
-                function_id,
-            } => self
-                .tracked_functions
-                .get(module_id)
-                .map(|func_map| func_map.get(function_id))
-                .flatten(),
-        }
-    }
-
-    // struct
     fn get_involved_structs_recursive(
         &self,
         module: &CompiledModule,
@@ -227,10 +285,7 @@ impl<'a> SymSetup<'a> {
         // recursively explore dependencies
         for struct_handle in module.struct_handles() {
             let module_handle = module.module_handle_at(struct_handle.module);
-            let module_id = ModuleId::new(
-                *module.address_identifier_at(module_handle.address),
-                module.identifier_at(module_handle.name).to_owned(),
-            );
+            let module_id = module.module_id_for_handle(module_handle);
             if structs.contains_key(&module_id) {
                 continue;
             }

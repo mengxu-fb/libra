@@ -469,7 +469,7 @@ impl MoveController {
             &all_modules,
             self.collect_tracked_functions(&tracked_modules, inclusion, exclusion),
         );
-        debug!("{} structs declared", sym_setup.num_declared_structs());
+        debug!("{} structs defined", sym_setup.num_defined_structs());
         debug!(
             "{} functions to be tracked symbolically",
             sym_setup.num_tracked_functions()
