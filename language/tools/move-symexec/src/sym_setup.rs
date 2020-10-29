@@ -15,8 +15,8 @@ use vm::{
     file_format::{
         AddressIdentifierIndex, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        IdentifierIndex, ModuleHandle, ModuleHandleIndex, SignatureToken, StructDefinition,
-        StructFieldInformation, TypeSignature,
+        IdentifierIndex, ModuleHandle, ModuleHandleIndex, SignatureToken, StructFieldInformation,
+        TypeSignature,
     },
 };
 
@@ -270,53 +270,5 @@ impl<'a> SymSetup<'a> {
         }
 
         defined_structs
-    }
-
-    fn get_involved_structs_recursive(
-        &self,
-        module: &CompiledModule,
-        structs: &mut HashMap<ModuleId, Vec<StructDefinition>>,
-    ) {
-        // add struct defs in this module
-        let module_structs: Vec<StructDefinition> = module.struct_defs().iter().cloned().collect();
-        let result = structs.insert(module.self_id(), module_structs);
-        debug_assert!(result.is_none());
-
-        // recursively explore dependencies
-        for struct_handle in module.struct_handles() {
-            let module_handle = module.module_handle_at(struct_handle.module);
-            let module_id = module.module_id_for_handle(module_handle);
-            if structs.contains_key(&module_id) {
-                continue;
-            }
-
-            // only if we have not explored this module
-            let dep = self.loaded_modules.get(&module_id).unwrap();
-            self.get_involved_structs_recursive(dep, structs);
-        }
-    }
-
-    pub fn get_involved_structs(
-        &self,
-        script: &CompiledScript,
-    ) -> HashMap<ModuleId, Vec<StructDefinition>> {
-        let mut structs = HashMap::new();
-
-        for struct_handle in script.struct_handles() {
-            let module_handle = script.module_handle_at(struct_handle.module);
-            let module_id = ModuleId::new(
-                *script.address_identifier_at(module_handle.address),
-                script.identifier_at(module_handle.name).to_owned(),
-            );
-            if structs.contains_key(&module_id) {
-                continue;
-            }
-
-            // only if we have not explored this module
-            let dep = self.loaded_modules.get(&module_id).unwrap();
-            self.get_involved_structs_recursive(dep, &mut structs);
-        }
-
-        structs
     }
 }
