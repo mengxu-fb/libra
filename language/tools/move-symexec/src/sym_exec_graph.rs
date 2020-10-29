@@ -216,7 +216,7 @@ impl ExecGraph {
         setup: &SymSetup,
     ) -> HashSet<ExecBlockId> {
         // prepare
-        let code_context = exec_unit.get_code_condext();
+        let code_context = exec_unit.get_code_context();
         let instructions = &exec_unit.code_unit().code;
         let cfg = VMControlFlowGraph::new(instructions);
 
@@ -295,7 +295,7 @@ impl ExecGraph {
                     let call_site_ret_block_id = exec_block.block_id;
 
                     // check recursion and act accordingly
-                    let next_context = next_unit.get_code_condext();
+                    let next_context = next_unit.get_code_context();
                     let rec_candidates: Vec<&CallSite> = call_stack
                         .iter()
                         .filter(|call_site| call_site.context == next_context)

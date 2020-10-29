@@ -457,9 +457,19 @@ impl MoveController {
         } else {
             self.get_compiled_scripts_recent(Some(true))
         };
+
         let tracked_modules = self.get_compiled_modules_all(Some(true));
-        let sym_setup =
-            SymSetup::new(self.collect_tracked_functions(&tracked_modules, inclusion, exclusion));
+        let untracked_modules = self.get_compiled_modules_all(Some(false));
+        let all_modules: Vec<&CompiledModule> = tracked_modules
+            .iter()
+            .chain(untracked_modules.iter())
+            .collect();
+
+        let sym_setup = SymSetup::new(
+            &all_modules,
+            self.collect_tracked_functions(&tracked_modules, inclusion, exclusion),
+        );
+        debug!("{} structs declared", sym_setup.num_declared_structs());
         debug!(
             "{} functions to be tracked symbolically",
             sym_setup.num_tracked_functions()

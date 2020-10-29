@@ -15,7 +15,8 @@ use vm::{
     file_format::{
         AddressIdentifierIndex, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        IdentifierIndex, ModuleHandle, ModuleHandleIndex,
+        IdentifierIndex, ModuleHandle, ModuleHandleIndex, StructDefinition, StructFieldInformation,
+        TypeSignature,
     },
 };
 
@@ -41,7 +42,7 @@ impl fmt::Display for CodeContext {
     }
 }
 
-/// unify script and module accesses
+/// unify script and function accesses
 pub(crate) enum ExecUnit<'a> {
     Script(&'a CompiledScript),
     Module(&'a CompiledModule, &'a FunctionDefinition),
@@ -113,7 +114,7 @@ impl ExecUnit<'_> {
         }
     }
 
-    pub fn get_code_condext(&self) -> CodeContext {
+    pub fn get_code_context(&self) -> CodeContext {
         match self {
             ExecUnit::Script(_) => CodeContext::Script,
             ExecUnit::Module(unit, func) => CodeContext::Module {
@@ -129,12 +130,69 @@ impl ExecUnit<'_> {
 /// Collect and hold all environmental information needed by various
 /// components of the symbolic executor.
 pub(crate) struct SymSetup<'a> {
+    loaded_modules: HashMap<ModuleId, &'a CompiledModule>,
+    declared_structs:
+        HashMap<ModuleId, HashMap<Identifier, Option<HashMap<Identifier, TypeSignature>>>>,
     tracked_functions: HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>>,
 }
 
 impl<'a> SymSetup<'a> {
-    pub fn new(tracked_functions: HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>>) -> Self {
-        Self { tracked_functions }
+    pub fn new(
+        modules: &[&'a CompiledModule],
+        tracked_functions: HashMap<ModuleId, HashMap<Identifier, ExecUnit<'a>>>,
+    ) -> Self {
+        // derive loaded modules
+        let loaded_modules = modules
+            .iter()
+            .map(|module| (module.self_id(), *module))
+            .collect();
+
+        // collect struct definitions
+        let mut declared_structs: HashMap<
+            ModuleId,
+            HashMap<Identifier, Option<HashMap<Identifier, TypeSignature>>>,
+        > = HashMap::new();
+        for module in modules {
+            let mut module_structs = HashMap::new();
+            for struct_def in module.struct_defs() {
+                let struct_handle = module.struct_handle_at(struct_def.struct_handle);
+                let struct_name = module.identifier_at(struct_handle.name).to_owned();
+
+                let struct_fields = match &struct_def.field_information {
+                    StructFieldInformation::Native => None,
+                    StructFieldInformation::Declared(field_defs) => {
+                        let fields: HashMap<Identifier, TypeSignature> = field_defs
+                            .iter()
+                            .map(|field_def| {
+                                (
+                                    module.identifier_at(field_def.name).to_owned(),
+                                    field_def.signature.clone(),
+                                )
+                            })
+                            .collect();
+                        Some(fields)
+                    }
+                };
+
+                let exists = module_structs.insert(struct_name, struct_fields);
+                debug_assert!(exists.is_none());
+            }
+
+            let exists = declared_structs.insert(module.self_id(), module_structs);
+            debug_assert!(exists.is_none());
+        }
+
+        // done
+        Self {
+            loaded_modules,
+            declared_structs,
+            tracked_functions,
+        }
+    }
+
+    // getters
+    pub fn num_declared_structs(&self) -> usize {
+        self.declared_structs.iter().map(|(_, v)| v.len()).sum()
     }
 
     pub fn num_tracked_functions(&self) -> usize {
@@ -153,5 +211,57 @@ impl<'a> SymSetup<'a> {
                 .map(|func_map| func_map.get(function_id))
                 .flatten(),
         }
+    }
+
+    // struct
+    fn get_involved_structs_recursive(
+        &self,
+        module: &CompiledModule,
+        structs: &mut HashMap<ModuleId, Vec<StructDefinition>>,
+    ) {
+        // add struct defs in this module
+        let module_structs: Vec<StructDefinition> = module.struct_defs().iter().cloned().collect();
+        let result = structs.insert(module.self_id(), module_structs);
+        debug_assert!(result.is_none());
+
+        // recursively explore dependencies
+        for struct_handle in module.struct_handles() {
+            let module_handle = module.module_handle_at(struct_handle.module);
+            let module_id = ModuleId::new(
+                *module.address_identifier_at(module_handle.address),
+                module.identifier_at(module_handle.name).to_owned(),
+            );
+            if structs.contains_key(&module_id) {
+                continue;
+            }
+
+            // only if we have not explored this module
+            let dep = self.loaded_modules.get(&module_id).unwrap();
+            self.get_involved_structs_recursive(dep, structs);
+        }
+    }
+
+    pub fn get_involved_structs(
+        &self,
+        script: &CompiledScript,
+    ) -> HashMap<ModuleId, Vec<StructDefinition>> {
+        let mut structs = HashMap::new();
+
+        for struct_handle in script.struct_handles() {
+            let module_handle = script.module_handle_at(struct_handle.module);
+            let module_id = ModuleId::new(
+                *script.address_identifier_at(module_handle.address),
+                script.identifier_at(module_handle.name).to_owned(),
+            );
+            if structs.contains_key(&module_id) {
+                continue;
+            }
+
+            // only if we have not explored this module
+            let dep = self.loaded_modules.get(&module_id).unwrap();
+            self.get_involved_structs_recursive(dep, &mut structs);
+        }
+
+        structs
     }
 }

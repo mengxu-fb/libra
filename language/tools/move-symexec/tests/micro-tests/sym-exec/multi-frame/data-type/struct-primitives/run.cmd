@@ -1,1 +1,1 @@
-cargo run -- args.txt -v -C
+cargo run -- args.txt --no-stdlib -v -C
