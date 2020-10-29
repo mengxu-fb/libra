@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use move_core_types::account_address::AccountAddress;
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use vm::file_format::{Signature, SignatureToken};
 
 use crate::{
@@ -34,7 +34,8 @@ impl SymVM {
         val_arg_sigs: &Signature,
         init_locals_sigs: &Signature,
         signers: &[AccountAddress],
-        sym_val_args: &[SymTransactionArgument],
+        sym_args: &[SymTransactionArgument],
+        _type_args: &[TypeTag],
     ) {
         // check that we got the correct number of value arguments
         // NOTE: signers must come before value arguments, if present
@@ -47,7 +48,7 @@ impl SymVM {
 
         debug_assert_eq!(
             val_arg_sigs.len(),
-            if use_signers { signers.len() } else { 0 } + sym_val_args.len()
+            if use_signers { signers.len() } else { 0 } + sym_args.len()
         );
 
         let arg_index_start = if use_signers {
@@ -65,7 +66,7 @@ impl SymVM {
         };
 
         // turn transaction argument into values
-        let _sym_inputs: Vec<SymValue> = sym_val_args
+        let _sym_inputs: Vec<SymValue> = sym_args
             .iter()
             .enumerate()
             .map(|(i, arg)| {

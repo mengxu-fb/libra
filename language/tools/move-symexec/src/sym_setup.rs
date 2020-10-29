@@ -43,6 +43,7 @@ impl fmt::Display for CodeContext {
 }
 
 /// unify script and function accesses
+#[derive(Clone, Debug)]
 pub(crate) enum ExecUnit<'a> {
     Script(&'a CompiledScript),
     Module(&'a CompiledModule, &'a FunctionDefinition),
@@ -129,6 +130,7 @@ impl ExecUnit<'_> {
 
 /// Collect and hold all environmental information needed by various
 /// components of the symbolic executor.
+#[derive(Clone, Debug)]
 pub(crate) struct SymSetup<'a> {
     loaded_modules: HashMap<ModuleId, &'a CompiledModule>,
     defined_structs:

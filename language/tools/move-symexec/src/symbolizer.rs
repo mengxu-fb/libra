@@ -8,11 +8,8 @@ use log::{debug, warn};
 use serde_json::{self, json};
 use std::{fs::File, io::Write};
 
-use move_core_types::account_address::AccountAddress;
-use vm::{
-    access::ScriptAccess,
-    file_format::{CompiledScript, Signature},
-};
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
+use vm::{access::ScriptAccess, file_format::CompiledScript};
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
@@ -31,21 +28,21 @@ const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: u128 = std::u16::MAX as u128;
 
 /// The symbolizer
 #[derive(Clone, Debug)]
-pub(crate) struct MoveSymbolizer {
+pub(crate) struct MoveSymbolizer<'a> {
     workdir: String,
-    val_arg_sigs: Signature,
-    init_local_sigs: Signature,
+    setup: &'a SymSetup<'a>,
+    script: &'a CompiledScript,
     exec_graph: ExecGraph,
 }
 
-impl MoveSymbolizer {
-    pub fn new(workdir: String, setup: &SymSetup, script: &CompiledScript) -> Result<Self> {
+impl<'a> MoveSymbolizer<'a> {
+    pub fn new(
+        workdir: String,
+        setup: &'a SymSetup<'a>,
+        script: &'a CompiledScript,
+    ) -> Result<Self> {
         // prepare the directory
         utils::maybe_recreate_dir(&workdir)?;
-
-        // collect signatures
-        let val_arg_sigs = script.signature_at(script.as_inner().parameters).clone();
-        let init_local_sigs = script.signature_at(script.code().locals).clone();
 
         // build execution graph
         let exec_graph = ExecGraph::new(setup, script);
@@ -53,8 +50,8 @@ impl MoveSymbolizer {
         // done
         Ok(Self {
             workdir,
-            val_arg_sigs,
-            init_local_sigs,
+            setup,
+            script,
             exec_graph,
         })
     }
@@ -106,14 +103,24 @@ impl MoveSymbolizer {
         Ok(())
     }
 
-    pub fn execute(&self, signers: &[AccountAddress], sym_val_args: &[SymTransactionArgument]) {
+    pub fn execute(
+        &self,
+        signers: &[AccountAddress],
+        sym_args: &[SymTransactionArgument],
+        type_args: &[TypeTag],
+    ) {
+        // collect signatures
+        let val_arg_sigs = self.script.signature_at(self.script.as_inner().parameters);
+        let init_local_sigs = self.script.signature_at(self.script.code().locals);
+
         let vm = SymVM::new();
         vm.interpret(
             &self.exec_graph,
-            &self.val_arg_sigs,
-            &self.init_local_sigs,
+            val_arg_sigs,
+            init_local_sigs,
             signers,
-            sym_val_args,
+            sym_args,
+            type_args,
         );
     }
 }

@@ -155,12 +155,16 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
     fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
         // derive signers and symbolic value arguments
-        let (signers, val_args) = match txn.payload() {
-            TransactionPayload::Script(script) => (vec![txn.sender()], script.args()),
+        let (signers, val_args, type_args) = match txn.payload() {
+            TransactionPayload::Script(script) => {
+                (vec![txn.sender()], script.args(), script.ty_args())
+            }
             TransactionPayload::WriteSet(writeset) => match writeset {
-                WriteSetPayload::Script { execute_as, script } => {
-                    (vec![txn.sender(), *execute_as], script.args())
-                }
+                WriteSetPayload::Script { execute_as, script } => (
+                    vec![txn.sender(), *execute_as],
+                    script.args(),
+                    script.ty_args(),
+                ),
                 WriteSetPayload::Direct(_) => {
                     panic!("Expect a script in transaction");
                 }
@@ -169,14 +173,22 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
                 panic!("Expect a script in transaction");
             }
         };
-        let sym_val_args: Vec<SymTransactionArgument> = val_args
+        let sym_args: Vec<SymTransactionArgument> = val_args
             .iter()
             .map(|arg| SymTransactionArgument::Concrete(arg.clone()))
             .collect();
 
         // symbolize it
-        self.controller
-            .symbolize(&signers, &sym_val_args, None, Some(&[]), false, true, true)
+        self.controller.symbolize(
+            &signers,
+            &sym_args,
+            &type_args,
+            None,
+            Some(&[]),
+            false,
+            true,
+            true,
+        )
     }
 }
 

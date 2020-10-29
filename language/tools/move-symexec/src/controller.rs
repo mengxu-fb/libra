@@ -199,13 +199,19 @@ enum OpCommand {
         /// - For symbolic values, the format is S::<var>
         ///  - The <var> will be interpreted as a string and should not
         ///    be unique cross other <var> declarations.
-        #[structopt(long = "sym-val-args", short = "v", parse(try_from_str = parse_sym_transaction_argument))]
-        sym_val_args: Vec<SymTransactionArgument>,
+        #[structopt(long = "sym-args", short = "v", parse(try_from_str = parse_sym_transaction_argument))]
+        sym_args: Vec<SymTransactionArgument>,
 
         /// List of function identifiers to be included for tracking
         /// and symbolic execution.
         #[structopt(long = "inclusion", short = "i", parse(try_from_str = FuncIdMatcher::new))]
         inclusion: Option<Vec<FuncIdMatcher>>,
+
+        /// Possibly-empty list of type arguments passed to the
+        /// transaction (e.g., `T` in `main<T>()`).
+        /// Must match the type arguments expected by every script.
+        #[structopt(long = "type-args", short = "t", parse(try_from_str = parse_type_tag))]
+        type_args: Vec<TypeTag>,
 
         /// List of function identifiers to be excluded for tracking
         /// and symbolic execution.
@@ -444,7 +450,8 @@ impl MoveController {
     pub fn symbolize(
         &mut self,
         signers: &[AccountAddress],
-        sym_val_args: &[SymTransactionArgument],
+        sym_args: &[SymTransactionArgument],
+        type_args: &[TypeTag],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
         all_scripts: bool,
@@ -500,7 +507,7 @@ impl MoveController {
             }
 
             // run the symbolization procedure
-            symbolizer.execute(signers, sym_val_args);
+            symbolizer.execute(signers, sym_args, type_args);
         }
 
         // done
@@ -717,7 +724,8 @@ impl MoveController {
             } => self.execute(&signers, &val_args, &type_args, expect_failure, !dry_run),
             OpCommand::Symbolize {
                 signers,
-                sym_val_args,
+                sym_args,
+                type_args,
                 inclusion,
                 exclusion,
                 all_scripts,
@@ -725,7 +733,8 @@ impl MoveController {
                 output_exec_graph_stats,
             } => self.symbolize(
                 &signers,
-                &sym_val_args,
+                &sym_args,
+                &type_args,
                 inclusion.as_deref(),
                 Some(&exclusion),
                 all_scripts,
