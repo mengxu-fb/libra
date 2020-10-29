@@ -9,7 +9,7 @@ use serde_json::{self, json};
 use std::{fs::File, io::Write};
 
 use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
-use vm::{access::ScriptAccess, file_format::CompiledScript};
+use vm::file_format::CompiledScript;
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
@@ -109,18 +109,7 @@ impl<'a> MoveSymbolizer<'a> {
         sym_args: &[SymTransactionArgument],
         type_args: &[TypeTag],
     ) {
-        // collect signatures
-        let val_arg_sigs = self.script.signature_at(self.script.as_inner().parameters);
-        let init_local_sigs = self.script.signature_at(self.script.code().locals);
-
         let vm = SymVM::new();
-        vm.interpret(
-            &self.exec_graph,
-            val_arg_sigs,
-            init_local_sigs,
-            signers,
-            sym_args,
-            type_args,
-        );
+        vm.interpret(self.script, &self.exec_graph, signers, sym_args, type_args);
     }
 }

@@ -4,7 +4,10 @@
 #![forbid(unsafe_code)]
 
 use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
-use vm::file_format::{Signature, SignatureToken};
+use vm::{
+    access::ScriptAccess,
+    file_format::{CompiledScript, SignatureToken},
+};
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecWalker},
@@ -30,13 +33,16 @@ impl SymVM {
 
     pub fn interpret(
         &self,
+        script: &CompiledScript,
         exec_graph: &ExecGraph,
-        val_arg_sigs: &Signature,
-        init_locals_sigs: &Signature,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
-        _type_args: &[TypeTag],
+        type_args: &[TypeTag],
     ) {
+        // collect value signatures
+        let val_arg_sigs = script.signature_at(script.as_inner().parameters);
+        let init_local_sigs = script.signature_at(script.code().locals);
+
         // check that we got the correct number of value arguments
         // NOTE: signers must come before value arguments, if present
         // in the signature
@@ -51,6 +57,7 @@ impl SymVM {
             if use_signers { signers.len() } else { 0 } + sym_args.len()
         );
 
+        // find value types other than signers
         let arg_index_start = if use_signers {
             let num_signers = signers.len();
             debug_assert_ne!(num_signers, 0);
@@ -78,8 +85,11 @@ impl SymVM {
             })
             .collect();
 
+        // check that we got the correct number of type arguments
+        debug_assert_eq!(type_args.len(), script.as_inner().type_parameters.len());
+
         // TODO: code for exploration
-        for sig in init_locals_sigs.0.iter() {
+        for sig in init_local_sigs.0.iter() {
             println!("{:?}", sig);
         }
 
