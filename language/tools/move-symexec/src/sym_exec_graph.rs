@@ -18,7 +18,7 @@ use std::{
 };
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
-use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
+use vm::file_format::{Bytecode, CodeOffset, CompiledScript, Signature};
 
 use crate::sym_setup::{CodeContext, ExecUnit, SymSetup};
 
@@ -141,6 +141,10 @@ struct CallSite {
     init_block_id: ExecBlockId,
     /// The exec block id where the call is initiated
     call_block_id: ExecBlockId,
+    /// Instantiation information (if any), calls to the same function
+    /// with different instantiations are treated as if this is calling
+    /// different functions
+    type_parameters: Option<Signature>,
 }
 
 /// This is the super-CFG graph representation.
@@ -258,15 +262,26 @@ impl ExecGraph {
                 }
 
                 // see if we are going to call into another exec unit
-                let next_unit_opt = match instruction {
-                    Bytecode::Call(func_handle_index) => setup.get_exec_unit_by_context(
-                        &exec_unit.code_context_by_index(*func_handle_index),
+                let (next_unit_opt, type_parameters) = match instruction {
+                    Bytecode::Call(func_handle_index) => (
+                        setup.get_exec_unit_by_context(
+                            &exec_unit.code_context_by_index(*func_handle_index),
+                        ),
+                        None,
                     ),
-                    Bytecode::CallGeneric(func_instantiation_index) => setup
-                        .get_exec_unit_by_context(
+                    Bytecode::CallGeneric(func_instantiation_index) => (
+                        setup.get_exec_unit_by_context(
                             &exec_unit.code_context_by_generic_index(*func_instantiation_index),
                         ),
-                    _ => None,
+                        Some(
+                            exec_unit
+                                .function_instantiation_signature_by_generic_index(
+                                    *func_instantiation_index,
+                                )
+                                .clone(),
+                        ),
+                    ),
+                    _ => (None, None),
                 };
 
                 if let Some(next_unit) = next_unit_opt {
@@ -298,7 +313,10 @@ impl ExecGraph {
                     let next_context = next_unit.get_code_context();
                     let rec_candidates: Vec<&CallSite> = call_stack
                         .iter()
-                        .filter(|call_site| call_site.context == next_context)
+                        .filter(|call_site| {
+                            call_site.context == next_context
+                                && call_site.type_parameters == type_parameters
+                        })
                         .collect();
 
                     let ret_block_ids = if rec_candidates.is_empty() {
@@ -309,6 +327,7 @@ impl ExecGraph {
                                 .get(&cfg.block_start(cfg.entry_block_id()))
                                 .unwrap(),
                             call_block_id: call_site_block_id,
+                            type_parameters,
                         };
                         call_stack.push(call_site);
 

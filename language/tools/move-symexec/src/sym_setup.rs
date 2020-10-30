@@ -15,8 +15,8 @@ use vm::{
     file_format::{
         AddressIdentifierIndex, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        IdentifierIndex, ModuleHandle, ModuleHandleIndex, SignatureToken, StructFieldInformation,
-        TypeSignature,
+        IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex,
+        SignatureToken, StructFieldInformation, TypeSignature,
     },
 };
 
@@ -85,6 +85,13 @@ impl ExecUnit<'_> {
         }
     }
 
+    fn signature_at(&self, idx: SignatureIndex) -> &Signature {
+        match self {
+            ExecUnit::Script(unit) => unit.signature_at(idx),
+            ExecUnit::Module(unit, _) => unit.signature_at(idx),
+        }
+    }
+
     pub fn module_id_by_index(&self, idx: ModuleHandleIndex) -> ModuleId {
         let handle = self.module_handle_at(idx);
         ModuleId::new(
@@ -104,6 +111,14 @@ impl ExecUnit<'_> {
     pub fn code_context_by_generic_index(&self, idx: FunctionInstantiationIndex) -> CodeContext {
         let instantiation = self.function_instantiation_at(idx);
         self.code_context_by_index(instantiation.handle)
+    }
+
+    pub fn function_instantiation_signature_by_generic_index(
+        &self,
+        idx: FunctionInstantiationIndex,
+    ) -> &Signature {
+        let instantiation = self.function_instantiation_at(idx);
+        self.signature_at(instantiation.type_parameters)
     }
 
     pub fn code_unit(&self) -> &CodeUnit {
