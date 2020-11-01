@@ -1,0 +1,6 @@
+compile move_src --track
+execute -v 0u8
+execute -v 1u8
+execute -v 2u8
+execute -v 3u8
+symbolize -v S::x --output-exec-graph

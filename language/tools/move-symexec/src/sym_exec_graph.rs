@@ -146,16 +146,14 @@ impl fmt::Display for ExecFlow {
 
 /// This is the information stored on the call stack
 struct CallSite {
-    /// The context where this call is initiated
+    /// The context we are in right now
     context: CodeContext,
-    /// The exec block id for the entry block in this context
-    init_block_id: ExecBlockId,
-    /// The exec block id where the call is initiated
-    call_block_id: ExecBlockId,
     /// Instantiation information (if any), calls to the same function
     /// with different instantiations are treated as if this is calling
     /// different functions
     type_args: Vec<ExecTypeArg>,
+    /// The exec block id for the entry block in this context
+    entry_block_id: ExecBlockId,
 }
 
 /// This is the super-CFG graph representation.
@@ -225,6 +223,7 @@ impl ExecGraph {
         &mut self,
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
+        call_from_block_id: Option<ExecBlockId>,
         call_stack: &mut Vec<CallSite>,
         exit_table: &mut HashMap<ExecBlockId, HashSet<ExecBlockId>>,
         id_counter: &mut ExecBlockId,
@@ -251,14 +250,26 @@ impl ExecGraph {
             let block_code_offset_end = cfg.block_end(block_id);
 
             // create the block
-            let mut exec_block_id = *id_counter;
-            *id_counter += 1;
             let mut exec_block = ExecBlock::new(
-                exec_block_id,
+                *id_counter,
                 code_context.clone(),
                 Some(block_code_offset_begin),
                 type_args.to_vec(),
             );
+            *id_counter += 1;
+
+            // prepare call stack if this is the entry block
+            if block_id == cfg.entry_block_id() {
+                // since we traverse the CFG in reverse postorder dfs,
+                // this is guaranteed to be executed before any other
+                // blocks are visited.
+                let call_site = CallSite {
+                    context: code_context.clone(),
+                    type_args: type_args.to_vec(),
+                    entry_block_id: exec_block.block_id,
+                };
+                call_stack.push(call_site);
+            }
 
             // scan instructions
             for offset in block_code_offset_begin..=block_code_offset_end {
@@ -317,10 +328,8 @@ impl ExecGraph {
                     // clear this exec block so that it can be reused
                     // to host the rest of instructions in current basic
                     // block, after the call.
-                    exec_block_id = *id_counter;
-                    *id_counter += 1;
                     exec_block = ExecBlock::new(
-                        exec_block_id,
+                        *id_counter,
                         code_context.clone(),
                         if offset == block_code_offset_end {
                             None
@@ -329,6 +338,7 @@ impl ExecGraph {
                         },
                         type_args.to_vec(),
                     );
+                    *id_counter += 1;
 
                     // record the block id that the call will return to
                     let call_site_ret_block_id = exec_block.block_id;
@@ -345,29 +355,16 @@ impl ExecGraph {
 
                     let ret_block_ids = if rec_candidates.is_empty() {
                         // non-recursive: call into the next unit
-                        let call_site = CallSite {
-                            context: code_context.clone(),
-                            init_block_id: *inst_map
-                                .get(&cfg.block_start(cfg.entry_block_id()))
-                                .unwrap(),
-                            call_block_id: call_site_block_id,
-                            type_args: next_type_args.clone(),
-                        };
-                        call_stack.push(call_site);
-
-                        let ret_blocks = self.incorporate(
+                        self.incorporate(
                             next_unit,
                             &next_type_args,
+                            Some(call_site_block_id),
                             call_stack,
                             exit_table,
                             id_counter,
                             recursions,
                             setup,
-                        );
-                        assert!(call_stack.pop().is_some());
-
-                        // to build the return edges
-                        ret_blocks
+                        )
                     } else {
                         // recursive call: do not further expand the CFG
                         // of that function, just connect the blocks.
@@ -382,7 +379,7 @@ impl ExecGraph {
                         let rec_call_site = *rec_candidates.last().unwrap();
                         assert!(recursions
                             .insert(
-                                (call_site_block_id, rec_call_site.init_block_id),
+                                (call_site_block_id, rec_call_site.entry_block_id),
                                 call_site_ret_block_id
                             )
                             .is_none());
@@ -406,19 +403,13 @@ impl ExecGraph {
             self.add_block(exec_block);
         }
 
-        // find entry block id
-        let cfg_entry_block_id = *inst_map
-            .get(&cfg.block_start(cfg.entry_block_id()))
-            .unwrap();
+        // pop the call stack after cfg exploration
+        let call_site = call_stack.pop().unwrap();
 
         // add incoming call edge
-        if let Some(call_site) = call_stack.last() {
+        if let Some(exec_block_id) = call_from_block_id {
             // this exec unit is called into, add the call edge
-            self.add_flow(
-                call_site.call_block_id,
-                cfg_entry_block_id,
-                ExecFlowType::Call,
-            );
+            self.add_flow(exec_block_id, call_site.entry_block_id, ExecFlowType::Call);
         }
 
         // add branching edges in CFG
@@ -476,7 +467,7 @@ impl ExecGraph {
                 _ => None,
             })
             .collect();
-        exit_table.insert(cfg_entry_block_id, exit_points.clone());
+        exit_table.insert(call_site.entry_block_id, exit_points.clone());
 
         // done
         exit_points
@@ -496,6 +487,7 @@ impl ExecGraph {
         exec_graph.incorporate(
             &init_unit,
             type_args,
+            None,
             &mut call_stack,
             &mut exit_table,
             &mut id_counter,
