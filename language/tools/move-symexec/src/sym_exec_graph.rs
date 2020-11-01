@@ -41,6 +41,8 @@ pub(crate) struct ExecBlock {
     /// (However, not all arbitrary blocks have None as code_offset,
     /// those that do host instructions will have a valid code_offset)
     code_offset: Option<CodeOffset>,
+    /// The type argument for the function in the code context
+    type_args: Vec<ExecTypeArg>,
     /// The instructions within this basic block. It is OK to be empty.
     instructions: Vec<Bytecode>,
 }
@@ -50,11 +52,13 @@ impl ExecBlock {
         block_id: ExecBlockId,
         code_context: CodeContext,
         code_offset: Option<CodeOffset>,
+        type_args: Vec<ExecTypeArg>,
     ) -> Self {
         Self {
             block_id,
             code_context,
             code_offset,
+            type_args,
             instructions: vec![],
         }
     }
@@ -67,14 +71,21 @@ impl ExecBlock {
 impl fmt::Display for ExecBlock {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // block head
-        writeln!(
+        write!(
             f,
-            "[{} - {}::{}]",
+            "[{} - {}::{} <",
             self.block_id,
             self.code_context,
             self.code_offset
-                .map_or_else(|| String::from("None"), |offset| offset.to_string())
+                .map_or_else(|| String::from("None"), |offset| offset.to_string()),
         )?;
+        if !self.type_args.is_empty() {
+            write!(f, "{}", self.type_args.get(0).unwrap())?;
+            for i in 1..self.type_args.len() {
+                write!(f, ", {}", self.type_args.get(i).unwrap())?;
+            }
+        }
+        writeln!(f, ">]")?;
 
         // block content
         for instruction in self.instructions.iter() {
@@ -246,6 +257,7 @@ impl ExecGraph {
                 exec_block_id,
                 code_context.clone(),
                 Some(block_code_offset_begin),
+                type_args.to_vec(),
             );
 
             // scan instructions
@@ -315,6 +327,7 @@ impl ExecGraph {
                         } else {
                             Some(offset + 1)
                         },
+                        type_args.to_vec(),
                     );
 
                     // record the block id that the call will return to

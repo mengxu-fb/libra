@@ -38,7 +38,13 @@ impl fmt::Display for CodeContext {
             CodeContext::Module {
                 module_id,
                 function_id,
-            } => write!(f, "{}::{}", module_id, function_id),
+            } => write!(
+                f,
+                "{}::{}::{}",
+                module_id.address().short_str_lossless(),
+                module_id.name(),
+                function_id
+            ),
         }
     }
 }
@@ -178,6 +184,42 @@ pub(crate) enum ExecTypeArg {
         param_index: TypeParameterIndex,
         actual_type: Box<ExecTypeArg>,
     },
+}
+
+impl fmt::Display for ExecTypeArg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ExecTypeArg::Bool => write!(f, "bool"),
+            ExecTypeArg::U8 => write!(f, "u8"),
+            ExecTypeArg::U64 => write!(f, "u64"),
+            ExecTypeArg::U128 => write!(f, "u128"),
+            ExecTypeArg::Address => write!(f, "address"),
+            ExecTypeArg::Signer => write!(f, "signer"),
+            ExecTypeArg::Vector { element_type } => write!(f, "vector<{}>", element_type),
+            ExecTypeArg::Struct {
+                module_id,
+                struct_name,
+                type_args,
+            } => {
+                write!(f, "struct {}::{}", module_id, struct_name)?;
+                if !type_args.is_empty() {
+                    write!(f, "<")?;
+                    write!(f, "{}", type_args.get(0).unwrap())?;
+                    for i in 1..type_args.len() {
+                        write!(f, ", {}", type_args.get(i).unwrap())?;
+                    }
+                    write!(f, ">")?;
+                }
+                Ok(())
+            }
+            ExecTypeArg::Reference { referred_type } => write!(f, "&{}", referred_type),
+            ExecTypeArg::MutableReference { referred_type } => write!(f, "&mut {}", referred_type),
+            ExecTypeArg::TypeParameter {
+                param_index,
+                actual_type,
+            } => write!(f, "#{}-{}", param_index, actual_type),
+        }
+    }
 }
 
 impl ExecTypeArg {
