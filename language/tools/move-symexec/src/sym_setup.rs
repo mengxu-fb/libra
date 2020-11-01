@@ -8,7 +8,7 @@ use std::{collections::HashMap, fmt};
 use move_core_types::{
     account_address::AccountAddress,
     identifier::{IdentStr, Identifier},
-    language_storage::ModuleId,
+    language_storage::{ModuleId, TypeTag},
 };
 use vm::{
     access::{ModuleAccess, ScriptAccess},
@@ -16,7 +16,8 @@ use vm::{
         AddressIdentifierIndex, CodeUnit, CompiledModule, CompiledScript, FunctionDefinition,
         FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
         IdentifierIndex, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex,
-        SignatureToken, StructFieldInformation, TypeSignature,
+        SignatureToken, StructFieldInformation, StructHandle, StructHandleIndex,
+        TypeParameterIndex, TypeSignature,
     },
 };
 
@@ -61,6 +62,13 @@ impl ExecUnit<'_> {
         match self {
             ExecUnit::Script(unit) => unit.function_handle_at(idx),
             ExecUnit::Module(unit, _) => unit.function_handle_at(idx),
+        }
+    }
+
+    fn struct_handle_at(&self, idx: StructHandleIndex) -> &StructHandle {
+        match self {
+            ExecUnit::Script(unit) => unit.struct_handle_at(idx),
+            ExecUnit::Module(unit, _) => unit.struct_handle_at(idx),
         }
     }
 
@@ -139,6 +147,129 @@ impl ExecUnit<'_> {
                     .identifier_at(unit.function_handle_at(func.function).name)
                     .to_owned(),
             },
+        }
+    }
+}
+
+// Flattened type tracking
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum ExecTypeArg {
+    Bool,
+    U8,
+    U64,
+    U128,
+    Address,
+    Signer,
+    Vector {
+        element_type: Box<ExecTypeArg>,
+    },
+    Struct {
+        module_id: ModuleId,
+        struct_name: Identifier,
+        type_args: Vec<ExecTypeArg>,
+    },
+    Reference {
+        referred_type: Box<ExecTypeArg>,
+    },
+    MutableReference {
+        referred_type: Box<ExecTypeArg>,
+    },
+    TypeParameter {
+        param_index: TypeParameterIndex,
+        actual_type: Box<ExecTypeArg>,
+    },
+}
+
+impl ExecTypeArg {
+    pub fn convert_from_type_tag(tag: &TypeTag) -> ExecTypeArg {
+        match tag {
+            TypeTag::Bool => ExecTypeArg::Bool,
+            TypeTag::U8 => ExecTypeArg::U8,
+            TypeTag::U64 => ExecTypeArg::U64,
+            TypeTag::U128 => ExecTypeArg::U128,
+            TypeTag::Address => ExecTypeArg::Address,
+            TypeTag::Signer => ExecTypeArg::Signer,
+            TypeTag::Vector(element_tag) => ExecTypeArg::Vector {
+                element_type: Box::new(ExecTypeArg::convert_from_type_tag(&*element_tag)),
+            },
+            TypeTag::Struct(struct_tag) => ExecTypeArg::Struct {
+                module_id: struct_tag.module_id(),
+                struct_name: struct_tag.name.clone(),
+                type_args: struct_tag
+                    .type_params
+                    .iter()
+                    .map(ExecTypeArg::convert_from_type_tag)
+                    .collect(),
+            },
+        }
+    }
+
+    pub fn convert_from_signature_token(
+        token: &SignatureToken,
+        exec_unit: &ExecUnit,
+        type_args: &[ExecTypeArg],
+    ) -> ExecTypeArg {
+        match token {
+            SignatureToken::Bool => ExecTypeArg::Bool,
+            SignatureToken::U8 => ExecTypeArg::U8,
+            SignatureToken::U64 => ExecTypeArg::U64,
+            SignatureToken::U128 => ExecTypeArg::U128,
+            SignatureToken::Address => ExecTypeArg::Address,
+            SignatureToken::Signer => ExecTypeArg::Signer,
+            SignatureToken::Vector(element_sig) => ExecTypeArg::Vector {
+                element_type: Box::new(ExecTypeArg::convert_from_signature_token(
+                    &*element_sig,
+                    exec_unit,
+                    type_args,
+                )),
+            },
+            SignatureToken::Struct(handle_index) => {
+                let struct_handle = exec_unit.struct_handle_at(*handle_index);
+                ExecTypeArg::Struct {
+                    module_id: exec_unit.module_id_by_index(struct_handle.module),
+                    struct_name: exec_unit.identifier_at(struct_handle.name).to_owned(),
+                    type_args: vec![],
+                }
+            }
+            SignatureToken::StructInstantiation(handle_index, inst_tokens) => {
+                let struct_handle = exec_unit.struct_handle_at(*handle_index);
+                ExecTypeArg::Struct {
+                    module_id: exec_unit.module_id_by_index(struct_handle.module),
+                    struct_name: exec_unit.identifier_at(struct_handle.name).to_owned(),
+                    type_args: inst_tokens
+                        .iter()
+                        .map(|inst_token| {
+                            ExecTypeArg::convert_from_signature_token(
+                                inst_token, exec_unit, type_args,
+                            )
+                        })
+                        .collect(),
+                }
+            }
+            SignatureToken::Reference(referred_sig) => ExecTypeArg::Reference {
+                referred_type: Box::new(ExecTypeArg::convert_from_signature_token(
+                    &*referred_sig,
+                    exec_unit,
+                    type_args,
+                )),
+            },
+            SignatureToken::MutableReference(referred_sig) => ExecTypeArg::MutableReference {
+                referred_type: Box::new(ExecTypeArg::convert_from_signature_token(
+                    &*referred_sig,
+                    exec_unit,
+                    type_args,
+                )),
+            },
+            SignatureToken::TypeParameter(index) => {
+                let indexed_type = type_args.get(*index as usize).unwrap();
+                match indexed_type {
+                    ExecTypeArg::TypeParameter { .. } => indexed_type.clone(),
+                    _ => ExecTypeArg::TypeParameter {
+                        param_index: *index,
+                        actual_type: Box::new(indexed_type.clone()),
+                    },
+                }
+            }
         }
     }
 }

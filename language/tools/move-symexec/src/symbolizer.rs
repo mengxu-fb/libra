@@ -13,7 +13,7 @@ use vm::file_format::CompiledScript;
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
-    sym_setup::SymSetup,
+    sym_setup::{ExecTypeArg, SymSetup},
     sym_vm::SymVM,
     sym_vm_types::SymTransactionArgument,
     utils,
@@ -32,6 +32,7 @@ pub(crate) struct MoveSymbolizer<'a> {
     workdir: String,
     setup: &'a SymSetup<'a>,
     script: &'a CompiledScript,
+    type_args: Vec<ExecTypeArg>,
     exec_graph: ExecGraph,
 }
 
@@ -40,18 +41,26 @@ impl<'a> MoveSymbolizer<'a> {
         workdir: String,
         setup: &'a SymSetup<'a>,
         script: &'a CompiledScript,
+        type_tags: &[TypeTag],
     ) -> Result<Self> {
         // prepare the directory
         utils::maybe_recreate_dir(&workdir)?;
 
+        // convert type args
+        let type_args: Vec<ExecTypeArg> = type_tags
+            .iter()
+            .map(ExecTypeArg::convert_from_type_tag)
+            .collect();
+
         // build execution graph
-        let exec_graph = ExecGraph::new(setup, script);
+        let exec_graph = ExecGraph::new(setup, script, &type_args);
 
         // done
         Ok(Self {
             workdir,
             setup,
             script,
+            type_args,
             exec_graph,
         })
     }
@@ -103,13 +112,14 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
-    pub fn execute(
-        &self,
-        signers: &[AccountAddress],
-        sym_args: &[SymTransactionArgument],
-        type_args: &[TypeTag],
-    ) {
+    pub fn execute(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
         let vm = SymVM::new();
-        vm.interpret(self.script, &self.exec_graph, signers, sym_args, type_args);
+        vm.interpret(
+            self.script,
+            &self.type_args,
+            &self.exec_graph,
+            signers,
+            sym_args,
+        );
     }
 }

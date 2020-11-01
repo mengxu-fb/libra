@@ -3,7 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
+use move_core_types::account_address::AccountAddress;
 use vm::{
     access::ScriptAccess,
     file_format::{CompiledScript, SignatureToken},
@@ -11,6 +11,7 @@ use vm::{
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecWalker},
+    sym_setup::ExecTypeArg,
     sym_smtlib::SmtCtxt,
     sym_vm_types::{SymTransactionArgument, SymValue},
 };
@@ -34,10 +35,10 @@ impl SymVM {
     pub fn interpret(
         &self,
         script: &CompiledScript,
+        type_args: &[ExecTypeArg],
         exec_graph: &ExecGraph,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
-        type_args: &[TypeTag],
     ) {
         // collect value signatures
         let val_arg_sigs = script.signature_at(script.as_inner().parameters);

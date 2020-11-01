@@ -155,7 +155,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
     fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
         // derive signers and symbolic value arguments
-        let (signers, val_args, type_args) = match txn.payload() {
+        let (signers, val_args, type_tags) = match txn.payload() {
             TransactionPayload::Script(script) => {
                 (vec![txn.sender()], script.args(), script.ty_args())
             }
@@ -182,7 +182,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         self.controller.symbolize(
             &signers,
             &sym_args,
-            &type_args,
+            &type_tags,
             None,
             Some(&[]),
             false,

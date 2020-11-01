@@ -210,8 +210,8 @@ enum OpCommand {
         /// Possibly-empty list of type arguments passed to the
         /// transaction (e.g., `T` in `main<T>()`).
         /// Must match the type arguments expected by every script.
-        #[structopt(long = "type-args", short = "t", parse(try_from_str = parse_type_tag))]
-        type_args: Vec<TypeTag>,
+        #[structopt(long = "type-tags", short = "t", parse(try_from_str = parse_type_tag))]
+        type_tags: Vec<TypeTag>,
 
         /// List of function identifiers to be excluded for tracking
         /// and symbolic execution.
@@ -451,7 +451,7 @@ impl MoveController {
         &mut self,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
-        type_args: &[TypeTag],
+        type_tags: &[TypeTag],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: Option<&[FuncIdMatcher]>,
         all_scripts: bool,
@@ -498,7 +498,7 @@ impl MoveController {
             self.num_symexecs += 1;
 
             // build the symbolizer
-            let symbolizer = MoveSymbolizer::new(sym_workdir, &sym_setup, script)?;
+            let symbolizer = MoveSymbolizer::new(sym_workdir, &sym_setup, script, type_tags)?;
             if output_exec_graph {
                 symbolizer.save_exec_graph_as_dot()?;
             }
@@ -507,7 +507,7 @@ impl MoveController {
             }
 
             // run the symbolization procedure
-            symbolizer.execute(signers, sym_args, type_args);
+            symbolizer.execute(signers, sym_args);
         }
 
         // done
@@ -725,7 +725,7 @@ impl MoveController {
             OpCommand::Symbolize {
                 signers,
                 sym_args,
-                type_args,
+                type_tags,
                 inclusion,
                 exclusion,
                 all_scripts,
@@ -734,7 +734,7 @@ impl MoveController {
             } => self.symbolize(
                 &signers,
                 &sym_args,
-                &type_args,
+                &type_tags,
                 inclusion.as_deref(),
                 Some(&exclusion),
                 all_scripts,

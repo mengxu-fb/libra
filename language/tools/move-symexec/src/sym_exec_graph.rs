@@ -18,9 +18,9 @@ use std::{
 };
 
 use bytecode_verifier::control_flow_graph::{BlockId, ControlFlowGraph, VMControlFlowGraph};
-use vm::file_format::{Bytecode, CodeOffset, CompiledScript, Signature};
+use vm::file_format::{Bytecode, CodeOffset, CompiledScript};
 
-use crate::sym_setup::{CodeContext, ExecUnit, SymSetup};
+use crate::sym_setup::{CodeContext, ExecTypeArg, ExecUnit, SymSetup};
 
 /// The following classes aim for building an extended control-flow
 /// graph that encloses both script and module CFGs, i.e., a super
@@ -144,7 +144,7 @@ struct CallSite {
     /// Instantiation information (if any), calls to the same function
     /// with different instantiations are treated as if this is calling
     /// different functions
-    type_parameters: Option<Signature>,
+    type_args: Vec<ExecTypeArg>,
 }
 
 /// This is the super-CFG graph representation.
@@ -213,6 +213,7 @@ impl ExecGraph {
     fn incorporate(
         &mut self,
         exec_unit: &ExecUnit,
+        type_args: &[ExecTypeArg],
         call_stack: &mut Vec<CallSite>,
         exit_table: &mut HashMap<ExecBlockId, HashSet<ExecBlockId>>,
         id_counter: &mut ExecBlockId,
@@ -262,26 +263,36 @@ impl ExecGraph {
                 }
 
                 // see if we are going to call into another exec unit
-                let (next_unit_opt, type_parameters) = match instruction {
+                let (next_unit_opt, next_type_args) = match instruction {
                     Bytecode::Call(func_handle_index) => (
                         setup.get_exec_unit_by_context(
                             &exec_unit.code_context_by_index(*func_handle_index),
                         ),
-                        None,
+                        vec![],
                     ),
-                    Bytecode::CallGeneric(func_instantiation_index) => (
-                        setup.get_exec_unit_by_context(
-                            &exec_unit.code_context_by_generic_index(*func_instantiation_index),
-                        ),
-                        Some(
-                            exec_unit
-                                .function_instantiation_signature_by_generic_index(
-                                    *func_instantiation_index,
+                    Bytecode::CallGeneric(func_instantiation_index) => {
+                        let inst_sig = exec_unit.function_instantiation_signature_by_generic_index(
+                            *func_instantiation_index,
+                        );
+
+                        let inst_type_args: Vec<ExecTypeArg> = inst_sig
+                            .0
+                            .iter()
+                            .map(|token| {
+                                ExecTypeArg::convert_from_signature_token(
+                                    token, exec_unit, type_args,
                                 )
-                                .clone(),
-                        ),
-                    ),
-                    _ => (None, None),
+                            })
+                            .collect();
+
+                        (
+                            setup.get_exec_unit_by_context(
+                                &exec_unit.code_context_by_generic_index(*func_instantiation_index),
+                            ),
+                            inst_type_args,
+                        )
+                    }
+                    _ => (None, vec![]),
                 };
 
                 if let Some(next_unit) = next_unit_opt {
@@ -315,7 +326,7 @@ impl ExecGraph {
                         .iter()
                         .filter(|call_site| {
                             call_site.context == next_context
-                                && call_site.type_parameters == type_parameters
+                                && call_site.type_args == next_type_args
                         })
                         .collect();
 
@@ -327,12 +338,18 @@ impl ExecGraph {
                                 .get(&cfg.block_start(cfg.entry_block_id()))
                                 .unwrap(),
                             call_block_id: call_site_block_id,
-                            type_parameters,
+                            type_args: next_type_args.clone(),
                         };
                         call_stack.push(call_site);
 
                         let ret_blocks = self.incorporate(
-                            next_unit, call_stack, exit_table, id_counter, recursions, setup,
+                            next_unit,
+                            &next_type_args,
+                            call_stack,
+                            exit_table,
+                            id_counter,
+                            recursions,
+                            setup,
                         );
                         assert!(call_stack.pop().is_some());
 
@@ -452,7 +469,7 @@ impl ExecGraph {
         exit_points
     }
 
-    pub fn new(setup: &SymSetup, script: &CompiledScript) -> Self {
+    pub fn new(setup: &SymSetup, script: &CompiledScript, type_args: &[ExecTypeArg]) -> Self {
         // make the script an ExecUnit
         let init_unit = ExecUnit::Script(script);
 
@@ -465,6 +482,7 @@ impl ExecGraph {
         let mut exec_graph = ExecGraph::empty();
         exec_graph.incorporate(
             &init_unit,
+            type_args,
             &mut call_stack,
             &mut exit_table,
             &mut id_counter,
