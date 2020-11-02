@@ -32,19 +32,19 @@ type ExecBlockId = usize;
 #[derive(Clone, Debug)]
 pub(crate) struct ExecBlock {
     /// A unique identifier for the exec block
-    block_id: ExecBlockId,
+    pub block_id: ExecBlockId,
     /// The context (module, function) where this block lives
-    code_context: CodeContext,
+    pub code_context: CodeContext,
     /// the starting offset of the instructions in code context
     /// A None code offset means that this must be an arbitrary block
     /// which will host no instructions.
     /// (However, not all arbitrary blocks have None as code_offset,
     /// those that do host instructions will have a valid code_offset)
-    code_offset: Option<CodeOffset>,
+    pub code_offset: Option<CodeOffset>,
     /// The type argument for the function in the code context
-    type_args: Vec<ExecTypeArg>,
+    pub type_args: Vec<ExecTypeArg>,
     /// The instructions within this basic block. It is OK to be empty.
-    instructions: Vec<Bytecode>,
+    pub instructions: Vec<Bytecode>,
 }
 
 impl ExecBlock {

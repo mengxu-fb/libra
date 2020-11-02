@@ -10,7 +10,7 @@ use vm::{
 };
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecWalker},
+    sym_exec_graph::ExecGraph,
     sym_setup::ExecTypeArg,
     sym_smtlib::SmtCtxt,
     sym_vm_types::{SymTransactionArgument, SymValue},
@@ -36,13 +36,13 @@ impl SymVM {
         &self,
         script: &CompiledScript,
         type_args: &[ExecTypeArg],
-        exec_graph: &ExecGraph,
+        _exec_graph: &ExecGraph,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
     ) {
         // collect value signatures
         let val_arg_sigs = script.signature_at(script.as_inner().parameters);
-        let init_local_sigs = script.signature_at(script.code().locals);
+        let _init_local_sigs = script.signature_at(script.code().locals);
 
         // check that we got the correct number of value arguments
         // NOTE: signers must come before value arguments, if present
@@ -88,14 +88,5 @@ impl SymVM {
 
         // check that we got the correct number of type arguments
         debug_assert_eq!(type_args.len(), script.as_inner().type_parameters.len());
-
-        // TODO: code for exploration
-        for sig in init_local_sigs.0.iter() {
-            println!("{:?}", sig);
-        }
-
-        // run the walker
-        let mut walker = ExecWalker::new(exec_graph);
-        while walker.next().is_some() {}
     }
 }

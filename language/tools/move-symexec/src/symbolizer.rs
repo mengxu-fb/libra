@@ -6,13 +6,21 @@
 use anyhow::Result;
 use log::{debug, warn};
 use serde_json::{self, json};
-use std::{fs::File, io::Write};
+use std::{
+    collections::{HashMap, HashSet},
+    fs::File,
+    io::Write,
+};
 
-use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
+use move_core_types::{
+    account_address::AccountAddress,
+    identifier::Identifier,
+    language_storage::{ModuleId, TypeTag},
+};
 use vm::file_format::CompiledScript;
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker},
     sym_setup::{ExecTypeArg, SymSetup},
     sym_vm::SymVM,
     sym_vm_types::SymTransactionArgument,
@@ -112,7 +120,34 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
+    fn discover_structs(&self) {
+        // holds the struct types we have discovered so far
+        let mut involved_structs: HashMap<
+            ModuleId,
+            HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>,
+        > = HashMap::new();
+
+        // find all places that may use a struct type
+        let mut walker = ExecWalker::new(&self.exec_graph);
+        while let Some((_, exec_block)) = walker.next() {
+            let exec_unit = self
+                .setup
+                .get_exec_unit_by_context(&exec_block.code_context)
+                .unwrap();
+            for instruction in exec_block.instructions.iter() {
+                self.setup.collect_involved_structs_in_instruction(
+                    instruction,
+                    exec_unit,
+                    &exec_block.type_args,
+                    &mut involved_structs,
+                );
+            }
+        }
+    }
+
     pub fn execute(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
+        self.discover_structs();
+
         let vm = SymVM::new();
         vm.interpret(
             self.script,

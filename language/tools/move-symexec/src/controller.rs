@@ -458,7 +458,7 @@ impl MoveController {
         output_exec_graph: bool,
         output_exec_graph_stats: bool,
     ) -> Result<()> {
-        // build the setup
+        // collect information
         let tracked_scripts = if all_scripts {
             self.get_compiled_scripts_all(Some(true))
         } else {
@@ -472,15 +472,8 @@ impl MoveController {
             .chain(untracked_modules.iter())
             .collect();
 
-        let sym_setup = SymSetup::new(
-            &all_modules,
-            self.collect_tracked_functions(&tracked_modules, inclusion, exclusion),
-        );
-        debug!("{} structs defined", sym_setup.num_defined_structs());
-        debug!(
-            "{} functions to be tracked symbolically",
-            sym_setup.num_tracked_functions()
-        );
+        let tracked_functions =
+            self.collect_tracked_functions(&tracked_modules, inclusion, exclusion);
 
         // symbolize each script one by one
         for script in tracked_scripts.iter() {
@@ -491,6 +484,14 @@ impl MoveController {
                 warn!("Script is an infinite loop, excluding it from symbolization",);
                 continue;
             }
+
+            // build the setup
+            let sym_setup = SymSetup::new(script, &all_modules, tracked_functions.clone());
+            debug!("{} structs defined", sym_setup.num_defined_structs());
+            debug!(
+                "{} functions to be tracked symbolically",
+                sym_setup.num_tracked_functions()
+            );
 
             // derive the workdir
             let sym_workdir =
