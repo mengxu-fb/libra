@@ -508,11 +508,19 @@ impl<'a> SymSetup<'a> {
         }
     }
 
-    pub fn get_struct_info_by_context(&self, context: &StructContext) -> Option<&StructInfo> {
+    pub fn get_struct_info_by_module_id_and_struct_name(
+        &self,
+        module_id: &ModuleId,
+        struct_name: &IdentStr,
+    ) -> Option<&StructInfo> {
         self.defined_structs
-            .get(&context.module_id)
-            .map(|struct_map| struct_map.get(&context.struct_name))
+            .get(module_id)
+            .map(|struct_map| struct_map.get(struct_name))
             .flatten()
+    }
+
+    pub fn get_struct_info_by_context(&self, context: &StructContext) -> Option<&StructInfo> {
+        self.get_struct_info_by_module_id_and_struct_name(&context.module_id, &context.struct_name)
     }
 
     // checkers

@@ -120,12 +120,11 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
-    fn discover_structs(&self) {
+    fn discover_structs(
+        &self,
+    ) -> HashMap<ModuleId, HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>> {
         // holds the struct types we have discovered so far
-        let mut involved_structs: HashMap<
-            ModuleId,
-            HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>,
-        > = HashMap::new();
+        let mut involved_structs = HashMap::new();
 
         // find all places that may use a struct type
         let mut walker = ExecWalker::new(&self.exec_graph);
@@ -143,12 +142,19 @@ impl<'a> MoveSymbolizer<'a> {
                 );
             }
         }
+
+        // done
+        involved_structs
     }
 
     pub fn execute(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
-        self.discover_structs();
+        // struct discovery
+        let involved_structs = self.discover_structs();
 
-        let vm = SymVM::new();
+        // prepare the vm
+        let vm = SymVM::new(&self.setup, &involved_structs);
+
+        // do the interpretation
         vm.interpret(
             self.script,
             &self.type_args,
