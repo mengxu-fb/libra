@@ -508,19 +508,11 @@ impl<'a> SymSetup<'a> {
         }
     }
 
-    pub fn get_struct_info_by_module_id_and_struct_name(
-        &self,
-        module_id: &ModuleId,
-        struct_name: &IdentStr,
-    ) -> Option<&StructInfo> {
-        self.defined_structs
-            .get(module_id)
-            .map(|struct_map| struct_map.get(struct_name))
-            .flatten()
-    }
-
     pub fn get_struct_info_by_context(&self, context: &StructContext) -> Option<&StructInfo> {
-        self.get_struct_info_by_module_id_and_struct_name(&context.module_id, &context.struct_name)
+        self.defined_structs
+            .get(&context.module_id)
+            .map(|struct_map| struct_map.get(&context.struct_name))
+            .flatten()
     }
 
     // checkers
@@ -621,12 +613,10 @@ impl<'a> SymSetup<'a> {
         inst_tokens: &[SignatureToken],
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<ModuleId, HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>>,
+        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
     ) {
         let variants = involved_structs
-            .entry(context.module_id.clone())
-            .or_insert_with(HashMap::new)
-            .entry(context.struct_name.clone())
+            .entry(context.clone())
             .or_insert_with(HashSet::new);
 
         let inst_args: Vec<ExecTypeArg> = inst_tokens
@@ -663,7 +653,7 @@ impl<'a> SymSetup<'a> {
         token: &SignatureToken,
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<ModuleId, HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>>,
+        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
     ) {
         match token {
             SignatureToken::Bool
@@ -718,7 +708,7 @@ impl<'a> SymSetup<'a> {
         instruction: &Bytecode,
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<ModuleId, HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>>,
+        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
     ) {
         match instruction {
             Bytecode::CopyLoc(local_index)

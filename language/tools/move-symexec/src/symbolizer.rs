@@ -12,16 +12,12 @@ use std::{
     io::Write,
 };
 
-use move_core_types::{
-    account_address::AccountAddress,
-    identifier::Identifier,
-    language_storage::{ModuleId, TypeTag},
-};
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use vm::file_format::CompiledScript;
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker},
-    sym_setup::{ExecTypeArg, SymSetup},
+    sym_setup::{ExecTypeArg, StructContext, SymSetup},
     sym_vm::SymVM,
     sym_vm_types::SymTransactionArgument,
     utils,
@@ -120,9 +116,7 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
-    fn discover_structs(
-        &self,
-    ) -> HashMap<ModuleId, HashMap<Identifier, HashSet<Vec<ExecTypeArg>>>> {
+    fn discover_structs(&self) -> HashMap<StructContext, HashSet<Vec<ExecTypeArg>>> {
         // holds the struct types we have discovered so far
         let mut involved_structs = HashMap::new();
 
