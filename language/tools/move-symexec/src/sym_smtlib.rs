@@ -267,7 +267,10 @@ pub enum SmtKind {
         name: String,
         field_kinds: Vec<SmtKind>,
     },
-    // TODO: more types to be added
+    // TODO: the reference type is for experiment only
+    Reference {
+        referred_kind: Box<SmtKind>,
+    },
 }
 
 impl SmtKind {
@@ -281,6 +284,13 @@ impl SmtKind {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
             SmtKind::Struct { name, .. } => ctxt.struct_map.get(name).unwrap().sort,
+            SmtKind::Reference { referred_kind } => unsafe {
+                Z3_mk_array_sort(
+                    ctxt.ctxt,
+                    Z3_mk_int_sort(ctxt.ctxt),
+                    referred_kind.to_z3_sort(ctxt),
+                )
+            },
         }
     }
 

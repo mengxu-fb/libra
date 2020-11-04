@@ -3,10 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::{
-    collections::{HashMap, HashSet},
-    fmt,
-};
+use std::{collections::HashMap, fmt};
 
 use move_core_types::{
     account_address::AccountAddress,
@@ -607,45 +604,97 @@ impl<'a> SymSetup<'a> {
         defined_structs
     }
 
+    fn collect_involved_structs_in_type_arg(
+        &self,
+        arg: &ExecTypeArg,
+        exec_unit: &ExecUnit,
+        involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
+    ) {
+        match arg {
+            ExecTypeArg::Bool
+            | ExecTypeArg::U8
+            | ExecTypeArg::U64
+            | ExecTypeArg::U128
+            | ExecTypeArg::Address
+            | ExecTypeArg::Signer => {}
+            ExecTypeArg::Vector { element_type } => {
+                self.collect_involved_structs_in_type_arg(
+                    element_type.as_ref(),
+                    exec_unit,
+                    involved_structs,
+                );
+            }
+            ExecTypeArg::Struct { context, type_args } => {
+                let variants = involved_structs
+                    .entry(context.clone())
+                    .or_insert_with(HashMap::new);
+
+                let inst_name = format!("{}-{}", context, variants.len());
+                if variants.insert(type_args.clone(), inst_name).is_none() {
+                    // recursively handle the fields in this struct
+                    let struct_info = self.get_struct_info_by_context(context).unwrap();
+                    if let StructInfo::Declared { field_map, .. } = struct_info {
+                        for field_type in field_map.values() {
+                            self.collect_involved_structs_in_signature_token(
+                                &field_type.0,
+                                exec_unit,
+                                type_args,
+                                involved_structs,
+                            );
+                        }
+                    }
+                    // this should be redundent, as there is no reason
+                    // to declare a generic struct without using its
+                    // type parameter sin (at least) one of the fields,
+                    // but just in case, this is added here.
+                    for type_arg in type_args {
+                        self.collect_involved_structs_in_type_arg(
+                            type_arg,
+                            exec_unit,
+                            involved_structs,
+                        );
+                    }
+                }
+            }
+            ExecTypeArg::Reference { referred_type }
+            | ExecTypeArg::MutableReference { referred_type } => {
+                self.collect_involved_structs_in_type_arg(
+                    referred_type.as_ref(),
+                    exec_unit,
+                    involved_structs,
+                );
+            }
+            ExecTypeArg::TypeParameter { actual_type, .. } => {
+                self.collect_involved_structs_in_type_arg(
+                    actual_type.as_ref(),
+                    exec_unit,
+                    involved_structs,
+                );
+            }
+        }
+    }
+
     fn collect_involved_structs_recursive(
         &self,
         context: &StructContext,
         inst_tokens: &[SignatureToken],
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
+        involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
-        let variants = involved_structs
-            .entry(context.clone())
-            .or_insert_with(HashSet::new);
-
         let inst_args: Vec<ExecTypeArg> = inst_tokens
             .iter()
             .map(|token| ExecTypeArg::convert_from_signature_token(token, exec_unit, type_args))
             .collect();
 
-        if variants.insert(inst_args.clone()) {
-            // recursively handle the fields in this struct
-            let struct_info = self.get_struct_info_by_context(context).unwrap();
-            match struct_info {
-                StructInfo::Native => {}
-                StructInfo::Declared { field_map, .. } => {
-                    for field_type in field_map.values() {
-                        self.collect_involved_structs_in_signature_token(
-                            &field_type.0,
-                            exec_unit,
-                            // when analyzing struct fields, the
-                            // type_args should be updated to the
-                            // inst_args, as inst_args now defines
-                            // the scope where type_parameters can be
-                            // drawn from
-                            &inst_args,
-                            involved_structs,
-                        );
-                    }
-                }
-            }
-        }
+        // when analyzing struct fields, the type_args should be updated
+        // to inst_args, as inst_args now defines the scope where type
+        // parameters inside this struct definition can be drawn from.
+        let arg = ExecTypeArg::Struct {
+            context: context.clone(),
+            type_args: inst_args,
+        };
+        self.collect_involved_structs_in_type_arg(&arg, exec_unit, involved_structs);
     }
 
     fn collect_involved_structs_in_signature_token(
@@ -653,54 +702,10 @@ impl<'a> SymSetup<'a> {
         token: &SignatureToken,
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
+        involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
-        match token {
-            SignatureToken::Bool
-            | SignatureToken::U8
-            | SignatureToken::U64
-            | SignatureToken::U128
-            | SignatureToken::Address
-            | SignatureToken::Signer
-            | SignatureToken::TypeParameter(_) => {}
-            SignatureToken::Vector(element_sig) => {
-                self.collect_involved_structs_in_signature_token(
-                    element_sig.as_ref(),
-                    exec_unit,
-                    type_args,
-                    involved_structs,
-                );
-            }
-            SignatureToken::Struct(handle_index) => {
-                let context = exec_unit.struct_context_by_handle_index(*handle_index);
-                self.collect_involved_structs_recursive(
-                    &context,
-                    &[],
-                    exec_unit,
-                    type_args,
-                    involved_structs,
-                );
-            }
-            SignatureToken::StructInstantiation(handle_index, inst_tokens) => {
-                let context = exec_unit.struct_context_by_handle_index(*handle_index);
-                self.collect_involved_structs_recursive(
-                    &context,
-                    inst_tokens,
-                    exec_unit,
-                    type_args,
-                    involved_structs,
-                );
-            }
-            SignatureToken::Reference(referred_sig)
-            | SignatureToken::MutableReference(referred_sig) => {
-                self.collect_involved_structs_in_signature_token(
-                    referred_sig.as_ref(),
-                    exec_unit,
-                    type_args,
-                    involved_structs,
-                );
-            }
-        }
+        let arg = ExecTypeArg::convert_from_signature_token(token, exec_unit, type_args);
+        self.collect_involved_structs_in_type_arg(&arg, exec_unit, involved_structs);
     }
 
     pub fn collect_involved_structs_in_instruction(
@@ -708,7 +713,7 @@ impl<'a> SymSetup<'a> {
         instruction: &Bytecode,
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
-        involved_structs: &mut HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
+        involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
         match instruction {
             Bytecode::CopyLoc(local_index)

@@ -6,11 +6,7 @@
 use anyhow::Result;
 use log::{debug, warn};
 use serde_json::{self, json};
-use std::{
-    collections::{HashMap, HashSet},
-    fs::File,
-    io::Write,
-};
+use std::{collections::HashMap, fs::File, io::Write};
 
 use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use vm::file_format::CompiledScript;
@@ -116,7 +112,7 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
-    fn discover_structs(&self) -> HashMap<StructContext, HashSet<Vec<ExecTypeArg>>> {
+    fn discover_structs(&self) -> HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>> {
         // holds the struct types we have discovered so far
         let mut involved_structs = HashMap::new();
 
@@ -146,7 +142,7 @@ impl<'a> MoveSymbolizer<'a> {
         let involved_structs = self.discover_structs();
 
         // prepare the vm
-        let vm = SymVM::new(&self.setup, &involved_structs);
+        let vm = SymVM::new(involved_structs);
 
         // do the interpretation
         vm.interpret(

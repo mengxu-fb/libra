@@ -3,8 +3,7 @@
 
 #![forbid(unsafe_code)]
 
-use log::debug;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use move_core_types::account_address::AccountAddress;
 use vm::{
@@ -14,7 +13,7 @@ use vm::{
 
 use crate::{
     sym_exec_graph::ExecGraph,
-    sym_setup::{ExecTypeArg, StructContext, StructInfo, SymSetup},
+    sym_setup::{ExecTypeArg, StructContext},
     sym_smtlib::SmtCtxt,
     sym_vm_types::{SymTransactionArgument, SymValue},
 };
@@ -32,32 +31,11 @@ pub(crate) struct SymVM {
 
 impl SymVM {
     pub fn new(
-        setup: &SymSetup,
-        involved_structs: &HashMap<StructContext, HashSet<Vec<ExecTypeArg>>>,
+        involved_structs: HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) -> Self {
-        let mut smt_struct_names = HashMap::new();
-
-        // pre-construct the smt types for structs
-        for (struct_context, struct_variants) in involved_structs {
-            let struct_info = setup.get_struct_info_by_context(struct_context).unwrap();
-
-            if let StructInfo::Declared { .. } = struct_info {
-                for (i, struct_inst) in struct_variants.iter().enumerate() {
-                    let smt_name = format!("{}-{}", struct_context, i);
-                    let exists = smt_struct_names
-                        .entry(struct_context.clone())
-                        .or_insert_with(HashMap::new)
-                        .insert(struct_inst.clone(), smt_name.clone());
-                    debug_assert!(exists.is_none());
-                }
-            } else {
-                debug!("Ignoring native struct: {}", struct_context);
-            }
-        }
-        // done
         Self {
             smt_ctxt: SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY),
-            _smt_struct_names: smt_struct_names,
+            _smt_struct_names: involved_structs,
         }
     }
 
