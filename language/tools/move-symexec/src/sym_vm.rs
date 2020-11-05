@@ -3,8 +3,6 @@
 
 #![forbid(unsafe_code)]
 
-use std::collections::HashMap;
-
 use move_core_types::account_address::AccountAddress;
 use vm::{
     access::ScriptAccess,
@@ -13,8 +11,9 @@ use vm::{
 
 use crate::{
     sym_exec_graph::ExecGraph,
-    sym_setup::{ExecTypeArg, StructContext},
+    sym_setup::ExecTypeArg,
     sym_smtlib::SmtCtxt,
+    sym_type_graph::TypeGraph,
     sym_vm_types::{SymTransactionArgument, SymValue},
 };
 
@@ -22,20 +21,18 @@ use crate::{
 const CONF_SMT_AUTO_SIMPLIFY: bool = true;
 
 /// The symbolic interpreter that examines instructions one by one
-pub(crate) struct SymVM {
+pub(crate) struct SymVM<'a> {
     /// A wrapper over the smt solver context manager
     smt_ctxt: SmtCtxt,
     /// Maps all struct types to names of the corresponding smt types
-    _smt_struct_names: HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
+    _type_graph: &'a TypeGraph,
 }
 
-impl SymVM {
-    pub fn new(
-        involved_structs: HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
-    ) -> Self {
+impl<'a> SymVM<'a> {
+    pub fn new(_type_graph: &'a TypeGraph) -> Self {
         Self {
             smt_ctxt: SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY),
-            _smt_struct_names: involved_structs,
+            _type_graph,
         }
     }
 

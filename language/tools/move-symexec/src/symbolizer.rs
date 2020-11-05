@@ -13,7 +13,8 @@ use vm::file_format::CompiledScript;
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker},
-    sym_setup::{ExecTypeArg, StructContext, SymSetup},
+    sym_setup::{ExecTypeArg, SymSetup},
+    sym_type_graph::TypeGraph,
     sym_vm::SymVM,
     sym_vm_types::SymTransactionArgument,
     utils,
@@ -34,6 +35,7 @@ pub(crate) struct MoveSymbolizer<'a> {
     script: &'a CompiledScript,
     type_args: Vec<ExecTypeArg>,
     exec_graph: ExecGraph,
+    type_graph: TypeGraph,
 }
 
 impl<'a> MoveSymbolizer<'a> {
@@ -55,6 +57,9 @@ impl<'a> MoveSymbolizer<'a> {
         // build execution graph
         let exec_graph = ExecGraph::new(setup, script, &type_args);
 
+        // build type graph
+        let type_graph = MoveSymbolizer::discover_structs(setup, &exec_graph);
+
         // done
         Ok(Self {
             workdir,
@@ -62,6 +67,7 @@ impl<'a> MoveSymbolizer<'a> {
             script,
             type_args,
             exec_graph,
+            type_graph,
         })
     }
 
@@ -112,37 +118,35 @@ impl<'a> MoveSymbolizer<'a> {
         Ok(())
     }
 
-    fn discover_structs(&self) -> HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>> {
+    fn discover_structs(setup: &SymSetup, exec_graph: &ExecGraph) -> TypeGraph {
         // holds the struct types we have discovered so far
         let mut involved_structs = HashMap::new();
+        let mut analyzed_structs = HashMap::new();
 
         // find all places that may use a struct type
-        let mut walker = ExecWalker::new(&self.exec_graph);
+        let mut walker = ExecWalker::new(exec_graph);
         while let Some((_, exec_block)) = walker.next() {
-            let exec_unit = self
-                .setup
+            let exec_unit = setup
                 .get_exec_unit_by_context(&exec_block.code_context)
                 .unwrap();
             for instruction in exec_block.instructions.iter() {
-                self.setup.collect_involved_structs_in_instruction(
+                setup.collect_involved_structs_in_instruction(
                     instruction,
                     exec_unit,
                     &exec_block.type_args,
                     &mut involved_structs,
+                    &mut analyzed_structs,
                 );
             }
         }
 
         // done
-        involved_structs
+        TypeGraph::new(involved_structs, analyzed_structs)
     }
 
     pub fn execute(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
-        // struct discovery
-        let involved_structs = self.discover_structs();
-
         // prepare the vm
-        let vm = SymVM::new(involved_structs);
+        let vm = SymVM::new(&self.type_graph);
 
         // do the interpretation
         vm.interpret(

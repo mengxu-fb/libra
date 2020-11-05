@@ -72,12 +72,23 @@ impl fmt::Display for StructContext {
     }
 }
 
+/// Declared, un-instantiated struct information
 #[derive(Clone, Debug)]
 pub(crate) enum StructInfo<'a> {
     Native,
     Declared {
         field_vec: Vec<Identifier>,
         field_map: HashMap<Identifier, &'a TypeSignature>,
+    },
+}
+
+/// Involved, fully instantiated struct information
+#[derive(Clone, Debug)]
+pub(crate) enum ExecStructInfo {
+    Native,
+    Declared {
+        field_vec: Vec<Identifier>,
+        field_map: HashMap<Identifier, ExecTypeArg>,
     },
 }
 
@@ -666,6 +677,7 @@ impl<'a> SymSetup<'a> {
         &self,
         arg: &ExecTypeArg,
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
+        analyzed_structs: &mut HashMap<String, ExecStructInfo>,
     ) {
         match arg {
             ExecTypeArg::Bool
@@ -675,46 +687,84 @@ impl<'a> SymSetup<'a> {
             | ExecTypeArg::Address
             | ExecTypeArg::Signer => {}
             ExecTypeArg::Vector { element_type } => {
-                self.collect_involved_structs_in_type_arg(element_type.as_ref(), involved_structs);
+                self.collect_involved_structs_in_type_arg(
+                    element_type.as_ref(),
+                    involved_structs,
+                    analyzed_structs,
+                );
             }
             ExecTypeArg::Struct { context, type_args } => {
-                // we need to find the compilation unit that defines
-                // this struct
+                // we need to find the compilation unit in which this
+                // struct is defined
                 let comp_unit = self.get_comp_unit_by_struct_context(context).unwrap();
 
                 let variants = involved_structs
                     .entry(context.clone())
                     .or_insert_with(HashMap::new);
 
-                let inst_name = format!("{}-{}", context, variants.len());
-                if variants.insert(type_args.clone(), inst_name).is_none() {
+                if !variants.contains_key(type_args) {
+                    let inst_name = format!("{}-{}", context, variants.len());
+                    variants.insert(type_args.clone(), inst_name.clone());
+
                     // recursively handle the fields in this struct
                     let struct_info = self.get_struct_info_by_context(context).unwrap();
-                    if let StructInfo::Declared { field_map, .. } = struct_info {
-                        for field_type in field_map.values() {
-                            self.collect_involved_structs_in_signature_token(
-                                &field_type.0,
-                                &comp_unit,
-                                type_args,
-                                involved_structs,
-                            );
+                    let exec_struct_info = match struct_info {
+                        StructInfo::Native => ExecStructInfo::Native,
+                        StructInfo::Declared {
+                            field_vec,
+                            field_map,
+                        } => {
+                            let mut exec_field_map: HashMap<Identifier, ExecTypeArg> =
+                                HashMap::new();
+                            for (field_name, field_type) in field_map {
+                                let exec_field_type = self
+                                    .collect_involved_structs_in_signature_token(
+                                        &field_type.0,
+                                        &comp_unit,
+                                        type_args,
+                                        involved_structs,
+                                        analyzed_structs,
+                                    );
+                                exec_field_map.insert(field_name.clone(), exec_field_type);
+                            }
+                            ExecStructInfo::Declared {
+                                field_vec: field_vec.clone(),
+                                field_map: exec_field_map,
+                            }
                         }
-                    }
+                    };
+
                     // this should be redundent, as there is no reason
                     // to declare a generic struct without using its
                     // type parameter sin (at least) one of the fields,
                     // but just in case, this is added here.
                     for type_arg in type_args {
-                        self.collect_involved_structs_in_type_arg(type_arg, involved_structs);
+                        self.collect_involved_structs_in_type_arg(
+                            type_arg,
+                            involved_structs,
+                            analyzed_structs,
+                        );
                     }
+
+                    // mark that we have handled this struct
+                    let exists = analyzed_structs.insert(inst_name, exec_struct_info);
+                    debug_assert!(exists.is_none());
                 }
             }
             ExecTypeArg::Reference { referred_type }
             | ExecTypeArg::MutableReference { referred_type } => {
-                self.collect_involved_structs_in_type_arg(referred_type.as_ref(), involved_structs);
+                self.collect_involved_structs_in_type_arg(
+                    referred_type.as_ref(),
+                    involved_structs,
+                    analyzed_structs,
+                );
             }
             ExecTypeArg::TypeParameter { actual_type, .. } => {
-                self.collect_involved_structs_in_type_arg(actual_type.as_ref(), involved_structs);
+                self.collect_involved_structs_in_type_arg(
+                    actual_type.as_ref(),
+                    involved_structs,
+                    analyzed_structs,
+                );
             }
         }
     }
@@ -726,7 +776,8 @@ impl<'a> SymSetup<'a> {
         comp_unit: &CompUnit,
         type_args: &[ExecTypeArg],
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
-    ) {
+        analyzed_structs: &mut HashMap<String, ExecStructInfo>,
+    ) -> ExecTypeArg {
         let inst_args: Vec<ExecTypeArg> = inst_tokens
             .iter()
             .map(|token| ExecTypeArg::convert_from_signature_token(token, comp_unit, type_args))
@@ -739,7 +790,8 @@ impl<'a> SymSetup<'a> {
             context: context.clone(),
             type_args: inst_args,
         };
-        self.collect_involved_structs_in_type_arg(&arg, involved_structs);
+        self.collect_involved_structs_in_type_arg(&arg, involved_structs, analyzed_structs);
+        arg
     }
 
     fn collect_involved_structs_in_signature_token(
@@ -748,9 +800,11 @@ impl<'a> SymSetup<'a> {
         comp_unit: &CompUnit,
         type_args: &[ExecTypeArg],
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
-    ) {
+        analyzed_structs: &mut HashMap<String, ExecStructInfo>,
+    ) -> ExecTypeArg {
         let arg = ExecTypeArg::convert_from_signature_token(token, comp_unit, type_args);
-        self.collect_involved_structs_in_type_arg(&arg, involved_structs);
+        self.collect_involved_structs_in_type_arg(&arg, involved_structs, analyzed_structs);
+        arg
     }
 
     pub fn collect_involved_structs_in_instruction(
@@ -759,6 +813,7 @@ impl<'a> SymSetup<'a> {
         exec_unit: &ExecUnit,
         type_args: &[ExecTypeArg],
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
+        analyzed_structs: &mut HashMap<String, ExecStructInfo>,
     ) {
         match instruction {
             Bytecode::CopyLoc(local_index)
@@ -772,6 +827,7 @@ impl<'a> SymSetup<'a> {
                     &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
+                    analyzed_structs,
                 );
             }
             Bytecode::Pack(struct_def_index)
@@ -788,6 +844,7 @@ impl<'a> SymSetup<'a> {
                     &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
+                    analyzed_structs,
                 );
             }
             Bytecode::PackGeneric(struct_inst_index)
@@ -806,6 +863,7 @@ impl<'a> SymSetup<'a> {
                     &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
+                    analyzed_structs,
                 );
             }
             Bytecode::MutBorrowField(field_index) | Bytecode::ImmBorrowField(field_index) => {
@@ -816,6 +874,7 @@ impl<'a> SymSetup<'a> {
                     &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
+                    analyzed_structs,
                 );
             }
             Bytecode::MutBorrowFieldGeneric(field_inst_index)
@@ -829,6 +888,7 @@ impl<'a> SymSetup<'a> {
                     &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
+                    analyzed_structs,
                 );
             }
             _ => {}
