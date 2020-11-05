@@ -303,7 +303,9 @@ impl ExecGraph {
                             .iter()
                             .map(|token| {
                                 ExecTypeArg::convert_from_signature_token(
-                                    token, exec_unit, type_args,
+                                    token,
+                                    &exec_unit.as_comp_unit(),
+                                    type_args,
                                 )
                             })
                             .collect();

@@ -81,6 +81,59 @@ pub(crate) enum StructInfo<'a> {
     },
 }
 
+/// unify script and module accesses
+#[derive(Clone, Debug)]
+pub(crate) enum CompUnit<'a> {
+    Script(&'a CompiledScript),
+    Module(&'a CompiledModule),
+}
+
+impl CompUnit<'_> {
+    fn module_handle_at(&self, idx: ModuleHandleIndex) -> &ModuleHandle {
+        match self {
+            CompUnit::Script(unit) => unit.module_handle_at(idx),
+            CompUnit::Module(unit) => unit.module_handle_at(idx),
+        }
+    }
+
+    fn struct_handle_at(&self, idx: StructHandleIndex) -> &StructHandle {
+        match self {
+            CompUnit::Script(unit) => unit.struct_handle_at(idx),
+            CompUnit::Module(unit) => unit.struct_handle_at(idx),
+        }
+    }
+
+    fn address_identifier_at(&self, idx: AddressIdentifierIndex) -> &AccountAddress {
+        match self {
+            CompUnit::Script(unit) => unit.address_identifier_at(idx),
+            CompUnit::Module(unit) => unit.address_identifier_at(idx),
+        }
+    }
+
+    fn identifier_at(&self, idx: IdentifierIndex) -> &IdentStr {
+        match self {
+            CompUnit::Script(unit) => unit.identifier_at(idx),
+            CompUnit::Module(unit) => unit.identifier_at(idx),
+        }
+    }
+
+    pub fn module_id_by_index(&self, idx: ModuleHandleIndex) -> ModuleId {
+        let handle = self.module_handle_at(idx);
+        ModuleId::new(
+            *self.address_identifier_at(handle.address),
+            self.identifier_at(handle.name).to_owned(),
+        )
+    }
+
+    pub fn struct_context_by_handle_index(&self, idx: StructHandleIndex) -> StructContext {
+        let handle = self.struct_handle_at(idx);
+        StructContext {
+            module_id: self.module_id_by_index(handle.module),
+            struct_name: self.identifier_at(handle.name).to_owned(),
+        }
+    }
+}
+
 /// unify script and function accesses
 #[derive(Clone, Debug)]
 pub(crate) enum ExecUnit<'a> {
@@ -89,6 +142,13 @@ pub(crate) enum ExecUnit<'a> {
 }
 
 impl ExecUnit<'_> {
+    pub fn as_comp_unit(&self) -> CompUnit {
+        match self {
+            ExecUnit::Script(unit) => CompUnit::Script(unit),
+            ExecUnit::Module(unit, _) => CompUnit::Module(unit),
+        }
+    }
+
     fn module_handle_at(&self, idx: ModuleHandleIndex) -> &ModuleHandle {
         match self {
             ExecUnit::Script(unit) => unit.module_handle_at(idx),
@@ -185,14 +245,6 @@ impl ExecUnit<'_> {
     pub fn code_context_by_generic_index(&self, idx: FunctionInstantiationIndex) -> CodeContext {
         let instantiation = self.function_instantiation_at(idx);
         self.code_context_by_index(instantiation.handle)
-    }
-
-    pub fn struct_context_by_handle_index(&self, idx: StructHandleIndex) -> StructContext {
-        let handle = self.struct_handle_at(idx);
-        StructContext {
-            module_id: self.module_id_by_index(handle.module),
-            struct_name: self.identifier_at(handle.name).to_owned(),
-        }
     }
 
     pub fn struct_context_by_def_index(&self, idx: StructDefinitionIndex) -> StructContext {
@@ -384,7 +436,7 @@ impl ExecTypeArg {
 
     pub fn convert_from_signature_token(
         token: &SignatureToken,
-        exec_unit: &ExecUnit,
+        comp_unit: &CompUnit,
         type_args: &[ExecTypeArg],
     ) -> ExecTypeArg {
         match token {
@@ -397,34 +449,34 @@ impl ExecTypeArg {
             SignatureToken::Vector(element_sig) => ExecTypeArg::Vector {
                 element_type: Box::new(ExecTypeArg::convert_from_signature_token(
                     element_sig.as_ref(),
-                    exec_unit,
+                    comp_unit,
                     type_args,
                 )),
             },
             SignatureToken::Struct(handle_index) => ExecTypeArg::Struct {
-                context: exec_unit.struct_context_by_handle_index(*handle_index),
+                context: comp_unit.struct_context_by_handle_index(*handle_index),
                 type_args: vec![],
             },
             SignatureToken::StructInstantiation(handle_index, inst_tokens) => ExecTypeArg::Struct {
-                context: exec_unit.struct_context_by_handle_index(*handle_index),
+                context: comp_unit.struct_context_by_handle_index(*handle_index),
                 type_args: inst_tokens
                     .iter()
                     .map(|inst_token| {
-                        ExecTypeArg::convert_from_signature_token(inst_token, exec_unit, type_args)
+                        ExecTypeArg::convert_from_signature_token(inst_token, comp_unit, type_args)
                     })
                     .collect(),
             },
             SignatureToken::Reference(referred_sig) => ExecTypeArg::Reference {
                 referred_type: Box::new(ExecTypeArg::convert_from_signature_token(
                     referred_sig.as_ref(),
-                    exec_unit,
+                    comp_unit,
                     type_args,
                 )),
             },
             SignatureToken::MutableReference(referred_sig) => ExecTypeArg::MutableReference {
                 referred_type: Box::new(ExecTypeArg::convert_from_signature_token(
                     referred_sig.as_ref(),
-                    exec_unit,
+                    comp_unit,
                     type_args,
                 )),
             },
@@ -503,6 +555,12 @@ impl<'a> SymSetup<'a> {
                 .map(|func_map| func_map.get(function_name))
                 .flatten(),
         }
+    }
+
+    pub fn get_comp_unit_by_struct_context(&self, context: &StructContext) -> Option<CompUnit> {
+        self.loaded_modules
+            .get(&context.module_id)
+            .map(|module| CompUnit::Module(module))
     }
 
     pub fn get_struct_info_by_context(&self, context: &StructContext) -> Option<&StructInfo> {
@@ -607,7 +665,6 @@ impl<'a> SymSetup<'a> {
     fn collect_involved_structs_in_type_arg(
         &self,
         arg: &ExecTypeArg,
-        exec_unit: &ExecUnit,
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
         match arg {
@@ -618,13 +675,13 @@ impl<'a> SymSetup<'a> {
             | ExecTypeArg::Address
             | ExecTypeArg::Signer => {}
             ExecTypeArg::Vector { element_type } => {
-                self.collect_involved_structs_in_type_arg(
-                    element_type.as_ref(),
-                    exec_unit,
-                    involved_structs,
-                );
+                self.collect_involved_structs_in_type_arg(element_type.as_ref(), involved_structs);
             }
             ExecTypeArg::Struct { context, type_args } => {
+                // we need to find the compilation unit that defines
+                // this struct
+                let comp_unit = self.get_comp_unit_by_struct_context(context).unwrap();
+
                 let variants = involved_structs
                     .entry(context.clone())
                     .or_insert_with(HashMap::new);
@@ -637,7 +694,7 @@ impl<'a> SymSetup<'a> {
                         for field_type in field_map.values() {
                             self.collect_involved_structs_in_signature_token(
                                 &field_type.0,
-                                exec_unit,
+                                &comp_unit,
                                 type_args,
                                 involved_structs,
                             );
@@ -648,28 +705,16 @@ impl<'a> SymSetup<'a> {
                     // type parameter sin (at least) one of the fields,
                     // but just in case, this is added here.
                     for type_arg in type_args {
-                        self.collect_involved_structs_in_type_arg(
-                            type_arg,
-                            exec_unit,
-                            involved_structs,
-                        );
+                        self.collect_involved_structs_in_type_arg(type_arg, involved_structs);
                     }
                 }
             }
             ExecTypeArg::Reference { referred_type }
             | ExecTypeArg::MutableReference { referred_type } => {
-                self.collect_involved_structs_in_type_arg(
-                    referred_type.as_ref(),
-                    exec_unit,
-                    involved_structs,
-                );
+                self.collect_involved_structs_in_type_arg(referred_type.as_ref(), involved_structs);
             }
             ExecTypeArg::TypeParameter { actual_type, .. } => {
-                self.collect_involved_structs_in_type_arg(
-                    actual_type.as_ref(),
-                    exec_unit,
-                    involved_structs,
-                );
+                self.collect_involved_structs_in_type_arg(actual_type.as_ref(), involved_structs);
             }
         }
     }
@@ -678,13 +723,13 @@ impl<'a> SymSetup<'a> {
         &self,
         context: &StructContext,
         inst_tokens: &[SignatureToken],
-        exec_unit: &ExecUnit,
+        comp_unit: &CompUnit,
         type_args: &[ExecTypeArg],
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
         let inst_args: Vec<ExecTypeArg> = inst_tokens
             .iter()
-            .map(|token| ExecTypeArg::convert_from_signature_token(token, exec_unit, type_args))
+            .map(|token| ExecTypeArg::convert_from_signature_token(token, comp_unit, type_args))
             .collect();
 
         // when analyzing struct fields, the type_args should be updated
@@ -694,18 +739,18 @@ impl<'a> SymSetup<'a> {
             context: context.clone(),
             type_args: inst_args,
         };
-        self.collect_involved_structs_in_type_arg(&arg, exec_unit, involved_structs);
+        self.collect_involved_structs_in_type_arg(&arg, involved_structs);
     }
 
     fn collect_involved_structs_in_signature_token(
         &self,
         token: &SignatureToken,
-        exec_unit: &ExecUnit,
+        comp_unit: &CompUnit,
         type_args: &[ExecTypeArg],
         involved_structs: &mut HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
     ) {
-        let arg = ExecTypeArg::convert_from_signature_token(token, exec_unit, type_args);
-        self.collect_involved_structs_in_type_arg(&arg, exec_unit, involved_structs);
+        let arg = ExecTypeArg::convert_from_signature_token(token, comp_unit, type_args);
+        self.collect_involved_structs_in_type_arg(&arg, involved_structs);
     }
 
     pub fn collect_involved_structs_in_instruction(
@@ -724,7 +769,7 @@ impl<'a> SymSetup<'a> {
                 let token = exec_unit.local_signature_token(*local_index);
                 self.collect_involved_structs_in_signature_token(
                     token,
-                    exec_unit,
+                    &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
                 );
@@ -740,7 +785,7 @@ impl<'a> SymSetup<'a> {
                 self.collect_involved_structs_recursive(
                     &context,
                     &[],
-                    exec_unit,
+                    &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
                 );
@@ -758,7 +803,7 @@ impl<'a> SymSetup<'a> {
                 self.collect_involved_structs_recursive(
                     &context,
                     &inst_sig.0,
-                    exec_unit,
+                    &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
                 );
@@ -768,7 +813,7 @@ impl<'a> SymSetup<'a> {
                 self.collect_involved_structs_recursive(
                     &context,
                     &[],
-                    exec_unit,
+                    &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
                 );
@@ -781,7 +826,7 @@ impl<'a> SymSetup<'a> {
                 self.collect_involved_structs_recursive(
                     &context,
                     &inst_sig.0,
-                    exec_unit,
+                    &exec_unit.as_comp_unit(),
                     type_args,
                     involved_structs,
                 );
