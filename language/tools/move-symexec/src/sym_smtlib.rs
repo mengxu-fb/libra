@@ -22,6 +22,7 @@ pub enum SmtResult {
 struct SmtStructInfo {
     sort: Z3_sort,
     constructor: Z3_func_decl,
+    field_kinds: Vec<SmtKind>,
     field_getters: Vec<Z3_func_decl>,
 }
 
@@ -62,6 +63,7 @@ impl SmtCtxt {
         // prepare fields
         let num_fields = struct_fields.len();
         let mut field_names: Vec<Z3_symbol> = vec![];
+        let mut field_kinds: Vec<SmtKind> = vec![];
         let mut field_sorts: Vec<Z3_sort> = vec![];
         for (field_name, field_kind) in struct_fields.iter() {
             // derive field name
@@ -71,11 +73,14 @@ impl SmtCtxt {
 
             // derive field sort
             field_sorts.push(field_kind.to_z3_sort(self));
+
+            // record field kind
+            field_kinds.push(field_kind.clone());
         }
 
         // prepare receivers
         let mut constructor: Z3_func_decl = null_mut();
-        let mut field_getters: Vec<Z3_func_decl> = Vec::with_capacity(num_fields);
+        let mut field_getters: Vec<Z3_func_decl> = vec![null_mut(); num_fields];
 
         // make the tuple sort
         let c_str = CString::new(struct_name.as_str()).unwrap();
@@ -88,7 +93,7 @@ impl SmtCtxt {
                 field_names.as_ptr(),
                 field_sorts.as_ptr(),
                 &mut constructor,
-                field_getters.as_mut_ptr(),
+                field_getters.get_mut(0).unwrap(),
             )
         };
 
@@ -96,6 +101,7 @@ impl SmtCtxt {
         let struct_info = SmtStructInfo {
             sort: struct_sort,
             constructor,
+            field_kinds,
             field_getters,
         };
         let exists = self.struct_map.insert(struct_name, struct_info);
@@ -252,6 +258,61 @@ impl SmtCtxt {
             ast,
             ctxt: self,
             kind,
+        }
+    }
+
+    /// Create a struct with pre-defined contents
+    /// Similar to vector_const, although the function is named const,
+    /// the contents are essentially smt expressions and thus, may
+    /// include variables.
+    pub fn struct_const(&self, struct_kind: &SmtKind, fields: &[&SmtExpr]) -> SmtExpr {
+        // get struct name
+        let struct_name = match struct_kind {
+            SmtKind::Struct { struct_name } => struct_name,
+            _ => {
+                panic!("Invalid kind for struct construction");
+            }
+        };
+        let struct_info = self.struct_map.get(struct_name).unwrap();
+
+        // check type consistency
+        let num_fields = fields.len();
+        debug_assert_eq!(num_fields, struct_info.field_getters.len());
+
+        // prepare arguments
+        let fields_ast: Vec<Z3_ast> = fields.iter().map(|expr| expr.ast).collect();
+        let ast = unsafe {
+            Z3_mk_app(
+                self.ctxt,
+                struct_info.constructor,
+                num_fields as c_uint,
+                fields_ast.as_ptr(),
+            )
+        };
+
+        // post-processing
+        let kind = SmtKind::Struct {
+            struct_name: struct_name.to_owned(),
+        };
+        let ast = self.postprocess(ast, &kind);
+        SmtExpr {
+            ast,
+            ctxt: self,
+            kind,
+        }
+    }
+
+    /// Struct variable
+    pub fn struct_var(&self, struct_kind: &SmtKind, var: &str) -> SmtExpr {
+        let c_str = CString::new(var).unwrap();
+        let ast = unsafe {
+            let symbol = Z3_mk_string_symbol(self.ctxt, c_str.as_ptr());
+            Z3_mk_const(self.ctxt, symbol, struct_kind.to_z3_sort(self))
+        };
+        SmtExpr {
+            ast,
+            ctxt: self,
+            kind: struct_kind.clone(),
         }
     }
 
@@ -623,6 +684,43 @@ impl<'a> SmtExpr<'a> {
     pub fn ne(&self, rhs: &SmtExpr<'a>) -> SmtExpr<'a> {
         smt_binary_op_generic_to_bool_by_term!(Z3_mk_distinct, self, rhs)
     }
+
+    // struct operations
+    pub fn unpack(&self) -> Vec<SmtExpr<'a>> {
+        let ctxt = self.ctxt;
+
+        // get struct info
+        let struct_info = if let SmtKind::Struct { struct_name } = &self.kind {
+            ctxt.struct_map.get(struct_name).unwrap()
+        } else {
+            panic!("Only structs can be unpacked");
+        };
+
+        // prepare arguments
+        let struct_ast: [Z3_ast; 1] = [self.ast];
+        let asts: Vec<Z3_ast> = struct_info
+            .field_getters
+            .iter()
+            .map(|getter| unsafe { Z3_mk_app(ctxt.ctxt, *getter, 1, struct_ast.as_ptr()) })
+            .collect();
+
+        // post-processing
+        let asts: Vec<Z3_ast> = asts
+            .into_iter()
+            .enumerate()
+            .map(|(i, ast)| ctxt.postprocess(ast, struct_info.field_kinds.get(i).unwrap()))
+            .collect();
+
+        // done
+        asts.into_iter()
+            .enumerate()
+            .map(|(i, ast)| SmtExpr {
+                ast,
+                ctxt,
+                kind: struct_info.field_kinds.get(i).unwrap().clone(),
+            })
+            .collect()
+    }
 }
 
 // unit testing for the smtlib
@@ -640,8 +738,45 @@ mod tests {
         );
     }
 
+    fn make_ctxt(conf_auto_simplify: bool) -> SmtCtxt {
+        let mut ctxt = SmtCtxt::new(conf_auto_simplify);
+
+        // populate with two struct types
+        ctxt.create_smt_struct(
+            String::from("dummy"),
+            vec![
+                (String::from("val_u64"), SmtKind::bitvec_u64()),
+                (
+                    String::from("val_vec_u8"),
+                    SmtKind::Vector {
+                        element_kind: Box::new(SmtKind::bitvec_u8()),
+                    },
+                ),
+            ],
+        );
+        let struct_kind_dummy = SmtKind::Struct {
+            struct_name: String::from("dummy"),
+        };
+
+        ctxt.create_smt_struct(
+            String::from("nested"),
+            vec![
+                (String::from("val_dummy"), struct_kind_dummy.clone()),
+                (
+                    String::from("val_vec_dummy"),
+                    SmtKind::Vector {
+                        element_kind: Box::new(struct_kind_dummy),
+                    },
+                ),
+            ],
+        );
+
+        // done
+        ctxt
+    }
+
     fn ctxt_variants() -> Vec<SmtCtxt> {
-        vec![SmtCtxt::new(true), SmtCtxt::new(false)]
+        vec![make_ctxt(true), make_ctxt(false)]
     }
 
     macro_rules! prove {
@@ -891,6 +1026,47 @@ mod tests {
 
             // EQ || NE
             prove_qn!(ctxt, &expr_vec_u8_00_01, &expr_vec_u8_x);
+        }
+    }
+
+    #[test]
+    fn test_struct() {
+        for ctxt in ctxt_variants().iter() {
+            // dummy struct type
+            let struct_kind_dummy = SmtKind::Struct {
+                struct_name: String::from("dummy"),
+            };
+
+            // constants
+            let expr_u64_x = ctxt.bitvec_var_u64("x");
+
+            let expr_u8_y1 = ctxt.bitvec_var_u8("y1");
+            let expr_u8_y2 = ctxt.bitvec_var_u8("y2");
+            let expr_vec_u8_y1_y2 =
+                ctxt.vector_const(&SmtKind::bitvec_u8(), &[&expr_u8_y1, &expr_u8_y2]);
+
+            // pack
+            let expr_struct_dummy_x_y1y2 =
+                ctxt.struct_const(&struct_kind_dummy, &[&expr_u64_x, &expr_vec_u8_y1_y2]);
+            prove_eq!(ctxt, &expr_struct_dummy_x_y1y2, &expr_struct_dummy_x_y1y2);
+
+            // unpack
+            let expr_struct_dummy_fields = expr_struct_dummy_x_y1y2.unpack();
+            debug_assert_eq!(expr_struct_dummy_fields.len(), 2);
+
+            // check
+            prove_eq!(ctxt, expr_struct_dummy_fields.get(0).unwrap(), &expr_u64_x);
+            prove_eq!(
+                ctxt,
+                expr_struct_dummy_fields.get(1).unwrap(),
+                &expr_vec_u8_y1_y2
+            );
+
+            // variable
+            let expr_struct_dummy_z = ctxt.struct_var(&struct_kind_dummy, "z");
+
+            // EQ || NE
+            prove_qn!(ctxt, &expr_struct_dummy_x_y1y2, &expr_struct_dummy_z);
         }
     }
 }
