@@ -179,7 +179,7 @@ impl<'a> SymValue<'a> {
             SignatureToken::U8 => SymValue::u8_arg(ctxt, arg),
             SignatureToken::U64 => SymValue::u64_arg(ctxt, arg),
             SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
-            SignatureToken::Address => SymValue::address_arg(ctxt, arg),
+            SignatureToken::Address | SignatureToken::Signer => SymValue::address_arg(ctxt, arg),
             SignatureToken::Vector(element) => {
                 // the only supported vector element type from
                 // TransactionArgument is U8Vector, hence the assert.
@@ -370,5 +370,24 @@ pub(crate) fn parse_sym_transaction_argument(s: &str) -> Result<SymTransactionAr
         Ok(SymTransactionArgument::Symbolic(tokens[1].to_owned()))
     } else {
         bail!("Invalid symbolic transaction argument");
+    }
+}
+
+/// A symbolic version of the struct used in concrete execution
+/// [Locals] (move_vm_types::values::Locals)
+pub(crate) struct SymLocals<'a> {
+    _slots: Vec<Option<&'a SymValue<'a>>>,
+}
+
+impl<'a> SymLocals<'a> {
+    pub fn new(size: usize, args: &'a [SymValue]) -> Self {
+        let mut slots = Vec::with_capacity(size);
+        for sym in args {
+            slots.push(Some(sym));
+        }
+        for _ in 0..(size - args.len()) {
+            slots.push(None);
+        }
+        Self { _slots: slots }
     }
 }

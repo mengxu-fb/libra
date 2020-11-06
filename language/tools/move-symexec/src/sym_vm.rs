@@ -5,7 +5,7 @@
 
 use log::warn;
 
-use move_core_types::account_address::AccountAddress;
+use move_core_types::{account_address::AccountAddress, transaction_argument::TransactionArgument};
 use vm::{
     access::ScriptAccess,
     file_format::{CompiledScript, SignatureToken},
@@ -16,7 +16,7 @@ use crate::{
     sym_setup::{ExecStructInfo, ExecTypeArg},
     sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
-    sym_vm_types::{SymTransactionArgument, SymValue},
+    sym_vm_types::{SymLocals, SymTransactionArgument, SymValue},
 };
 
 /// Config: whether to simplify smt expressions upon construction
@@ -111,9 +111,11 @@ impl<'a> SymVM<'a> {
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
     ) {
+        // check that we got the correct number of type arguments
+        debug_assert_eq!(type_args.len(), script.as_inner().type_parameters.len());
+
         // collect value signatures
         let val_arg_sigs = script.signature_at(script.as_inner().parameters);
-        let _init_local_sigs = script.signature_at(script.code().locals);
 
         // check that we got the correct number of value arguments
         // NOTE: signers must come before value arguments, if present
@@ -145,19 +147,28 @@ impl<'a> SymVM<'a> {
         };
 
         // turn transaction argument into values
-        let _sym_inputs: Vec<SymValue> = sym_args
-            .iter()
-            .enumerate()
-            .map(|(i, arg)| {
-                SymValue::from_transaction_argument(
+        let mut sym_inputs: Vec<SymValue> = vec![];
+        if use_signers {
+            for signer in signers {
+                sym_inputs.push(SymValue::from_transaction_argument(
                     &self.smt_ctxt,
-                    val_arg_sigs.0.get(arg_index_start + i).unwrap(),
-                    arg,
-                )
-            })
-            .collect();
+                    &SignatureToken::Signer,
+                    &SymTransactionArgument::Concrete(TransactionArgument::Address(*signer)),
+                ));
+            }
+        }
+        for (i, arg) in sym_args.iter().enumerate() {
+            sym_inputs.push(SymValue::from_transaction_argument(
+                &self.smt_ctxt,
+                val_arg_sigs.0.get(arg_index_start + i).unwrap(),
+                arg,
+            ));
+        }
 
-        // check that we got the correct number of type arguments
-        debug_assert_eq!(type_args.len(), script.as_inner().type_parameters.len());
+        // prepare the init locals: the locals consist of two parts
+        // - the arguments, which have initial symbolic values set and
+        // - the local variables, which are empty in the beginning
+        let init_local_sigs = script.signature_at(script.code().locals);
+        SymLocals::new(sym_inputs.len() + init_local_sigs.len(), &sym_inputs);
     }
 }
