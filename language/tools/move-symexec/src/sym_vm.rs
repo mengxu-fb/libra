@@ -3,6 +3,8 @@
 
 #![forbid(unsafe_code)]
 
+use log::warn;
+
 use move_core_types::account_address::AccountAddress;
 use vm::{
     access::ScriptAccess,
@@ -11,8 +13,8 @@ use vm::{
 
 use crate::{
     sym_exec_graph::ExecGraph,
-    sym_setup::ExecTypeArg,
-    sym_smtlib::SmtCtxt,
+    sym_setup::{ExecStructInfo, ExecTypeArg},
+    sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
     sym_vm_types::{SymTransactionArgument, SymValue},
 };
@@ -29,10 +31,75 @@ pub(crate) struct SymVM<'a> {
 }
 
 impl<'a> SymVM<'a> {
-    pub fn new(_type_graph: &'a TypeGraph) -> Self {
+    fn type_arg_to_smt_kind(type_arg: &ExecTypeArg, type_graph: &TypeGraph) -> SmtKind {
+        match type_arg {
+            ExecTypeArg::Bool => SmtKind::Bool,
+            ExecTypeArg::U8 => SmtKind::bitvec_u8(),
+            ExecTypeArg::U64 => SmtKind::bitvec_u64(),
+            ExecTypeArg::U128 => SmtKind::bitvec_u128(),
+            ExecTypeArg::Address => SmtKind::bitvec_address(),
+            ExecTypeArg::Signer => SmtKind::bitvec_address(),
+            ExecTypeArg::Vector { element_type } => SmtKind::Vector {
+                element_kind: Box::new(SymVM::type_arg_to_smt_kind(
+                    element_type.as_ref(),
+                    type_graph,
+                )),
+            },
+            ExecTypeArg::Struct { context, type_args } => SmtKind::Struct {
+                struct_name: type_graph
+                    .get_struct_name(context, type_args)
+                    .unwrap()
+                    .to_owned(),
+            },
+            ExecTypeArg::Reference { referred_type }
+            | ExecTypeArg::MutableReference { referred_type } => SmtKind::Reference {
+                referred_kind: Box::new(SymVM::type_arg_to_smt_kind(
+                    referred_type.as_ref(),
+                    type_graph,
+                )),
+            },
+            ExecTypeArg::TypeParameter { actual_type, .. } => {
+                SymVM::type_arg_to_smt_kind(actual_type.as_ref(), type_graph)
+            }
+        }
+    }
+
+    pub fn new(type_graph: &'a TypeGraph) -> Self {
+        let mut smt_ctxt = SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY);
+
+        // pre-compute the struct smt types
+        for (struct_name, struct_info) in type_graph.reverse_topological_sort() {
+            match struct_info {
+                ExecStructInfo::Native => {
+                    // TODO: we should have a dedicated modeling for
+                    // native struct types
+                    warn!("A native struct type is ignored: {}", struct_name)
+                }
+                ExecStructInfo::Declared {
+                    field_vec,
+                    field_map,
+                } => {
+                    let field_smt_kinds: Vec<(String, SmtKind)> = field_vec
+                        .iter()
+                        .map(|field_name| {
+                            (
+                                field_name.clone().into_string(),
+                                SymVM::type_arg_to_smt_kind(
+                                    field_map.get(field_name).unwrap(),
+                                    type_graph,
+                                ),
+                            )
+                        })
+                        .collect();
+                    smt_ctxt.create_smt_struct(struct_name.to_owned(), field_smt_kinds);
+                }
+            }
+        }
+
+        // done
         Self {
-            smt_ctxt: SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY),
-            _type_graph,
+            smt_ctxt,
+            _type_graph: type_graph,
         }
     }
 

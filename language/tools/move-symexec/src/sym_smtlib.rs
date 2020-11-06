@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{cmp::Ordering, collections::HashMap, ffi::CString, os::raw::c_uint};
+use std::{cmp::Ordering, collections::HashMap, ffi::CString, os::raw::c_uint, ptr::null_mut};
 
 use move_core_types::account_address::AccountAddress;
 
@@ -51,6 +51,55 @@ impl SmtCtxt {
             struct_map: HashMap::new(),
             conf_auto_simplify,
         }
+    }
+
+    // preparation for smt struct types
+    pub fn create_smt_struct(
+        &mut self,
+        struct_name: String,
+        struct_fields: Vec<(String, SmtKind)>,
+    ) {
+        // prepare fields
+        let num_fields = struct_fields.len();
+        let mut field_names: Vec<Z3_symbol> = vec![];
+        let mut field_sorts: Vec<Z3_sort> = vec![];
+        for (field_name, field_kind) in struct_fields.iter() {
+            // derive field name
+            let c_str = CString::new(field_name.as_str()).unwrap();
+            let symbol = unsafe { Z3_mk_string_symbol(self.ctxt, c_str.as_ptr()) };
+            field_names.push(symbol);
+
+            // derive field sort
+            field_sorts.push(field_kind.to_z3_sort(self));
+        }
+
+        // prepare receivers
+        let mut constructor: Z3_func_decl = null_mut();
+        let mut field_getters: Vec<Z3_func_decl> = Vec::with_capacity(num_fields);
+
+        // make the tuple sort
+        let c_str = CString::new(struct_name.as_str()).unwrap();
+        let symbol = unsafe { Z3_mk_string_symbol(self.ctxt, c_str.as_ptr()) };
+        let struct_sort = unsafe {
+            Z3_mk_tuple_sort(
+                self.ctxt,
+                symbol,
+                num_fields as c_uint,
+                field_names.as_ptr(),
+                field_sorts.as_ptr(),
+                &mut constructor,
+                field_getters.as_mut_ptr(),
+            )
+        };
+
+        // make the struct information pack
+        let struct_info = SmtStructInfo {
+            sort: struct_sort,
+            constructor,
+            field_getters,
+        };
+        let exists = self.struct_map.insert(struct_name, struct_info);
+        debug_assert!(exists.is_none());
     }
 
     // context check
@@ -255,22 +304,12 @@ impl Drop for SmtCtxt {
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum SmtKind {
     Bool,
-    Bitvec {
-        signed: bool,
-        width: u16,
-    },
+    Bitvec { signed: bool, width: u16 },
     Address,
-    Vector {
-        element_kind: Box<SmtKind>,
-    },
-    Struct {
-        name: String,
-        field_kinds: Vec<SmtKind>,
-    },
+    Vector { element_kind: Box<SmtKind> },
+    Struct { struct_name: String },
     // TODO: the reference type is for experiment only
-    Reference {
-        referred_kind: Box<SmtKind>,
-    },
+    Reference { referred_kind: Box<SmtKind> },
 }
 
 impl SmtKind {
@@ -283,7 +322,7 @@ impl SmtKind {
             SmtKind::Vector { element_kind } => unsafe {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
-            SmtKind::Struct { name, .. } => ctxt.struct_map.get(name).unwrap().sort,
+            SmtKind::Struct { struct_name } => ctxt.struct_map.get(struct_name).unwrap().sort,
             SmtKind::Reference { referred_kind } => unsafe {
                 Z3_mk_array_sort(
                     ctxt.ctxt,

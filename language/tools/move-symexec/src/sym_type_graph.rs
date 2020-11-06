@@ -3,7 +3,10 @@
 
 #![forbid(unsafe_code)]
 
-use petgraph::graph::{Graph, NodeIndex};
+use petgraph::{
+    algo::{is_cyclic_directed, toposort},
+    graph::{Graph, NodeIndex},
+};
 use std::collections::HashMap;
 
 use crate::sym_setup::{ExecStructInfo, ExecTypeArg, StructContext};
@@ -12,6 +15,8 @@ use crate::sym_setup::{ExecStructInfo, ExecTypeArg, StructContext};
 /// structs, involved in the execution.
 #[derive(Clone, Debug)]
 pub(crate) struct TypeGraph {
+    involved_structs: HashMap<StructContext, HashMap<Vec<ExecTypeArg>, String>>,
+    analyzed_structs: HashMap<String, ExecStructInfo>,
     graph: Graph<String, ()>,
 }
 
@@ -101,7 +106,41 @@ impl TypeGraph {
             }
         }
 
+        // the type graph should not have cycles
+        debug_assert!(!is_cyclic_directed(&graph));
+
         // done
-        Self { graph }
+        Self {
+            involved_structs,
+            analyzed_structs,
+            graph,
+        }
+    }
+
+    pub fn reverse_topological_sort(&self) -> Vec<(&str, &ExecStructInfo)> {
+        let nodes = toposort(&self.graph, None).unwrap();
+        nodes
+            .into_iter()
+            .rev()
+            .map(|node| {
+                let name = self.graph.node_weight(node).unwrap();
+                (name.as_str(), self.analyzed_structs.get(name).unwrap())
+            })
+            .collect()
+    }
+
+    pub fn get_struct_name(
+        &self,
+        context: &StructContext,
+        type_args: &[ExecTypeArg],
+    ) -> Option<&str> {
+        self.involved_structs
+            .get(context)
+            .map(|struct_variants| {
+                struct_variants
+                    .get(type_args)
+                    .map(|struct_name| struct_name.as_str())
+            })
+            .flatten()
     }
 }
