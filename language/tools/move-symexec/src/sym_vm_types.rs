@@ -144,6 +144,19 @@ impl<'a> SymValue<'a> {
         SymValue::vector_var(ctxt, &SmtKind::bitvec_u8(), var)
     }
 
+    // create struct
+    pub fn struct_const(
+        ctxt: &'a SmtCtxt,
+        struct_kind: &SmtKind,
+        fields: &[&SymValue<'a>],
+    ) -> Self {
+        SymValue::op(ctxt, fields, |exprs| ctxt.struct_const(struct_kind, exprs))
+    }
+
+    pub fn struct_var(ctxt: &'a SmtCtxt, struct_kind: &SmtKind, var: &str) -> Self {
+        make_sym_primitive!(ctxt, var, struct_var, struct_kind)
+    }
+
     // create from argument
     fn bool_arg(ctxt: &'a SmtCtxt, arg: &SymTransactionArgument) -> Self {
         make_sym_from_arg!(Bool, ctxt, arg, bool_const, bool_var)
@@ -337,6 +350,59 @@ impl<'a> SymValue<'a> {
 
     pub fn lt(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
         sym_op_binary!(lt, self, rhs)
+    }
+
+    // struct operations
+    pub fn unpack(&self, num_fields: usize) -> Vec<SymValue<'a>> {
+        let ctxt = self.ctxt;
+
+        // initialize the unpacked fields
+        let mut results = Vec::new();
+        for _ in 0..num_fields {
+            results.push(SymValue {
+                ctxt: self.ctxt,
+                variants: vec![],
+            });
+        }
+
+        // add options to each field
+        for repr in &self.variants {
+            let cond = &repr.cond;
+
+            let unpacked_exprs = repr.expr.unpack();
+            debug_assert_eq!(unpacked_exprs.len(), num_fields);
+
+            for (i, expr) in unpacked_exprs.iter().enumerate() {
+                // get the target value
+                let field_sym = results.get_mut(i).unwrap();
+
+                // check duplicates
+                let dup = field_sym.variants.iter_mut().find(|repr| {
+                    match ctxt.solve(&[&repr.expr.ne(&expr)]) {
+                        SmtResult::SAT => false,
+                        SmtResult::UNSAT => true,
+                        SmtResult::UNKNOWN => {
+                            // TODO: assume that things are decidable for now
+                            panic!("SMT solver returns an unknown result");
+                        }
+                    }
+                });
+
+                if let Some(item) = dup {
+                    // join the conditions
+                    item.cond = item.cond.or(cond);
+                } else {
+                    // add a new variant
+                    field_sym.variants.push(SymRepr {
+                        expr: expr.clone(),
+                        cond: repr.cond.clone(),
+                    });
+                }
+            }
+        }
+
+        // done
+        results
     }
 
     // generic operations
