@@ -1055,6 +1055,7 @@ impl ExecSccGraph {
 /// Stores the internal states of the ExecWalker
 struct ExecWalkerState {
     /// The id of scc we are currently exploring, w.r.t. the parent scc
+    /// If the scc_id is None, the walker is in the initial exec_graph.
     scc_id: Option<ExecSccId>,
     /// The (sub) scc graph for this scc
     scc_graph: ExecSccGraph,
@@ -1093,6 +1094,15 @@ enum CycleOrBlock<'a> {
     Block(&'a ExecBlock),
 }
 
+pub(crate) enum ExecWalkerStep<'a> {
+    /// Entering a new scc
+    SccEntry(ExecSccId),
+    /// Exiting the current scc, we have explored all blocks in it
+    SccExit(ExecSccId),
+    /// Moving into the next block within the current scc
+    Block(&'a ExecBlock),
+}
+
 impl<'a> ExecWalker<'a> {
     pub fn new(exec_graph: &'a ExecGraph) -> Self {
         Self {
@@ -1104,7 +1114,7 @@ impl<'a> ExecWalker<'a> {
         }
     }
 
-    pub fn next(&mut self) -> Option<(Vec<ExecSccId>, &ExecBlock)> {
+    pub fn next(&mut self) -> Option<ExecWalkerStep<'a>> {
         // if we have nothing in the stack, we are done with the walking
         if self.iter_stack.is_empty() {
             return None;
@@ -1128,22 +1138,29 @@ impl<'a> ExecWalker<'a> {
         match next_op {
             None => {
                 // internal scc yields nothing, pop the stack
-                self.iter_stack.pop();
-                self.next()
+                match self.iter_stack.pop().unwrap().scc_id {
+                    None => {
+                        // check that no more sccs in the stack if
+                        // internal scc has None as scc_id
+                        debug_assert!(self.iter_stack.is_empty());
+                        self.next() // NOTE: essentially returns None
+                    }
+                    Some(exiting_scc_id) => {
+                        debug_assert!(!self.iter_stack.is_empty());
+                        Some(ExecWalkerStep::SccExit(exiting_scc_id))
+                    }
+                }
             }
             Some(cycle_or_block) => match cycle_or_block {
                 CycleOrBlock::Cycle(state) => {
-                    // we are about to decend into a new cycle
+                    // we are about to decend into a new scc
+                    let entering_scc_id = state.scc_id.unwrap();
                     self.iter_stack.push(state);
-                    self.next()
+                    Some(ExecWalkerStep::SccEntry(entering_scc_id))
                 }
                 CycleOrBlock::Block(block) => {
-                    let scc_id_stack = self
-                        .iter_stack
-                        .iter()
-                        .filter_map(|state| state.scc_id)
-                        .collect();
-                    Some((scc_id_stack, block))
+                    // we continue to explore within the same scc
+                    Some(ExecWalkerStep::Block(block))
                 }
             },
         }

@@ -12,7 +12,7 @@ use move_core_types::{account_address::AccountAddress, language_storage::TypeTag
 use vm::file_format::CompiledScript;
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker},
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker, ExecWalkerStep},
     sym_setup::{ExecTypeArg, SymSetup},
     sym_type_graph::TypeGraph,
     sym_vm::SymVM,
@@ -125,19 +125,21 @@ impl<'a> MoveSymbolizer<'a> {
 
         // find all places that may use a struct type
         let mut walker = ExecWalker::new(exec_graph);
-        while let Some((_, exec_block)) = walker.next() {
-            let exec_unit = setup
-                .get_exec_unit_by_context(&exec_block.code_context)
-                .unwrap();
-            for instruction in exec_block.instructions.iter() {
-                setup.collect_involved_structs_in_instruction(
-                    instruction,
-                    exec_unit,
-                    &exec_block.type_args,
-                    &mut involved_structs,
-                    &mut analyzed_structs,
-                );
-            }
+        while let Some(walker_step) = walker.next() {
+            if let ExecWalkerStep::Block(exec_block) = walker_step {
+                let exec_unit = setup
+                    .get_exec_unit_by_context(&exec_block.code_context)
+                    .unwrap();
+                for instruction in exec_block.instructions.iter() {
+                    setup.collect_involved_structs_in_instruction(
+                        instruction,
+                        exec_unit,
+                        &exec_block.type_args,
+                        &mut involved_structs,
+                        &mut analyzed_structs,
+                    );
+                }
+            };
         }
 
         // done
@@ -150,6 +152,7 @@ impl<'a> MoveSymbolizer<'a> {
 
         // do the interpretation
         vm.interpret(
+            self.setup,
             self.script,
             &self.type_args,
             &self.exec_graph,

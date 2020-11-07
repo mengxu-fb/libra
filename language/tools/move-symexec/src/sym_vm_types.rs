@@ -439,21 +439,31 @@ pub(crate) fn parse_sym_transaction_argument(s: &str) -> Result<SymTransactionAr
     }
 }
 
-/// A symbolic version of the struct used in concrete execution
-/// [Locals] (move_vm_types::values::Locals)
-pub(crate) struct SymLocals<'a> {
-    _slots: Vec<Option<&'a SymValue<'a>>>,
+/// A symbolic version maintaining the frame for an exec unit
+pub(crate) struct SymFrame<'a> {
+    /// A symbolic version of the struct used in concrete execution
+    /// [Locals] (move_vm_types::values::Locals)
+    _local: Vec<Option<SymValue<'a>>>,
+    /// A symbolic version of the struct used in concrete execution
+    /// [Locals] (move_vm::runtime::interpreter::Stack)
+    _stack: Vec<SymValue<'a>>,
 }
 
-impl<'a> SymLocals<'a> {
-    pub fn new(size: usize, args: &'a [SymValue]) -> Self {
-        let mut slots = Vec::with_capacity(size);
+impl<'a> SymFrame<'a> {
+    pub fn new(args: Vec<SymValue<'a>>, local_size: usize) -> Self {
+        // prepare local slots
+        let mut local = Vec::with_capacity(args.len() + local_size);
         for sym in args {
-            slots.push(Some(sym));
+            local.push(Some(sym));
         }
-        for _ in 0..(size - args.len()) {
-            slots.push(None);
+        for _ in 0..local_size {
+            local.push(None);
         }
-        Self { _slots: slots }
+
+        // done
+        Self {
+            _local: local,
+            _stack: vec![],
+        }
     }
 }

@@ -12,11 +12,11 @@ use vm::{
 };
 
 use crate::{
-    sym_exec_graph::ExecGraph,
-    sym_setup::{ExecStructInfo, ExecTypeArg},
+    sym_exec_graph::{ExecGraph, ExecWalker, ExecWalkerStep},
+    sym_setup::{ExecStructInfo, ExecTypeArg, SymSetup},
     sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
-    sym_vm_types::{SymLocals, SymTransactionArgument, SymValue},
+    sym_vm_types::{SymFrame, SymTransactionArgument, SymValue},
 };
 
 /// Config: whether to simplify smt expressions upon construction
@@ -105,9 +105,10 @@ impl<'a> SymVM<'a> {
 
     pub fn interpret(
         &self,
+        _setup: &SymSetup,
         script: &CompiledScript,
         type_args: &[ExecTypeArg],
-        _exec_graph: &ExecGraph,
+        exec_graph: &ExecGraph,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
     ) {
@@ -165,10 +166,31 @@ impl<'a> SymVM<'a> {
             ));
         }
 
-        // prepare the init locals: the locals consist of two parts
+        // prepare the first frame (locals + stack), in particular, the
+        // locals consist of two parts
         // - the arguments, which have initial symbolic values set and
         // - the local variables, which are empty in the beginning
         let init_local_sigs = script.signature_at(script.code().locals);
-        SymLocals::new(sym_inputs.len() + init_local_sigs.len(), &sym_inputs);
+        let mut _call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
+        let mut scc_stack = vec![];
+
+        // symbolically walk the exec graph
+        let mut walker = ExecWalker::new(exec_graph);
+        while let Some(walker_step) = walker.next() {
+            match walker_step {
+                ExecWalkerStep::SccEntry(scc_id) => {
+                    scc_stack.push(scc_id);
+                }
+                ExecWalkerStep::SccExit(scc_id) => {
+                    let exiting_scc_id = scc_stack.pop().unwrap();
+                    debug_assert_eq!(scc_id, exiting_scc_id);
+                }
+                ExecWalkerStep::Block(_) => {}
+            }
+        }
+
+        // we should have nothing left in the stack after execution
+        debug_assert!(scc_stack.is_empty());
+        // TODO: check call_satck is empty
     }
 }
