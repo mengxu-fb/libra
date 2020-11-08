@@ -131,7 +131,7 @@ impl<'a> SymValue<'a> {
     }
 
     // create vector (utilities)
-    fn vector_u8_const(ctxt: &'a SmtCtxt, vals: Vec<u8>) -> Self {
+    pub fn vector_u8_const(ctxt: &'a SmtCtxt, vals: Vec<u8>) -> Self {
         let elements: Vec<SymValue> = vals
             .iter()
             .map(|val| SymValue::u8_const(ctxt, *val))

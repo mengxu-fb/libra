@@ -13,11 +13,12 @@ use move_core_types::{
 use vm::{
     access::{ModuleAccess, ScriptAccess},
     file_format::{
-        AddressIdentifierIndex, Bytecode, CodeUnit, CompiledModule, CompiledScript, FieldHandle,
-        FieldHandleIndex, FieldInstantiation, FieldInstantiationIndex, FunctionDefinition,
-        FunctionHandle, FunctionHandleIndex, FunctionInstantiation, FunctionInstantiationIndex,
-        IdentifierIndex, LocalIndex, ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex,
-        SignatureToken, StructDefInstantiation, StructDefInstantiationIndex, StructDefinition,
+        AddressIdentifierIndex, Bytecode, CodeUnit, CompiledModule, CompiledScript, Constant,
+        ConstantPoolIndex, FieldHandle, FieldHandleIndex, FieldInstantiation,
+        FieldInstantiationIndex, FunctionDefinition, FunctionHandle, FunctionHandleIndex,
+        FunctionInstantiation, FunctionInstantiationIndex, IdentifierIndex, LocalIndex,
+        ModuleHandle, ModuleHandleIndex, Signature, SignatureIndex, SignatureToken,
+        StructDefInstantiation, StructDefInstantiationIndex, StructDefinition,
         StructDefinitionIndex, StructFieldInformation, StructHandle, StructHandleIndex,
         TypeParameterIndex, TypeSignature,
     },
@@ -234,6 +235,13 @@ impl ExecUnit<'_> {
         match self {
             ExecUnit::Script(unit) => unit.signature_at(idx),
             ExecUnit::Module(unit, _) => unit.signature_at(idx),
+        }
+    }
+
+    pub fn constant_at(&self, idx: ConstantPoolIndex) -> &Constant {
+        match self {
+            ExecUnit::Script(unit) => unit.constant_at(idx),
+            ExecUnit::Module(unit, _) => unit.constant_at(idx),
         }
     }
 

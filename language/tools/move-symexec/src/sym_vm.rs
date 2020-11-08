@@ -6,6 +6,7 @@
 use log::warn;
 
 use move_core_types::{account_address::AccountAddress, transaction_argument::TransactionArgument};
+use move_vm_types::values::{IntegerValue, Value};
 use vm::{
     access::ScriptAccess,
     file_format::{Bytecode, CompiledScript, SignatureToken},
@@ -199,9 +200,18 @@ impl<'a> SymVM<'a> {
         // TODO: check call_stack is empty
     }
 
-    fn symbolize_block<'smt>(&'smt self, block: &ExecBlock, call_stack: &mut Vec<SymFrame<'smt>>) {
+    fn symbolize_block<'smt>(
+        &'smt self,
+        exec_block: &ExecBlock,
+        call_stack: &mut Vec<SymFrame<'smt>>,
+    ) {
+        let exec_unit = self
+            .setup
+            .get_exec_unit_by_context(&exec_block.code_context)
+            .unwrap();
+
         let current_frame = call_stack.last_mut().unwrap();
-        for instruction in &block.instructions {
+        for instruction in &exec_block.instructions {
             match instruction {
                 // stack operations
                 Bytecode::Pop => {
@@ -222,6 +232,44 @@ impl<'a> SymVM<'a> {
                 }
                 Bytecode::LdFalse => {
                     current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, false))
+                }
+                Bytecode::LdConst(idx) => {
+                    let val_constant =
+                        Value::deserialize_constant(exec_unit.constant_at(*idx)).unwrap();
+                    if let Ok(val_integer) = val_constant
+                        .copy_value()
+                        .unwrap()
+                        .value_as::<IntegerValue>()
+                    {
+                        match val_integer {
+                            IntegerValue::U8(val) => {
+                                current_frame.stack_push(SymValue::u8_const(&self.smt_ctxt, val));
+                            }
+                            IntegerValue::U64(val) => {
+                                current_frame.stack_push(SymValue::u64_const(&self.smt_ctxt, val));
+                            }
+                            IntegerValue::U128(val) => {
+                                current_frame.stack_push(SymValue::u128_const(&self.smt_ctxt, val));
+                            }
+                        }
+                    } else if let Ok(val_address) = val_constant
+                        .copy_value()
+                        .unwrap()
+                        .value_as::<AccountAddress>()
+                    {
+                        current_frame
+                            .stack_push(SymValue::address_const(&self.smt_ctxt, val_address));
+                    } else if let Ok(val_vector_u8) =
+                        val_constant.copy_value().unwrap().value_as::<Vec<u8>>()
+                    {
+                        current_frame
+                            .stack_push(SymValue::vector_u8_const(&self.smt_ctxt, val_vector_u8));
+                    } else {
+                        panic!(
+                            "Loading arbitrary types of constants is not yet supported: {:?}",
+                            val_constant
+                        );
+                    }
                 }
                 // cast operations
                 Bytecode::CastU8 => {
