@@ -16,12 +16,14 @@ use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult};
 
 /// Guarded symbolic representation. Each symboilc expression is guarded
 /// by a condition over the variables.
+#[derive(Clone, Debug)]
 struct SymRepr<'a> {
     expr: SmtExpr<'a>,
     cond: SmtExpr<'a>,
 }
 
 /// A symbolic mimic of the move_vm_types::values::Value.
+#[derive(Clone, Debug)]
 pub struct SymValue<'a> {
     /// A reference to the smt context
     ctxt: &'a SmtCtxt,
@@ -443,7 +445,7 @@ pub(crate) fn parse_sym_transaction_argument(s: &str) -> Result<SymTransactionAr
 pub(crate) struct SymFrame<'a> {
     /// A symbolic version of the struct used in concrete execution
     /// [Locals] (move_vm_types::values::Locals)
-    _local: Vec<Option<SymValue<'a>>>,
+    local: Vec<Option<SymValue<'a>>>,
     /// A symbolic version of the struct used in concrete execution
     /// [Locals] (move_vm::runtime::interpreter::Stack)
     stack: Vec<SymValue<'a>>,
@@ -462,9 +464,24 @@ impl<'a> SymFrame<'a> {
 
         // done
         Self {
-            _local: local,
+            local,
             stack: vec![],
         }
+    }
+
+    // local operations
+    pub fn local_move(&mut self, index: usize) -> Option<SymValue<'a>> {
+        self.local.push(None);
+        self.local.swap_remove(index)
+    }
+
+    pub fn local_copy(&mut self, index: usize) -> Option<SymValue<'a>> {
+        self.local.get(index).unwrap().clone()
+    }
+
+    pub fn local_store(&mut self, index: usize, sym: SymValue<'a>) -> Option<SymValue<'a>> {
+        self.local.push(Some(sym));
+        self.local.swap_remove(index)
     }
 
     // stack operations

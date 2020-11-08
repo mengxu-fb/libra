@@ -391,6 +391,22 @@ impl<'a> SymVM<'a> {
                     let lhs = current_frame.stack_pop();
                     current_frame.stack_push(lhs.ne(&rhs));
                 }
+                // manipulations over local slots
+                Bytecode::CopyLoc(idx) => {
+                    let sym = current_frame.local_copy(*idx as usize);
+                    // TODO: worry about uninitialized read?
+                    current_frame.stack_push(sym.unwrap());
+                }
+                Bytecode::MoveLoc(idx) => {
+                    let sym = current_frame.local_move(*idx as usize);
+                    // TODO: worry about uninitialized read?
+                    current_frame.stack_push(sym.unwrap());
+                }
+                Bytecode::StLoc(idx) => {
+                    let sym = current_frame.stack_pop();
+                    // TODO: worry about store index overflow?
+                    current_frame.local_store(*idx as usize, sym);
+                }
                 // misc
                 Bytecode::Nop => {}
                 // the rest
