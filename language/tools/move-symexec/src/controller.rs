@@ -485,6 +485,11 @@ impl MoveController {
                 continue;
             }
 
+            // check that we got the correct number of type arguments
+            if type_tags.len() != script.as_inner().type_parameters.len() {
+                bail!("Type tag number does not match the number of type arguments");
+            }
+
             // build the setup
             let sym_setup = SymSetup::new(script, &all_modules, tracked_functions.clone());
             debug!("{} structs defined", sym_setup.num_defined_structs());

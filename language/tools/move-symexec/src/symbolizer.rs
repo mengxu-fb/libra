@@ -148,16 +148,9 @@ impl<'a> MoveSymbolizer<'a> {
 
     pub fn execute(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
         // prepare the vm
-        let vm = SymVM::new(&self.type_graph);
+        let vm = SymVM::new(self.setup, self.script, &self.exec_graph, &self.type_graph);
 
         // do the interpretation
-        vm.interpret(
-            self.setup,
-            self.script,
-            &self.type_args,
-            &self.exec_graph,
-            signers,
-            sym_args,
-        );
+        vm.interpret(signers, sym_args);
     }
 }

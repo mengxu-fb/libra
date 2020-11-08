@@ -26,8 +26,14 @@ const CONF_SMT_AUTO_SIMPLIFY: bool = true;
 pub(crate) struct SymVM<'a> {
     /// A wrapper over the smt solver context manager
     smt_ctxt: SmtCtxt,
+    /// The oracle for environmental information
+    setup: &'a SymSetup<'a>,
+    /// The script to run symbolization on
+    script: &'a CompiledScript,
+    /// The execution graph containing all code
+    exec_graph: &'a ExecGraph,
     /// Maps all struct types to names of the corresponding smt types
-    _type_graph: &'a TypeGraph,
+    type_graph: &'a TypeGraph,
 }
 
 impl<'a> SymVM<'a> {
@@ -64,7 +70,12 @@ impl<'a> SymVM<'a> {
         }
     }
 
-    pub fn new(type_graph: &'a TypeGraph) -> Self {
+    pub fn new(
+        setup: &'a SymSetup,
+        script: &'a CompiledScript,
+        exec_graph: &'a ExecGraph,
+        type_graph: &'a TypeGraph,
+    ) -> Self {
         let mut smt_ctxt = SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY);
 
         // pre-compute the struct smt types
@@ -99,24 +110,16 @@ impl<'a> SymVM<'a> {
         // done
         Self {
             smt_ctxt,
-            _type_graph: type_graph,
+            setup,
+            script,
+            exec_graph,
+            type_graph,
         }
     }
 
-    pub fn interpret(
-        &self,
-        _setup: &SymSetup,
-        script: &CompiledScript,
-        type_args: &[ExecTypeArg],
-        exec_graph: &ExecGraph,
-        signers: &[AccountAddress],
-        sym_args: &[SymTransactionArgument],
-    ) {
-        // check that we got the correct number of type arguments
-        debug_assert_eq!(type_args.len(), script.as_inner().type_parameters.len());
-
+    pub fn interpret(&self, signers: &[AccountAddress], sym_args: &[SymTransactionArgument]) {
         // collect value signatures
-        let val_arg_sigs = script.signature_at(script.as_inner().parameters);
+        let val_arg_sigs = self.script.signature_at(self.script.as_inner().parameters);
 
         // check that we got the correct number of value arguments
         // NOTE: signers must come before value arguments, if present
@@ -170,12 +173,12 @@ impl<'a> SymVM<'a> {
         // locals consist of two parts
         // - the arguments, which have initial symbolic values set and
         // - the local variables, which are empty in the beginning
-        let init_local_sigs = script.signature_at(script.code().locals);
+        let init_local_sigs = self.script.signature_at(self.script.code().locals);
         let mut _call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
         let mut scc_stack = vec![];
 
         // symbolically walk the exec graph
-        let mut walker = ExecWalker::new(exec_graph);
+        let mut walker = ExecWalker::new(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::SccEntry(scc_id) => {
