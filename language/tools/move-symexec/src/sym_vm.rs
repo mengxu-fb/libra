@@ -8,11 +8,11 @@ use log::warn;
 use move_core_types::{account_address::AccountAddress, transaction_argument::TransactionArgument};
 use vm::{
     access::ScriptAccess,
-    file_format::{CompiledScript, SignatureToken},
+    file_format::{Bytecode, CompiledScript, SignatureToken},
 };
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecWalker, ExecWalkerStep},
+    sym_exec_graph::{ExecBlock, ExecGraph, ExecWalker, ExecWalkerStep},
     sym_setup::{ExecStructInfo, ExecTypeArg, SymSetup},
     sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
@@ -174,7 +174,7 @@ impl<'a> SymVM<'a> {
         // - the arguments, which have initial symbolic values set and
         // - the local variables, which are empty in the beginning
         let init_local_sigs = self.script.signature_at(self.script.code().locals);
-        let mut _call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
+        let mut call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
         let mut scc_stack = vec![];
 
         // symbolically walk the exec graph
@@ -188,12 +188,168 @@ impl<'a> SymVM<'a> {
                     let exiting_scc_id = scc_stack.pop().unwrap();
                     debug_assert_eq!(scc_id, exiting_scc_id);
                 }
-                ExecWalkerStep::Block(_) => {}
+                ExecWalkerStep::Block(block) => {
+                    self.symbolize_block(block, &mut call_stack);
+                }
             }
         }
 
         // we should have nothing left in the stack after execution
         debug_assert!(scc_stack.is_empty());
-        // TODO: check call_satck is empty
+        // TODO: check call_stack is empty
+    }
+
+    fn symbolize_block<'smt>(&'smt self, block: &ExecBlock, call_stack: &mut Vec<SymFrame<'smt>>) {
+        let current_frame = call_stack.last_mut().unwrap();
+        for instruction in &block.instructions {
+            match instruction {
+                // stack operations
+                Bytecode::Pop => {
+                    current_frame.stack_pop();
+                }
+                // loading constants
+                Bytecode::LdU8(val) => {
+                    current_frame.stack_push(SymValue::u8_const(&self.smt_ctxt, *val))
+                }
+                Bytecode::LdU64(val) => {
+                    current_frame.stack_push(SymValue::u64_const(&self.smt_ctxt, *val))
+                }
+                Bytecode::LdU128(val) => {
+                    current_frame.stack_push(SymValue::u128_const(&self.smt_ctxt, *val))
+                }
+                Bytecode::LdTrue => {
+                    current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, true))
+                }
+                Bytecode::LdFalse => {
+                    current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, false))
+                }
+                // cast operations
+                Bytecode::CastU8 => {
+                    // TODO: check out-of-bound possibility
+                    let sym = current_frame.stack_pop();
+                    current_frame.stack_push(sym.cast_u8());
+                }
+                Bytecode::CastU64 => {
+                    // TODO: check out-of-bound possibility
+                    let sym = current_frame.stack_pop();
+                    current_frame.stack_push(sym.cast_u64());
+                }
+                Bytecode::CastU128 => {
+                    // TODO: check out-of-bound possibility
+                    let sym = current_frame.stack_pop();
+                    current_frame.stack_push(sym.cast_u128());
+                }
+                // arithmetic operations
+                Bytecode::Add => {
+                    // TODO: check overflow
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.add(&rhs));
+                }
+                Bytecode::Sub => {
+                    // TODO: check underflow
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.sub(&rhs));
+                }
+                Bytecode::Mul => {
+                    // TODO: check overflow
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.mul(&rhs));
+                }
+                Bytecode::Mod => {
+                    // NOTE: unsigned rem cannot over- or under-flow
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.rem(&rhs));
+                }
+                Bytecode::Div => {
+                    // NOTE: unsigned div cannot over- or under-flow
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.div(&rhs));
+                }
+                // bitwise operations
+                Bytecode::BitAnd => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.bit_and(&rhs));
+                }
+                Bytecode::BitOr => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.bit_or(&rhs));
+                }
+                Bytecode::Xor => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.bit_xor(&rhs));
+                }
+                Bytecode::Shl => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.shl(&rhs));
+                }
+                Bytecode::Shr => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.shr(&rhs));
+                }
+                // comparison operations
+                Bytecode::Gt => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.gt(&rhs));
+                }
+                Bytecode::Ge => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.ge(&rhs));
+                }
+                Bytecode::Le => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.le(&rhs));
+                }
+                Bytecode::Lt => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.lt(&rhs));
+                }
+                // boolean operations
+                Bytecode::And => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.and(&rhs));
+                }
+                Bytecode::Or => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.or(&rhs));
+                }
+                Bytecode::Not => {
+                    let sym = current_frame.stack_pop();
+                    current_frame.stack_push(sym.not());
+                }
+                // generic equality
+                Bytecode::Eq => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.eq(&rhs));
+                }
+                Bytecode::Neq => {
+                    let rhs = current_frame.stack_pop();
+                    let lhs = current_frame.stack_pop();
+                    current_frame.stack_push(lhs.ne(&rhs));
+                }
+                // misc
+                Bytecode::Nop => {}
+                // the rest
+                _ => {
+                    println!("INSTRUCTION NOT SUPPORTED: {:?}", instruction);
+                }
+            }
+        }
     }
 }

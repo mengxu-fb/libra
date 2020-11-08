@@ -446,7 +446,7 @@ pub(crate) struct SymFrame<'a> {
     _local: Vec<Option<SymValue<'a>>>,
     /// A symbolic version of the struct used in concrete execution
     /// [Locals] (move_vm::runtime::interpreter::Stack)
-    _stack: Vec<SymValue<'a>>,
+    stack: Vec<SymValue<'a>>,
 }
 
 impl<'a> SymFrame<'a> {
@@ -463,7 +463,16 @@ impl<'a> SymFrame<'a> {
         // done
         Self {
             _local: local,
-            _stack: vec![],
+            stack: vec![],
         }
+    }
+
+    // stack operations
+    pub fn stack_pop(&mut self) -> SymValue<'a> {
+        self.stack.pop().unwrap()
+    }
+
+    pub fn stack_push(&mut self, sym: SymValue<'a>) {
+        self.stack.push(sym);
     }
 }
