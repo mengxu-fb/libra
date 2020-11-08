@@ -14,7 +14,7 @@ use vm::{
 
 use crate::{
     sym_exec_graph::{ExecBlock, ExecGraph, ExecWalker, ExecWalkerStep},
-    sym_setup::{ExecStructInfo, ExecTypeArg, SymSetup},
+    sym_setup::{ExecStructInfo, ExecTypeArg, StructContext, SymSetup},
     sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
     sym_vm_types::{SymFrame, SymTransactionArgument, SymValue},
@@ -391,6 +391,49 @@ impl<'a> SymVM<'a> {
                     let lhs = current_frame.stack_pop();
                     current_frame.stack_push(lhs.ne(&rhs));
                 }
+                // struct constructions
+                Bytecode::Pack(idx) => {
+                    let struct_context = exec_unit.struct_context_by_def_index(*idx);
+                    self.struct_pack(&struct_context, &[], current_frame);
+                }
+                Bytecode::PackGeneric(idx) => {
+                    let struct_context = exec_unit.struct_context_by_generic_index(*idx);
+                    let struct_inst_sig =
+                        exec_unit.struct_instantiation_signature_by_generic_index(*idx);
+                    let inst_args: Vec<ExecTypeArg> = struct_inst_sig
+                        .0
+                        .iter()
+                        .map(|token| {
+                            ExecTypeArg::convert_from_signature_token(
+                                token,
+                                &exec_unit.as_comp_unit(),
+                                &exec_block.type_args,
+                            )
+                        })
+                        .collect();
+                    self.struct_pack(&struct_context, &inst_args, current_frame);
+                }
+                Bytecode::Unpack(idx) => {
+                    let struct_context = exec_unit.struct_context_by_def_index(*idx);
+                    self.struct_unpack(&struct_context, &[], current_frame);
+                }
+                Bytecode::UnpackGeneric(idx) => {
+                    let struct_context = exec_unit.struct_context_by_generic_index(*idx);
+                    let struct_inst_sig =
+                        exec_unit.struct_instantiation_signature_by_generic_index(*idx);
+                    let inst_args: Vec<ExecTypeArg> = struct_inst_sig
+                        .0
+                        .iter()
+                        .map(|token| {
+                            ExecTypeArg::convert_from_signature_token(
+                                token,
+                                &exec_unit.as_comp_unit(),
+                                &exec_block.type_args,
+                            )
+                        })
+                        .collect();
+                    self.struct_unpack(&struct_context, &inst_args, current_frame);
+                }
                 // manipulations over local slots
                 Bytecode::CopyLoc(idx) => {
                     let sym = current_frame.local_copy(*idx as usize);
@@ -412,6 +455,56 @@ impl<'a> SymVM<'a> {
                 // the rest
                 _ => {
                     println!("INSTRUCTION NOT SUPPORTED: {:?}", instruction);
+                }
+            }
+        }
+    }
+
+    // utility functions
+    fn struct_pack<'smt>(
+        &'smt self,
+        struct_context: &StructContext,
+        struct_type_args: &[ExecTypeArg],
+        current_frame: &mut SymFrame<'smt>,
+    ) {
+        let struct_name = self
+            .type_graph
+            .get_struct_name(&struct_context, struct_type_args)
+            .unwrap();
+        let struct_info = self.type_graph.get_struct_info_by_name(struct_name);
+        match struct_info {
+            ExecStructInfo::Native => panic!("Native struct is not supported yet"),
+            ExecStructInfo::Declared { field_vec, .. } => {
+                let struct_kind = SmtKind::Struct {
+                    struct_name: struct_name.to_owned(),
+                };
+                let fields: Vec<SymValue> = (0..field_vec.len())
+                    .map(|_| current_frame.stack_pop())
+                    .collect();
+                let field_refs: Vec<&SymValue> = fields.iter().map(|field| field).collect();
+                let sym = SymValue::struct_const(&self.smt_ctxt, &struct_kind, &field_refs);
+                current_frame.stack_push(sym);
+            }
+        }
+    }
+
+    fn struct_unpack<'smt>(
+        &'smt self,
+        struct_context: &StructContext,
+        struct_type_args: &[ExecTypeArg],
+        current_frame: &mut SymFrame<'smt>,
+    ) {
+        let struct_name = self
+            .type_graph
+            .get_struct_name(&struct_context, struct_type_args)
+            .unwrap();
+        let struct_info = self.type_graph.get_struct_info_by_name(struct_name);
+        match struct_info {
+            ExecStructInfo::Native => panic!("Native struct is not supported yet"),
+            ExecStructInfo::Declared { field_vec, .. } => {
+                let sym = current_frame.stack_pop();
+                for field_sym in sym.unpack(field_vec.len()) {
+                    current_frame.stack_push(field_sym);
                 }
             }
         }

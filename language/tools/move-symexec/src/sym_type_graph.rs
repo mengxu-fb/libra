@@ -143,4 +143,8 @@ impl TypeGraph {
             })
             .flatten()
     }
+
+    pub fn get_struct_info_by_name(&self, name: &str) -> &ExecStructInfo {
+        self.analyzed_structs.get(name).unwrap()
+    }
 }
