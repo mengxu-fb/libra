@@ -972,7 +972,7 @@ impl ExecSccGraph {
             .linkage_node
             .get(&ref_graph.entry_block_id)
             .unwrap();
-        assert!(entry_scc_ids.len() == 1);
+        assert_eq!(entry_scc_ids.len(), 1);
         scc_graph.entry_scc_id = *entry_scc_ids.iter().next().unwrap();
 
         // done
