@@ -126,7 +126,10 @@ impl<'a> MoveSymbolizer<'a> {
         // find all places that may use a struct type
         let mut walker = ExecWalker::new(exec_graph);
         while let Some(walker_step) = walker.next() {
-            if let ExecWalkerStep::Block(exec_block) = walker_step {
+            if let ExecWalkerStep::Block {
+                block: exec_block, ..
+            } = walker_step
+            {
                 let exec_unit = setup
                     .get_exec_unit_by_context(&exec_block.code_context)
                     .unwrap();

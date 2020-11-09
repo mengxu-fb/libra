@@ -176,20 +176,35 @@ impl<'a> SymVM<'a> {
         // - the local variables, which are empty in the beginning
         let init_local_sigs = self.script.signature_at(self.script.code().locals);
         let mut call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
+
+        // tracks the scc containing cycles only, and this is by
+        // definition -- an scc containing a single block will not be
+        // able to form a stack.
         let mut scc_stack = vec![];
 
         // symbolically walk the exec graph
         let mut walker = ExecWalker::new(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
-                ExecWalkerStep::SccEntry(scc_id) => {
+                ExecWalkerStep::CycleEntry { scc_id } => {
                     scc_stack.push(scc_id);
                 }
-                ExecWalkerStep::SccExit(scc_id) => {
+                ExecWalkerStep::CycleExit { scc_id } => {
                     let exiting_scc_id = scc_stack.pop().unwrap();
                     debug_assert_eq!(scc_id, exiting_scc_id);
                 }
-                ExecWalkerStep::Block(block) => {
+                ExecWalkerStep::Block {
+                    scc_id,
+                    block,
+                    incoming_edges,
+                    ..
+                } => {
+                    // TODO: to be removed
+                    println!(
+                        "Reaching to SCC {} with {} edges",
+                        scc_id,
+                        incoming_edges.len()
+                    );
                     self.symbolize_block(block, &mut call_stack);
                 }
             }
