@@ -27,7 +27,7 @@ use crate::sym_setup::{CodeContext, ExecTypeArg, ExecUnit, SymSetup};
 /// graph that has CFGs connected by the call graph.
 
 /// This is the basic block (i.e., the node) in the super-CFG.
-type ExecBlockId = usize;
+pub(crate) type ExecBlockId = usize;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExecBlock {
@@ -740,7 +740,7 @@ impl ExecRefGraph {
 
 /// This is a self-contained set of blocks (can be either a single block
 /// or a loop) (i.e., the SCC) in the super-CFG
-type ExecSccId = usize;
+pub(crate) type ExecSccId = usize;
 
 #[derive(Clone, Debug)]
 pub(crate) struct ExecScc {

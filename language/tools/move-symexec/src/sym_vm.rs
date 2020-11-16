@@ -4,6 +4,7 @@
 #![forbid(unsafe_code)]
 
 use log::warn;
+use std::collections::HashMap;
 
 use move_core_types::{account_address::AccountAddress, transaction_argument::TransactionArgument};
 use move_vm_types::values::{IntegerValue, Value};
@@ -13,7 +14,7 @@ use vm::{
 };
 
 use crate::{
-    sym_exec_graph::{ExecBlock, ExecGraph, ExecWalker, ExecWalkerStep},
+    sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
     sym_setup::{ExecStructInfo, ExecTypeArg, StructContext, SymSetup},
     sym_smtlib::{SmtCtxt, SmtKind},
     sym_type_graph::TypeGraph,
@@ -22,6 +23,78 @@ use crate::{
 
 /// Config: whether to simplify smt expressions upon construction
 const CONF_SMT_AUTO_SIMPLIFY: bool = true;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+struct SymIntraSccFlow {
+    src_scc_id: ExecSccId,
+    src_block_id: ExecBlockId,
+    dst_scc_id: ExecSccId,
+    dst_block_id: ExecBlockId,
+}
+
+struct SymSccInfo<'smt> {
+    /// The scc_id where all scc_ids in the edge_conds resides in
+    scc_id: Option<ExecSccId>,
+    /// Entry condition
+    entry_cond: SymValue<'smt>,
+    /// Conditions for flows (i.e., edges) within this scc only
+    edge_conds: HashMap<SymIntraSccFlow, SymValue<'smt>>,
+}
+
+impl<'smt> SymSccInfo<'smt> {
+    fn for_base(ctxt: &'smt SmtCtxt) -> Self {
+        Self {
+            scc_id: None,
+            entry_cond: SymValue::bool_const(ctxt, true),
+            edge_conds: HashMap::new(),
+        }
+    }
+
+    fn for_cycle(ctxt: &'smt SmtCtxt, scc_id: ExecSccId) -> Self {
+        Self {
+            scc_id: Some(scc_id),
+            // TODO: this is a fake condition
+            entry_cond: SymValue::bool_const(ctxt, true),
+            edge_conds: HashMap::new(),
+        }
+    }
+
+    /// Get the condition associated with this edge (panic if non-exist)
+    fn get_edge_cond(
+        &self,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+    ) -> &SymValue<'smt> {
+        let key = SymIntraSccFlow {
+            src_scc_id,
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        self.edge_conds.get(&key).unwrap()
+    }
+
+    /// Put the condition associated with this edge (panic if exists)
+    fn put_edge_cond(
+        &mut self,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+        condition: SymValue<'smt>,
+    ) {
+        let key = SymIntraSccFlow {
+            src_scc_id,
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        let exists = self.edge_conds.insert(key, condition);
+        debug_assert!(exists.is_none());
+    }
+}
 
 /// The symbolic interpreter that examines instructions one by one
 pub(crate) struct SymVM<'a> {
@@ -177,38 +250,56 @@ impl<'a> SymVM<'a> {
         let init_local_sigs = self.script.signature_at(self.script.code().locals);
         let mut call_stack = vec![SymFrame::new(sym_inputs, init_local_sigs.len())];
 
-        // tracks the scc containing cycles only, and this is by
-        // definition -- an scc containing a single block will not be
-        // able to form a stack.
-        let mut scc_stack = vec![];
+        // tracks the sccs that contain cycles only (except the base),
+        // and this is by definition -- an scc containing a single block
+        // will not be able to form a stack.
+        let mut scc_stack = vec![SymSccInfo::for_base(&self.smt_ctxt)];
 
         // symbolically walk the exec graph
         let mut walker = ExecWalker::new(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::CycleEntry { scc_id } => {
-                    scc_stack.push(scc_id);
+                    scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
-                    let exiting_scc_id = scc_stack.pop().unwrap();
+                    let exiting_scc_id = scc_stack.pop().unwrap().scc_id.unwrap();
                     debug_assert_eq!(scc_id, exiting_scc_id);
                 }
                 ExecWalkerStep::Block {
                     scc_id,
                     block,
                     incoming_edges,
-                    ..
                 } => {
-                    // TODO: to be removed
-                    println!(
-                        "Reaching to SCC {} with {} edges",
-                        scc_id,
-                        incoming_edges.len()
-                    );
-                    self.symbolize_block(block, &mut call_stack);
+                    // derive the reachability condition for this block
+                    let scc_info = scc_stack.last_mut().unwrap();
+                    let reach_cond = if incoming_edges.is_empty() {
+                        // this is the entry block of this scc, so,
+                        // just simply take the entry condition
+                        scc_info.entry_cond.clone()
+                    } else {
+                        incoming_edges.iter().fold(
+                            SymValue::bool_const(&self.smt_ctxt, false),
+                            |cond, (src_scc_id, src_block_id)| {
+                                cond.or(scc_info.get_edge_cond(
+                                    *src_scc_id,
+                                    *src_block_id,
+                                    scc_id,
+                                    block.block_id,
+                                ))
+                            },
+                        )
+                    };
+
+                    // go over the block
+                    self.symbolize_block(block, &reach_cond, &mut call_stack);
                 }
             }
         }
+
+        // pop the base scc
+        let base_scc = scc_stack.pop().unwrap();
+        debug_assert!(base_scc.scc_id.is_none());
 
         // we should have nothing left in the stack after execution
         debug_assert!(scc_stack.is_empty());
@@ -218,6 +309,7 @@ impl<'a> SymVM<'a> {
     fn symbolize_block<'smt>(
         &'smt self,
         exec_block: &ExecBlock,
+        reach_cond: &SymValue<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
     ) {
         let exec_unit = self
