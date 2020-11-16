@@ -16,7 +16,7 @@ use vm::{
 use crate::{
     sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
     sym_setup::{ExecStructInfo, ExecTypeArg, StructContext, SymSetup},
-    sym_smtlib::{SmtCtxt, SmtKind},
+    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::TypeGraph,
     sym_vm_types::{SymFrame, SymTransactionArgument, SymValue},
 };
@@ -36,16 +36,16 @@ struct SymSccInfo<'smt> {
     /// The scc_id where all scc_ids in the edge_conds resides in
     scc_id: Option<ExecSccId>,
     /// Entry condition
-    entry_cond: SymValue<'smt>,
+    entry_cond: SmtExpr<'smt>,
     /// Conditions for flows (i.e., edges) within this scc only
-    edge_conds: HashMap<SymIntraSccFlow, SymValue<'smt>>,
+    edge_conds: HashMap<SymIntraSccFlow, SmtExpr<'smt>>,
 }
 
 impl<'smt> SymSccInfo<'smt> {
     fn for_base(ctxt: &'smt SmtCtxt) -> Self {
         Self {
             scc_id: None,
-            entry_cond: SymValue::bool_const(ctxt, true),
+            entry_cond: ctxt.bool_const(true),
             edge_conds: HashMap::new(),
         }
     }
@@ -54,7 +54,7 @@ impl<'smt> SymSccInfo<'smt> {
         Self {
             scc_id: Some(scc_id),
             // TODO: this is a fake condition
-            entry_cond: SymValue::bool_const(ctxt, true),
+            entry_cond: ctxt.bool_const(true),
             edge_conds: HashMap::new(),
         }
     }
@@ -66,7 +66,7 @@ impl<'smt> SymSccInfo<'smt> {
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
-    ) -> &SymValue<'smt> {
+    ) -> &SmtExpr<'smt> {
         let key = SymIntraSccFlow {
             src_scc_id,
             src_block_id,
@@ -83,7 +83,7 @@ impl<'smt> SymSccInfo<'smt> {
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
-        condition: SymValue<'smt>,
+        condition: SmtExpr<'smt>,
     ) {
         let key = SymIntraSccFlow {
             src_scc_id,
@@ -279,7 +279,7 @@ impl<'a> SymVM<'a> {
                         scc_info.entry_cond.clone()
                     } else {
                         incoming_edges.iter().fold(
-                            SymValue::bool_const(&self.smt_ctxt, false),
+                            self.smt_ctxt.bool_const(false),
                             |cond, (src_scc_id, src_block_id)| {
                                 cond.or(scc_info.get_edge_cond(
                                     *src_scc_id,
@@ -309,7 +309,7 @@ impl<'a> SymVM<'a> {
     fn symbolize_block<'smt>(
         &'smt self,
         exec_block: &ExecBlock,
-        reach_cond: &SymValue<'smt>,
+        reach_cond: &SmtExpr<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
     ) {
         let exec_unit = self
@@ -326,20 +326,22 @@ impl<'a> SymVM<'a> {
                 }
                 // loading constants
                 Bytecode::LdU8(val) => {
-                    current_frame.stack_push(SymValue::u8_const(&self.smt_ctxt, *val))
+                    current_frame.stack_push(SymValue::u8_const(&self.smt_ctxt, *val, reach_cond))
                 }
                 Bytecode::LdU64(val) => {
-                    current_frame.stack_push(SymValue::u64_const(&self.smt_ctxt, *val))
+                    current_frame.stack_push(SymValue::u64_const(&self.smt_ctxt, *val, reach_cond))
                 }
                 Bytecode::LdU128(val) => {
-                    current_frame.stack_push(SymValue::u128_const(&self.smt_ctxt, *val))
+                    current_frame.stack_push(SymValue::u128_const(&self.smt_ctxt, *val, reach_cond))
                 }
                 Bytecode::LdTrue => {
-                    current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, true))
+                    current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, true, reach_cond))
                 }
-                Bytecode::LdFalse => {
-                    current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, false))
-                }
+                Bytecode::LdFalse => current_frame.stack_push(SymValue::bool_const(
+                    &self.smt_ctxt,
+                    false,
+                    reach_cond,
+                )),
                 Bytecode::LdConst(idx) => {
                     let val_constant =
                         Value::deserialize_constant(exec_unit.constant_at(*idx)).unwrap();
@@ -350,13 +352,25 @@ impl<'a> SymVM<'a> {
                     {
                         match val_integer {
                             IntegerValue::U8(val) => {
-                                current_frame.stack_push(SymValue::u8_const(&self.smt_ctxt, val));
+                                current_frame.stack_push(SymValue::u8_const(
+                                    &self.smt_ctxt,
+                                    val,
+                                    reach_cond,
+                                ));
                             }
                             IntegerValue::U64(val) => {
-                                current_frame.stack_push(SymValue::u64_const(&self.smt_ctxt, val));
+                                current_frame.stack_push(SymValue::u64_const(
+                                    &self.smt_ctxt,
+                                    val,
+                                    reach_cond,
+                                ));
                             }
                             IntegerValue::U128(val) => {
-                                current_frame.stack_push(SymValue::u128_const(&self.smt_ctxt, val));
+                                current_frame.stack_push(SymValue::u128_const(
+                                    &self.smt_ctxt,
+                                    val,
+                                    reach_cond,
+                                ));
                             }
                         }
                     } else if let Ok(val_address) = val_constant
@@ -364,13 +378,19 @@ impl<'a> SymVM<'a> {
                         .unwrap()
                         .value_as::<AccountAddress>()
                     {
-                        current_frame
-                            .stack_push(SymValue::address_const(&self.smt_ctxt, val_address));
+                        current_frame.stack_push(SymValue::address_const(
+                            &self.smt_ctxt,
+                            val_address,
+                            reach_cond,
+                        ));
                     } else if let Ok(val_vector_u8) =
                         val_constant.copy_value().unwrap().value_as::<Vec<u8>>()
                     {
-                        current_frame
-                            .stack_push(SymValue::vector_u8_const(&self.smt_ctxt, val_vector_u8));
+                        current_frame.stack_push(SymValue::vector_u8_const(
+                            &self.smt_ctxt,
+                            val_vector_u8,
+                            reach_cond,
+                        ));
                     } else {
                         panic!(
                             "Loading arbitrary types of constants is not yet supported: {:?}",
@@ -382,126 +402,126 @@ impl<'a> SymVM<'a> {
                 Bytecode::CastU8 => {
                     // TODO: check out-of-bound possibility
                     let sym = current_frame.stack_pop();
-                    current_frame.stack_push(sym.cast_u8());
+                    current_frame.stack_push(sym.cast_u8(reach_cond));
                 }
                 Bytecode::CastU64 => {
                     // TODO: check out-of-bound possibility
                     let sym = current_frame.stack_pop();
-                    current_frame.stack_push(sym.cast_u64());
+                    current_frame.stack_push(sym.cast_u64(reach_cond));
                 }
                 Bytecode::CastU128 => {
                     // TODO: check out-of-bound possibility
                     let sym = current_frame.stack_pop();
-                    current_frame.stack_push(sym.cast_u128());
+                    current_frame.stack_push(sym.cast_u128(reach_cond));
                 }
                 // arithmetic operations
                 Bytecode::Add => {
                     // TODO: check overflow
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.add(&rhs));
+                    current_frame.stack_push(lhs.add(&rhs, reach_cond));
                 }
                 Bytecode::Sub => {
                     // TODO: check underflow
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.sub(&rhs));
+                    current_frame.stack_push(lhs.sub(&rhs, reach_cond));
                 }
                 Bytecode::Mul => {
                     // TODO: check overflow
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.mul(&rhs));
+                    current_frame.stack_push(lhs.mul(&rhs, reach_cond));
                 }
                 Bytecode::Mod => {
                     // NOTE: unsigned rem cannot over- or under-flow
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.rem(&rhs));
+                    current_frame.stack_push(lhs.rem(&rhs, reach_cond));
                 }
                 Bytecode::Div => {
                     // NOTE: unsigned div cannot over- or under-flow
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.div(&rhs));
+                    current_frame.stack_push(lhs.div(&rhs, reach_cond));
                 }
                 // bitwise operations
                 Bytecode::BitAnd => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.bit_and(&rhs));
+                    current_frame.stack_push(lhs.bit_and(&rhs, reach_cond));
                 }
                 Bytecode::BitOr => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.bit_or(&rhs));
+                    current_frame.stack_push(lhs.bit_or(&rhs, reach_cond));
                 }
                 Bytecode::Xor => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.bit_xor(&rhs));
+                    current_frame.stack_push(lhs.bit_xor(&rhs, reach_cond));
                 }
                 Bytecode::Shl => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.shl(&rhs));
+                    current_frame.stack_push(lhs.shl(&rhs, reach_cond));
                 }
                 Bytecode::Shr => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.shr(&rhs));
+                    current_frame.stack_push(lhs.shr(&rhs, reach_cond));
                 }
                 // comparison operations
                 Bytecode::Gt => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.gt(&rhs));
+                    current_frame.stack_push(lhs.gt(&rhs, reach_cond));
                 }
                 Bytecode::Ge => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.ge(&rhs));
+                    current_frame.stack_push(lhs.ge(&rhs, reach_cond));
                 }
                 Bytecode::Le => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.le(&rhs));
+                    current_frame.stack_push(lhs.le(&rhs, reach_cond));
                 }
                 Bytecode::Lt => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.lt(&rhs));
+                    current_frame.stack_push(lhs.lt(&rhs, reach_cond));
                 }
                 // boolean operations
                 Bytecode::And => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.and(&rhs));
+                    current_frame.stack_push(lhs.and(&rhs, reach_cond));
                 }
                 Bytecode::Or => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.or(&rhs));
+                    current_frame.stack_push(lhs.or(&rhs, reach_cond));
                 }
                 Bytecode::Not => {
                     let sym = current_frame.stack_pop();
-                    current_frame.stack_push(sym.not());
+                    current_frame.stack_push(sym.not(reach_cond));
                 }
                 // generic equality
                 Bytecode::Eq => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.eq(&rhs));
+                    current_frame.stack_push(lhs.eq(&rhs, reach_cond));
                 }
                 Bytecode::Neq => {
                     let rhs = current_frame.stack_pop();
                     let lhs = current_frame.stack_pop();
-                    current_frame.stack_push(lhs.ne(&rhs));
+                    current_frame.stack_push(lhs.ne(&rhs, reach_cond));
                 }
                 // struct constructions
                 Bytecode::Pack(idx) => {
                     let struct_context = exec_unit.struct_context_by_def_index(*idx);
-                    self.struct_pack(&struct_context, &[], current_frame);
+                    self.struct_pack(&struct_context, &[], reach_cond, current_frame);
                 }
                 Bytecode::PackGeneric(idx) => {
                     let struct_context = exec_unit.struct_context_by_generic_index(*idx);
@@ -518,11 +538,11 @@ impl<'a> SymVM<'a> {
                             )
                         })
                         .collect();
-                    self.struct_pack(&struct_context, &inst_args, current_frame);
+                    self.struct_pack(&struct_context, &inst_args, reach_cond, current_frame);
                 }
                 Bytecode::Unpack(idx) => {
                     let struct_context = exec_unit.struct_context_by_def_index(*idx);
-                    self.struct_unpack(&struct_context, &[], current_frame);
+                    self.struct_unpack(&struct_context, &[], reach_cond, current_frame);
                 }
                 Bytecode::UnpackGeneric(idx) => {
                     let struct_context = exec_unit.struct_context_by_generic_index(*idx);
@@ -539,7 +559,7 @@ impl<'a> SymVM<'a> {
                             )
                         })
                         .collect();
-                    self.struct_unpack(&struct_context, &inst_args, current_frame);
+                    self.struct_unpack(&struct_context, &inst_args, reach_cond, current_frame);
                 }
                 // manipulations over local slots
                 Bytecode::CopyLoc(idx) => {
@@ -572,6 +592,7 @@ impl<'a> SymVM<'a> {
         &'smt self,
         struct_context: &StructContext,
         struct_type_args: &[ExecTypeArg],
+        reach_cond: &SmtExpr<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) {
         let struct_name = self
@@ -589,7 +610,8 @@ impl<'a> SymVM<'a> {
                     .map(|_| current_frame.stack_pop())
                     .collect();
                 let field_refs: Vec<&SymValue> = fields.iter().map(|field| field).collect();
-                let sym = SymValue::struct_const(&self.smt_ctxt, &struct_kind, &field_refs);
+                let sym =
+                    SymValue::struct_const(&self.smt_ctxt, &struct_kind, &field_refs, reach_cond);
                 current_frame.stack_push(sym);
             }
         }
@@ -599,6 +621,7 @@ impl<'a> SymVM<'a> {
         &'smt self,
         struct_context: &StructContext,
         struct_type_args: &[ExecTypeArg],
+        reach_cond: &SmtExpr<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) {
         let struct_name = self
@@ -610,7 +633,7 @@ impl<'a> SymVM<'a> {
             ExecStructInfo::Native => panic!("Native struct is not supported yet"),
             ExecStructInfo::Declared { field_vec, .. } => {
                 let sym = current_frame.stack_pop();
-                for field_sym in sym.unpack(field_vec.len()) {
+                for field_sym in sym.unpack(field_vec.len(), reach_cond) {
                     current_frame.stack_push(field_sym);
                 }
             }

@@ -35,12 +35,12 @@ pub struct SymValue<'a> {
 // TODO: make SymValue pub(crate)
 
 macro_rules! make_sym_primitive {
-    ($ctxt:ident, $v:ident, $func:tt $(,$extra:ident)*) => {
+    ($ctxt:ident, $v:ident, $cond:ident, $func:tt $(,$extra:ident)*) => {
         SymValue {
             ctxt: $ctxt,
             variants: vec![SymRepr {
                 expr: $ctxt.$func($($extra,)* $v),
-                cond: $ctxt.bool_const(true),
+                cond: $cond.clone(),
             }],
         }
     };
@@ -51,99 +51,126 @@ macro_rules! make_sym_from_arg {
         match $arg {
             SymTransactionArgument::Concrete(c_arg) => {
                 if let TransactionArgument::$kind(val) = c_arg {
-                    SymValue::$func_const($ctxt, val.clone())
+                    SymValue::$func_const($ctxt, val.clone(), &$ctxt.bool_const(true))
                 } else {
                     panic!("Mismatched types in symbolic argument");
                 }
             }
-            SymTransactionArgument::Symbolic(var) => SymValue::$func_var($ctxt, var),
+            SymTransactionArgument::Symbolic(var) => {
+                SymValue::$func_var($ctxt, var, &$ctxt.bool_const(true))
+            }
         }
     };
 }
 
 macro_rules! sym_op_unary {
-    ($func:tt, $sym:ident) => {{
-        SymValue::op($sym.ctxt, &[$sym], |parts| {
-            debug_assert_eq!(parts.len(), 1);
-            parts[0].$func()
-        })
+    ($func:tt, $sym:ident, $cond:ident) => {{
+        SymValue::op(
+            $sym.ctxt,
+            &[$sym],
+            |parts| {
+                debug_assert_eq!(parts.len(), 1);
+                parts[0].$func()
+            },
+            $cond,
+        )
     }};
 }
 
 macro_rules! sym_op_binary {
-    ($func:tt, $lhs:ident, $rhs:ident) => {{
-        SymValue::op($lhs.ctxt, &[$lhs, $rhs], |parts| {
-            debug_assert_eq!(parts.len(), 2);
-            parts[0].$func(parts[1])
-        })
+    ($func:tt, $lhs:ident, $rhs:ident, $cond:ident) => {{
+        SymValue::op(
+            $lhs.ctxt,
+            &[$lhs, $rhs],
+            |parts| {
+                debug_assert_eq!(parts.len(), 2);
+                parts[0].$func(parts[1])
+            },
+            $cond,
+        )
     }};
 }
 
 impl<'a> SymValue<'a> {
     // create bool
-    pub fn bool_const(ctxt: &'a SmtCtxt, val: bool) -> Self {
-        make_sym_primitive!(ctxt, val, bool_const)
+    pub fn bool_const(ctxt: &'a SmtCtxt, val: bool, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, val, cond, bool_const)
     }
 
-    pub fn bool_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, bool_var)
+    pub fn bool_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, var, cond, bool_var)
     }
 
     // create bitvec
-    pub fn u8_const(ctxt: &'a SmtCtxt, val: u8) -> Self {
-        make_sym_primitive!(ctxt, val, bitvec_const_u8)
+    pub fn u8_const(ctxt: &'a SmtCtxt, val: u8, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, val, cond, bitvec_const_u8)
     }
 
-    pub fn u64_const(ctxt: &'a SmtCtxt, val: u64) -> Self {
-        make_sym_primitive!(ctxt, val, bitvec_const_u64)
+    pub fn u64_const(ctxt: &'a SmtCtxt, val: u64, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, val, cond, bitvec_const_u64)
     }
 
-    pub fn u128_const(ctxt: &'a SmtCtxt, val: u128) -> Self {
-        make_sym_primitive!(ctxt, val, bitvec_const_u128)
+    pub fn u128_const(ctxt: &'a SmtCtxt, val: u128, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, val, cond, bitvec_const_u128)
     }
 
-    pub fn u8_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, bitvec_var_u8)
+    pub fn u8_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, var, cond, bitvec_var_u8)
     }
 
-    pub fn u64_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, bitvec_var_u64)
+    pub fn u64_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, var, cond, bitvec_var_u64)
     }
 
-    pub fn u128_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, bitvec_var_u128)
+    pub fn u128_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, var, cond, bitvec_var_u128)
     }
 
     // create address
-    pub fn address_const(ctxt: &'a SmtCtxt, val: AccountAddress) -> Self {
-        make_sym_primitive!(ctxt, val, address_const)
+    pub fn address_const(ctxt: &'a SmtCtxt, val: AccountAddress, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, val, cond, address_const)
     }
 
-    pub fn address_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, address_var)
+    pub fn address_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        make_sym_primitive!(ctxt, var, cond, address_var)
     }
 
     // create vector
-    pub fn vector_const(ctxt: &'a SmtCtxt, element_kind: &SmtKind, vals: &[&SymValue<'a>]) -> Self {
-        SymValue::op(ctxt, vals, |exprs| ctxt.vector_const(element_kind, exprs))
+    pub fn vector_const(
+        ctxt: &'a SmtCtxt,
+        element_kind: &SmtKind,
+        vals: &[&SymValue<'a>],
+        cond: &SmtExpr<'a>,
+    ) -> Self {
+        SymValue::op(
+            ctxt,
+            vals,
+            |exprs| ctxt.vector_const(element_kind, exprs),
+            cond,
+        )
     }
 
-    pub fn vector_var(ctxt: &'a SmtCtxt, element_kind: &SmtKind, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, vector_var, element_kind)
+    pub fn vector_var(
+        ctxt: &'a SmtCtxt,
+        element_kind: &SmtKind,
+        var: &str,
+        cond: &SmtExpr<'a>,
+    ) -> Self {
+        make_sym_primitive!(ctxt, var, cond, vector_var, element_kind)
     }
 
     // create vector (utilities)
-    pub fn vector_u8_const(ctxt: &'a SmtCtxt, vals: Vec<u8>) -> Self {
+    pub fn vector_u8_const(ctxt: &'a SmtCtxt, vals: Vec<u8>, cond: &SmtExpr<'a>) -> Self {
         let elements: Vec<SymValue> = vals
             .iter()
-            .map(|val| SymValue::u8_const(ctxt, *val))
+            .map(|val| SymValue::u8_const(ctxt, *val, cond))
             .collect();
         let element_refs: Vec<&SymValue> = elements.iter().collect();
-        SymValue::vector_const(ctxt, &SmtKind::bitvec_u8(), &element_refs)
+        SymValue::vector_const(ctxt, &SmtKind::bitvec_u8(), &element_refs, cond)
     }
 
-    fn vector_u8_var(ctxt: &'a SmtCtxt, var: &str) -> Self {
-        SymValue::vector_var(ctxt, &SmtKind::bitvec_u8(), var)
+    fn vector_u8_var(ctxt: &'a SmtCtxt, var: &str, cond: &SmtExpr<'a>) -> Self {
+        SymValue::vector_var(ctxt, &SmtKind::bitvec_u8(), var, cond)
     }
 
     // create struct
@@ -151,12 +178,23 @@ impl<'a> SymValue<'a> {
         ctxt: &'a SmtCtxt,
         struct_kind: &SmtKind,
         fields: &[&SymValue<'a>],
+        cond: &SmtExpr<'a>,
     ) -> Self {
-        SymValue::op(ctxt, fields, |exprs| ctxt.struct_const(struct_kind, exprs))
+        SymValue::op(
+            ctxt,
+            fields,
+            |exprs| ctxt.struct_const(struct_kind, exprs),
+            cond,
+        )
     }
 
-    pub fn struct_var(ctxt: &'a SmtCtxt, struct_kind: &SmtKind, var: &str) -> Self {
-        make_sym_primitive!(ctxt, var, struct_var, struct_kind)
+    pub fn struct_var(
+        ctxt: &'a SmtCtxt,
+        struct_kind: &SmtKind,
+        var: &str,
+        cond: &SmtExpr<'a>,
+    ) -> Self {
+        make_sym_primitive!(ctxt, var, cond, struct_var, struct_kind)
     }
 
     // create from argument
@@ -206,7 +244,12 @@ impl<'a> SymValue<'a> {
     }
 
     // operations
-    fn op<F>(ctxt: &'a SmtCtxt, operands: &[&SymValue<'a>], func: F) -> Self
+    fn op<F>(
+        ctxt: &'a SmtCtxt,
+        operands: &[&SymValue<'a>],
+        func: F,
+        base_cond: &SmtExpr<'a>,
+    ) -> Self
     where
         F: Fn(&[&SmtExpr<'a>]) -> SmtExpr<'a>,
     {
@@ -227,7 +270,7 @@ impl<'a> SymValue<'a> {
             // derive new condition
             let cond = combo
                 .iter()
-                .fold(ctxt.bool_const(true), |acc, variant| acc.and(&variant.cond));
+                .fold(base_cond.clone(), |acc, variant| acc.and(&variant.cond));
 
             // check feasibility
             let feasible = match ctxt.solve(&[&cond]) {
@@ -273,89 +316,89 @@ impl<'a> SymValue<'a> {
     }
 
     // bool operations
-    pub fn not(&self) -> SymValue<'a> {
-        sym_op_unary!(not, self)
+    pub fn not(&self, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_unary!(not, self, cond)
     }
 
-    pub fn and(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(and, self, rhs)
+    pub fn and(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(and, self, rhs, cond)
     }
 
-    pub fn or(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(or, self, rhs)
+    pub fn or(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(or, self, rhs, cond)
     }
 
     // bitvec operations
-    pub fn add(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(add, self, rhs)
+    pub fn add(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(add, self, rhs, cond)
     }
 
-    pub fn sub(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(sub, self, rhs)
+    pub fn sub(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(sub, self, rhs, cond)
     }
 
-    pub fn mul(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(mul, self, rhs)
+    pub fn mul(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(mul, self, rhs, cond)
     }
 
-    pub fn div(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(div, self, rhs)
+    pub fn div(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(div, self, rhs, cond)
     }
 
-    pub fn rem(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(rem, self, rhs)
+    pub fn rem(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(rem, self, rhs, cond)
     }
 
-    pub fn cast_u8(&self) -> SymValue<'a> {
-        sym_op_unary!(cast_u8, self)
+    pub fn cast_u8(&self, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_unary!(cast_u8, self, cond)
     }
 
-    pub fn cast_u64(&self) -> SymValue<'a> {
-        sym_op_unary!(cast_u64, self)
+    pub fn cast_u64(&self, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_unary!(cast_u64, self, cond)
     }
 
-    pub fn cast_u128(&self) -> SymValue<'a> {
-        sym_op_unary!(cast_u128, self)
+    pub fn cast_u128(&self, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_unary!(cast_u128, self, cond)
     }
 
-    pub fn bit_and(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(bit_and, self, rhs)
+    pub fn bit_and(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_and, self, rhs, cond)
     }
 
-    pub fn bit_or(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(bit_or, self, rhs)
+    pub fn bit_or(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_or, self, rhs, cond)
     }
 
-    pub fn bit_xor(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(bit_xor, self, rhs)
+    pub fn bit_xor(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(bit_xor, self, rhs, cond)
     }
 
-    pub fn shl(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(shl, self, rhs)
+    pub fn shl(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(shl, self, rhs, cond)
     }
 
-    pub fn shr(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(shr, self, rhs)
+    pub fn shr(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(shr, self, rhs, cond)
     }
 
-    pub fn gt(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(gt, self, rhs)
+    pub fn gt(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(gt, self, rhs, cond)
     }
 
-    pub fn ge(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(ge, self, rhs)
+    pub fn ge(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(ge, self, rhs, cond)
     }
 
-    pub fn le(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(le, self, rhs)
+    pub fn le(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(le, self, rhs, cond)
     }
 
-    pub fn lt(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(lt, self, rhs)
+    pub fn lt(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(lt, self, rhs, cond)
     }
 
     // struct operations
-    pub fn unpack(&self, num_fields: usize) -> Vec<SymValue<'a>> {
+    pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'a>) -> Vec<SymValue<'a>> {
         let ctxt = self.ctxt;
 
         // initialize the unpacked fields
@@ -369,7 +412,7 @@ impl<'a> SymValue<'a> {
 
         // add options to each field
         for repr in &self.variants {
-            let cond = &repr.cond;
+            let cond = base_cond.and(&repr.cond);
 
             let unpacked_exprs = repr.expr.unpack();
             debug_assert_eq!(unpacked_exprs.len(), num_fields);
@@ -392,12 +435,12 @@ impl<'a> SymValue<'a> {
 
                 if let Some(item) = dup {
                     // join the conditions
-                    item.cond = item.cond.or(cond);
+                    item.cond = item.cond.or(&cond);
                 } else {
                     // add a new variant
                     field_sym.variants.push(SymRepr {
                         expr: expr.clone(),
-                        cond: repr.cond.clone(),
+                        cond: cond.clone(),
                     });
                 }
             }
@@ -408,12 +451,12 @@ impl<'a> SymValue<'a> {
     }
 
     // generic operations
-    pub fn eq(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(eq, self, rhs)
+    pub fn eq(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(eq, self, rhs, cond)
     }
 
-    pub fn ne(&self, rhs: &SymValue<'a>) -> SymValue<'a> {
-        sym_op_binary!(ne, self, rhs)
+    pub fn ne(&self, rhs: &SymValue<'a>, cond: &SmtExpr<'a>) -> SymValue<'a> {
+        sym_op_binary!(ne, self, rhs, cond)
     }
 }
 
