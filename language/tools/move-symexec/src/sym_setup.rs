@@ -328,11 +328,21 @@ impl ExecUnit<'_> {
         }
     }
 
-    fn params_signature(&self) -> &Signature {
+    pub fn params_signature(&self) -> &Signature {
         match self {
             ExecUnit::Script(unit) => self.signature_at(unit.as_inner().parameters),
             ExecUnit::Module(_, func) => {
                 self.signature_at(self.function_handle_at(func.function).parameters)
+            }
+        }
+    }
+
+    pub fn returns_signature(&self) -> Option<&Signature> {
+        match self {
+            // script returns no values
+            ExecUnit::Script(_) => None,
+            ExecUnit::Module(_, func) => {
+                Some(self.signature_at(self.function_handle_at(func.function).return_))
             }
         }
     }

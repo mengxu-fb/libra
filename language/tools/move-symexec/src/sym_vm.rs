@@ -96,6 +96,11 @@ impl<'smt> SymSccInfo<'smt> {
     }
 }
 
+enum SymBlockTermReason {
+    Normal,
+    Ret,
+}
+
 /// The symbolic interpreter that examines instructions one by one
 pub(crate) struct SymVM<'a> {
     /// A wrapper over the smt solver context manager
@@ -293,7 +298,7 @@ impl<'a> SymVM<'a> {
                     };
 
                     // go over the block
-                    self.symbolize_block(
+                    let term = self.symbolize_block(
                         scc_id,
                         block,
                         &reach_cond,
@@ -301,6 +306,40 @@ impl<'a> SymVM<'a> {
                         &mut scc_info,
                         &mut call_stack,
                     );
+
+                    match term {
+                        SymBlockTermReason::Normal => {}
+                        SymBlockTermReason::Ret => {
+                            let mut current_frame = call_stack.pop().unwrap();
+
+                            let exec_unit = self
+                                .setup
+                                .get_exec_unit_by_context(&block.code_context)
+                                .unwrap();
+                            let returns_num_opt =
+                                exec_unit.returns_signature().map(|sig| sig.len());
+
+                            if let Some(returns_num) = returns_num_opt {
+                                let parent_frame = call_stack.last_mut().unwrap();
+
+                                // clear the arguments
+                                let params_num = exec_unit.params_signature().len();
+                                for _ in 0..params_num {
+                                    parent_frame.stack_pop();
+                                }
+
+                                // transfer the return values
+                                SymFrame::stack_transfer(
+                                    &mut current_frame,
+                                    parent_frame,
+                                    returns_num,
+                                );
+                            } else {
+                                // we are returning from the script
+                                debug_assert!(call_stack.is_empty());
+                            }
+                        }
+                    }
                 }
             }
         }
@@ -311,7 +350,7 @@ impl<'a> SymVM<'a> {
 
         // we should have nothing left in the stack after execution
         debug_assert!(scc_stack.is_empty());
-        // TODO: check call_stack is empty
+        debug_assert!(call_stack.is_empty());
     }
 
     fn symbolize_block<'smt>(
@@ -322,18 +361,23 @@ impl<'a> SymVM<'a> {
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
         scc_info: &mut SymSccInfo<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
-    ) {
+    ) -> SymBlockTermReason {
         let exec_unit = self
             .setup
             .get_exec_unit_by_context(&exec_block.code_context)
             .unwrap();
 
         let current_frame = call_stack.last_mut().unwrap();
-        for instruction in &exec_block.instructions {
+
+        for (pos, instruction) in exec_block.instructions.iter().enumerate() {
             match instruction {
                 // stack operations
                 Bytecode::Pop => {
                     current_frame.stack_pop();
+                }
+                Bytecode::Ret => {
+                    debug_assert_eq!(pos + 1, exec_block.instructions.len());
+                    return SymBlockTermReason::Ret;
                 }
                 // loading constants
                 Bytecode::LdU8(val) => {
@@ -653,6 +697,9 @@ impl<'a> SymVM<'a> {
                 }
             }
         }
+
+        // normal block end
+        SymBlockTermReason::Normal
     }
 
     // utility functions

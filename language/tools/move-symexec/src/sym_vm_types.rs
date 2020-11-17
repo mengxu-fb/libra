@@ -557,4 +557,11 @@ impl<'a> SymFrame<'a> {
     pub fn stack_push(&mut self, sym: SymValue<'a>) {
         self.stack.push(sym);
     }
+
+    pub fn stack_transfer(from: &mut SymFrame<'a>, into: &mut SymFrame<'a>, num: usize) {
+        let mut syms: Vec<SymValue<'a>> = (0..num).map(|_| from.stack_pop()).collect();
+        while let Some(sym) = syms.pop() {
+            into.stack_push(sym);
+        }
+    }
 }
