@@ -16,7 +16,7 @@ use vm::{
 use crate::{
     sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
     sym_setup::{ExecStructInfo, ExecTypeArg, StructContext, SymSetup},
-    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
+    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult},
     sym_type_graph::TypeGraph,
     sym_vm_types::{SymFrame, SymTransactionArgument, SymValue},
 };
@@ -296,6 +296,29 @@ impl<'a> SymVM<'a> {
                             },
                         )
                     };
+
+                    // if this block is not even reachable, shortcut the
+                    // execution and do not go into the block
+                    let feasible = match self.smt_ctxt.solve(&[&reach_cond]) {
+                        SmtResult::SAT => true,
+                        SmtResult::UNSAT => false,
+                        SmtResult::UNKNOWN => {
+                            // TODO: assume that things are decidable for now
+                            panic!("SMT solver returns an unknown result");
+                        }
+                    };
+                    if !feasible {
+                        for (dst_scc_id, dst_block_id) in outgoing_edges {
+                            scc_info.put_edge_cond(
+                                scc_id,
+                                block.block_id,
+                                dst_scc_id,
+                                dst_block_id,
+                                self.smt_ctxt.bool_const(false),
+                            );
+                        }
+                        continue;
+                    }
 
                     // go over the block
                     let term = self.symbolize_block(
@@ -784,7 +807,7 @@ impl<'a> SymVM<'a> {
                 *dst_scc_id,
                 *dst_block_id,
                 branch_cond.clone(),
-            )
+            );
         }
         // there is at max one target
         debug_assert!(branch_targets.is_empty());
