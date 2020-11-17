@@ -3,7 +3,8 @@
 
 #![forbid(unsafe_code)]
 
-use log::warn;
+use itertools::Itertools;
+use log::{debug, warn};
 use std::collections::HashMap;
 
 use move_core_types::{account_address::AccountAddress, transaction_argument::TransactionArgument};
@@ -277,6 +278,29 @@ impl<'a> SymVM<'a> {
                     incoming_edges,
                     outgoing_edges,
                 } => {
+                    // log information
+                    debug!("Block: {}::{}", scc_id, block.block_id);
+                    debug!(
+                        "Incoming edges: [{}]",
+                        incoming_edges
+                            .iter()
+                            .map(|(edge_scc_id, edge_block_id)| format!(
+                                "{}::{}",
+                                edge_scc_id, edge_block_id
+                            ))
+                            .join("-")
+                    );
+                    debug!(
+                        "Outgoing edges: [{}]",
+                        outgoing_edges
+                            .iter()
+                            .map(|(edge_scc_id, edge_block_id)| format!(
+                                "{}::{}",
+                                edge_scc_id, edge_block_id
+                            ))
+                            .join("-")
+                    );
+
                     // derive the reachability condition for this block
                     let mut scc_info = scc_stack.last_mut().unwrap();
                     let reach_cond = if incoming_edges.is_empty() {
@@ -296,6 +320,7 @@ impl<'a> SymVM<'a> {
                             },
                         )
                     };
+                    debug!("Reaching condition: {}", reach_cond);
 
                     // if this block is not even reachable, shortcut the
                     // execution and do not go into the block
@@ -389,10 +414,10 @@ impl<'a> SymVM<'a> {
             .setup
             .get_exec_unit_by_context(&exec_block.code_context)
             .unwrap();
-
         let current_frame = call_stack.last_mut().unwrap();
 
         for (pos, instruction) in exec_block.instructions.iter().enumerate() {
+            debug!("Instruction {}: {:?}", pos, instruction);
             match instruction {
                 // stack operations
                 Bytecode::Pop => {
@@ -415,40 +440,30 @@ impl<'a> SymVM<'a> {
                 Bytecode::LdTrue => {
                     current_frame.stack_push(SymValue::bool_const(&self.smt_ctxt, true, reach_cond))
                 }
-                Bytecode::LdFalse => current_frame.stack_push(SymValue::bool_const(
-                    &self.smt_ctxt,
-                    false,
-                    reach_cond,
-                )),
+                Bytecode::LdFalse => {
+                    current_frame.stack_push(SymValue::bool_const(
+                        &self.smt_ctxt,
+                        false,
+                        reach_cond,
+                    ));
+                }
                 Bytecode::LdConst(idx) => {
                     let val_constant =
                         Value::deserialize_constant(exec_unit.constant_at(*idx)).unwrap();
-                    if let Ok(val_integer) = val_constant
+                    let sym = if let Ok(val_integer) = val_constant
                         .copy_value()
                         .unwrap()
                         .value_as::<IntegerValue>()
                     {
                         match val_integer {
                             IntegerValue::U8(val) => {
-                                current_frame.stack_push(SymValue::u8_const(
-                                    &self.smt_ctxt,
-                                    val,
-                                    reach_cond,
-                                ));
+                                SymValue::u8_const(&self.smt_ctxt, val, reach_cond)
                             }
                             IntegerValue::U64(val) => {
-                                current_frame.stack_push(SymValue::u64_const(
-                                    &self.smt_ctxt,
-                                    val,
-                                    reach_cond,
-                                ));
+                                SymValue::u64_const(&self.smt_ctxt, val, reach_cond)
                             }
                             IntegerValue::U128(val) => {
-                                current_frame.stack_push(SymValue::u128_const(
-                                    &self.smt_ctxt,
-                                    val,
-                                    reach_cond,
-                                ));
+                                SymValue::u128_const(&self.smt_ctxt, val, reach_cond)
                             }
                         }
                     } else if let Ok(val_address) = val_constant
@@ -456,25 +471,18 @@ impl<'a> SymVM<'a> {
                         .unwrap()
                         .value_as::<AccountAddress>()
                     {
-                        current_frame.stack_push(SymValue::address_const(
-                            &self.smt_ctxt,
-                            val_address,
-                            reach_cond,
-                        ));
+                        SymValue::address_const(&self.smt_ctxt, val_address, reach_cond)
                     } else if let Ok(val_vector_u8) =
                         val_constant.copy_value().unwrap().value_as::<Vec<u8>>()
                     {
-                        current_frame.stack_push(SymValue::vector_u8_const(
-                            &self.smt_ctxt,
-                            val_vector_u8,
-                            reach_cond,
-                        ));
+                        SymValue::vector_u8_const(&self.smt_ctxt, val_vector_u8, reach_cond)
                     } else {
                         panic!(
                             "Loading arbitrary types of constants is not yet supported: {:?}",
                             val_constant
                         );
-                    }
+                    };
+                    current_frame.stack_push(sym);
                 }
                 // cast operations
                 Bytecode::CastU8 => {

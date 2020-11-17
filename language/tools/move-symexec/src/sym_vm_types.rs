@@ -5,6 +5,8 @@
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
+use log::debug;
+use std::fmt;
 
 use move_core_types::{
     account_address::AccountAddress, parser::parse_transaction_argument,
@@ -22,6 +24,12 @@ struct SymRepr<'a> {
     cond: SmtExpr<'a>,
 }
 
+impl fmt::Display for SymRepr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} | {}", self.expr, self.cond)
+    }
+}
+
 /// A symbolic mimic of the move_vm_types::values::Value.
 #[derive(Clone, Debug)]
 pub struct SymValue<'a> {
@@ -31,6 +39,17 @@ pub struct SymValue<'a> {
     /// (i.e., all variants) this value may take as well as all the
     /// conditions associated with each variant.
     variants: Vec<SymRepr<'a>>,
+}
+
+impl fmt::Display for SymValue<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "[")?;
+        for (i, variant) in self.variants.iter().enumerate() {
+            writeln!(f, "\t{}: {}", i, variant)?;
+        }
+        writeln!(f, "]")?;
+        Ok(())
+    }
 }
 
 impl<'a> SymValue<'a> {
@@ -551,10 +570,13 @@ impl<'a> SymFrame<'a> {
 
     // stack operations
     pub fn stack_pop(&mut self) -> SymValue<'a> {
-        self.stack.pop().unwrap()
+        let sym = self.stack.pop().unwrap();
+        debug!("Stack: -- {}", sym);
+        sym
     }
 
     pub fn stack_push(&mut self, sym: SymValue<'a>) {
+        debug!("Stack: ++ {}", sym);
         self.stack.push(sym);
     }
 

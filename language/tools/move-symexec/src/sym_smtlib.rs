@@ -1,7 +1,14 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::{cmp::Ordering, collections::HashMap, ffi::CString, os::raw::c_uint, ptr::null_mut};
+use std::{
+    cmp::Ordering,
+    collections::HashMap,
+    ffi::{CStr, CString},
+    fmt,
+    os::raw::c_uint,
+    ptr::null_mut,
+};
 
 use move_core_types::account_address::AccountAddress;
 
@@ -430,6 +437,23 @@ pub struct SmtExpr<'a> {
     ast: Z3_ast,
     ctxt: &'a SmtCtxt,
     kind: SmtKind,
+}
+
+impl fmt::Display for SmtExpr<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let sort_repr = unsafe {
+            CStr::from_ptr(Z3_sort_to_string(
+                self.ctxt.ctxt,
+                self.kind.to_z3_sort(self.ctxt),
+            ))
+        }
+        .to_str()
+        .unwrap();
+        let expr_repr = unsafe { CStr::from_ptr(Z3_ast_to_string(self.ctxt.ctxt, self.ast)) }
+            .to_str()
+            .unwrap();
+        write!(f, "[{}] {}", sort_repr, expr_repr)
+    }
 }
 
 macro_rules! smt_unary_op_bool {
