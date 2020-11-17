@@ -755,7 +755,7 @@ impl<'a> SymVM<'a> {
                 let fields: Vec<SymValue> = (0..field_vec.len())
                     .map(|_| current_frame.stack_pop())
                     .collect();
-                let field_refs: Vec<&SymValue> = fields.iter().map(|field| field).collect();
+                let field_refs: Vec<&SymValue> = fields.iter().collect();
                 let sym =
                     SymValue::struct_const(&self.smt_ctxt, &struct_kind, &field_refs, reach_cond);
                 current_frame.stack_push(sym);
