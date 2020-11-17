@@ -32,6 +32,28 @@ pub struct SymValue<'a> {
     /// conditions associated with each variant.
     variants: Vec<SymRepr<'a>>,
 }
+
+impl<'a> SymValue<'a> {
+    pub fn flatten_as_predicate(&self, pred: bool) -> SmtExpr<'a> {
+        if self.variants.is_empty() {
+            // if there is no variants, it means that there is no way to
+            // set this symbolic value
+            self.ctxt.bool_const(false)
+        } else {
+            self.variants
+                .iter()
+                .fold(self.ctxt.bool_const(false), |acc, repr| {
+                    let clause = if pred {
+                        repr.expr.and(&repr.cond)
+                    } else {
+                        repr.expr.not().and(&repr.cond)
+                    };
+                    acc.or(&clause)
+                })
+        }
+    }
+}
+
 // TODO: make SymValue pub(crate)
 
 macro_rules! make_sym_primitive {

@@ -10,7 +10,7 @@ use move_core_types::{account_address::AccountAddress, transaction_argument::Tra
 use move_vm_types::values::{IntegerValue, Value};
 use vm::{
     access::ScriptAccess,
-    file_format::{Bytecode, CompiledScript, SignatureToken},
+    file_format::{Bytecode, CodeOffset, CompiledScript, SignatureToken},
 };
 
 use crate::{
@@ -270,9 +270,10 @@ impl<'a> SymVM<'a> {
                     scc_id,
                     block,
                     incoming_edges,
+                    outgoing_edges,
                 } => {
                     // derive the reachability condition for this block
-                    let scc_info = scc_stack.last_mut().unwrap();
+                    let mut scc_info = scc_stack.last_mut().unwrap();
                     let reach_cond = if incoming_edges.is_empty() {
                         // this is the entry block of this scc, so,
                         // just simply take the entry condition
@@ -292,7 +293,14 @@ impl<'a> SymVM<'a> {
                     };
 
                     // go over the block
-                    self.symbolize_block(block, &reach_cond, &mut call_stack);
+                    self.symbolize_block(
+                        scc_id,
+                        block,
+                        &reach_cond,
+                        &outgoing_edges,
+                        &mut scc_info,
+                        &mut call_stack,
+                    );
                 }
             }
         }
@@ -308,8 +316,11 @@ impl<'a> SymVM<'a> {
 
     fn symbolize_block<'smt>(
         &'smt self,
+        scc_id: ExecSccId,
         exec_block: &ExecBlock,
         reach_cond: &SmtExpr<'smt>,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_info: &mut SymSccInfo<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
     ) {
         let exec_unit = self
@@ -577,6 +588,63 @@ impl<'a> SymVM<'a> {
                     // TODO: worry about store index overflow?
                     current_frame.local_store(*idx as usize, sym);
                 }
+                // branching
+                Bytecode::Branch(offset) => {
+                    self.handle_branch(
+                        *offset,
+                        reach_cond,
+                        scc_id,
+                        exec_block.block_id,
+                        outgoing_edges,
+                        scc_info,
+                    );
+                }
+                Bytecode::BrTrue(offset) => {
+                    let sym = current_frame.stack_pop();
+                    let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
+                    let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
+
+                    // we can safely unwrap the code_offset
+                    self.handle_branch(
+                        *offset,
+                        &cond_t,
+                        scc_id,
+                        exec_block.block_id,
+                        outgoing_edges,
+                        scc_info,
+                    );
+                    self.handle_branch(
+                        exec_block.code_offset.unwrap() + 1,
+                        &cond_f,
+                        scc_id,
+                        exec_block.block_id,
+                        outgoing_edges,
+                        scc_info,
+                    );
+                }
+                Bytecode::BrFalse(offset) => {
+                    let sym = current_frame.stack_pop();
+                    let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
+                    let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
+
+                    // we can safely unwrap the code_offset
+                    self.handle_branch(
+                        *offset,
+                        &cond_f,
+                        scc_id,
+                        exec_block.block_id,
+                        outgoing_edges,
+                        scc_info,
+                    );
+                    self.handle_branch(
+                        exec_block.code_offset.unwrap() + 1,
+                        &cond_t,
+                        scc_id,
+                        exec_block.block_id,
+                        outgoing_edges,
+                        scc_info,
+                    );
+                }
                 // misc
                 Bytecode::Nop => {}
                 // the rest
@@ -638,5 +706,40 @@ impl<'a> SymVM<'a> {
                 }
             }
         }
+    }
+
+    fn handle_branch<'smt>(
+        &'smt self,
+        offset: CodeOffset,
+        branch_cond: &SmtExpr<'smt>,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_info: &mut SymSccInfo<'smt>,
+    ) {
+        let mut branch_targets: Vec<&(ExecSccId, ExecBlockId)> = outgoing_edges
+            .iter()
+            .filter(|(_, out_block_id)| {
+                self.exec_graph
+                    .get_block_by_block_id(*out_block_id)
+                    .code_offset
+                    // there is no way to branch into an
+                    // artificial block, so if the code_offset is None,
+                    // simply return false
+                    .map_or(false, |code_offset| code_offset == offset)
+            })
+            .collect();
+
+        if let Some((dst_scc_id, dst_block_id)) = branch_targets.pop() {
+            scc_info.put_edge_cond(
+                src_scc_id,
+                src_block_id,
+                *dst_scc_id,
+                *dst_block_id,
+                branch_cond.clone(),
+            )
+        }
+        // there is at max one target
+        debug_assert!(branch_targets.is_empty());
     }
 }

@@ -197,7 +197,7 @@ impl ExecGraph {
         self.graph.node_weight(node).unwrap()
     }
 
-    fn get_block_by_block_id(&self, block_id: ExecBlockId) -> &ExecBlock {
+    pub fn get_block_by_block_id(&self, block_id: ExecBlockId) -> &ExecBlock {
         self.get_block_by_node(self.get_node_by_block_id(block_id))
     }
 
@@ -1053,7 +1053,7 @@ impl ExecSccGraph {
         paths
     }
 
-    /// get all incoming edges to an scc, within this graph only
+    /// get all incoming edges into an scc, within this graph only
     pub fn get_incoming_edges_for_block(
         &self,
         scc_id: ExecSccId,
@@ -1072,6 +1072,32 @@ impl ExecSccGraph {
                 if *dst_block_id == block_id {
                     let src_node = edge.source();
                     Some((self.get_scc_by_node(src_node).scc_id, *src_block_id))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// get all outgoing edges from an scc, within this graph only
+    pub fn get_outgoing_edges_for_block(
+        &self,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+    ) -> Vec<(ExecSccId, ExecBlockId)> {
+        // sanity checking
+        let scc = self.get_scc_by_scc_id(scc_id);
+        debug_assert!(scc.scope_block_ids.contains(&block_id));
+
+        // collect outgoing edges
+        let src_node = self.get_node_by_scc_id(scc_id);
+        self.graph
+            .edges_directed(src_node, EdgeDirection::Outgoing)
+            .filter_map(|edge| {
+                let (src_block_id, dst_block_id) = edge.weight();
+                if *src_block_id == block_id {
+                    let dst_node = edge.target();
+                    Some((self.get_scc_by_node(dst_node).scc_id, *dst_block_id))
                 } else {
                     None
                 }
@@ -1127,6 +1153,7 @@ pub(crate) enum ExecWalkerStep<'a> {
         scc_id: ExecSccId,
         block: &'a ExecBlock,
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
+        outgoing_edges: Vec<(ExecSccId, ExecBlockId)>,
     },
 }
 
@@ -1204,10 +1231,14 @@ impl<'a> ExecWalker<'a> {
                     let incoming_edges = state
                         .scc_graph
                         .get_incoming_edges_for_block(scc_id, block.block_id);
+                    let outgoing_edges = state
+                        .scc_graph
+                        .get_outgoing_edges_for_block(scc_id, block.block_id);
                     Some(ExecWalkerStep::Block {
                         scc_id,
                         block,
                         incoming_edges,
+                        outgoing_edges,
                     })
                 }
             },
