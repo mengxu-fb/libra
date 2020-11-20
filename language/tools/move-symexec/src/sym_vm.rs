@@ -717,6 +717,23 @@ impl<'a> SymVM<'a> {
             }
         }
 
+        // handle fallthrough
+        if exec_block
+            .instructions
+            .last()
+            .map_or(true, |term_inst| !term_inst.is_branch())
+        {
+            for (dst_scc_id, dst_block_id) in outgoing_edges {
+                scc_info.put_edge_cond(
+                    scc_id,
+                    exec_block.block_id,
+                    *dst_scc_id,
+                    *dst_block_id,
+                    reach_cond.clone(),
+                );
+            }
+        }
+
         // normal block end
         SymBlockTermReason::Normal
     }
