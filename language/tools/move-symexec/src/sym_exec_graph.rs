@@ -436,10 +436,32 @@ impl ExecGraph {
                 let exec_flow_type = match term_instruction {
                     Bytecode::Branch(_) => ExecFlowType::Branch(None),
                     Bytecode::BrTrue(target_offset) => {
-                        ExecFlowType::Branch(Some(successor_offset == *target_offset))
+                        if successor_offset == *target_offset {
+                            if successor_offset == (term_offset + 1) {
+                                // a special case where the true branch also
+                                // goes into the same block, in this case,
+                                // there will be only one successor_offset
+                                ExecFlowType::Branch(None)
+                            } else {
+                                ExecFlowType::Branch(Some(true))
+                            }
+                        } else {
+                            ExecFlowType::Branch(Some(false))
+                        }
                     }
                     Bytecode::BrFalse(target_offset) => {
-                        ExecFlowType::Branch(Some(successor_offset != *target_offset))
+                        if successor_offset == *target_offset {
+                            if successor_offset == (term_offset + 1) {
+                                // a special case where the true branch also
+                                // goes into the same block, in this case,
+                                // there will be only one successor_offset
+                                ExecFlowType::Branch(None)
+                            } else {
+                                ExecFlowType::Branch(Some(false))
+                            }
+                        } else {
+                            ExecFlowType::Branch(Some(true))
+                        }
                     }
                     _ => {
                         // ensure that these instruction never branch

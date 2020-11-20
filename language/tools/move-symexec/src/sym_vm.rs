@@ -676,21 +676,15 @@ impl<'a> SymVM<'a> {
                 }
                 Bytecode::BrTrue(offset) => {
                     let sym = current_frame.stack_pop();
-                    let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
-                    let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
 
-                    // we can safely unwrap the code_offset
-                    self.handle_branch(
-                        *offset,
-                        &cond_t,
-                        scc_id,
-                        exec_block.block_id,
-                        outgoing_edges,
-                        scc_info,
-                    );
-                    self.handle_branch(
-                        exec_block.code_offset.unwrap() + 1,
-                        &cond_f,
+                    let offset_t = *offset;
+                    let offset_f = exec_block.code_offset.unwrap()
+                        + (exec_block.instructions.len() as CodeOffset);
+                    self.conditional_branch(
+                        offset_t,
+                        offset_f,
+                        &sym,
+                        reach_cond,
                         scc_id,
                         exec_block.block_id,
                         outgoing_edges,
@@ -699,21 +693,15 @@ impl<'a> SymVM<'a> {
                 }
                 Bytecode::BrFalse(offset) => {
                     let sym = current_frame.stack_pop();
-                    let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
-                    let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
 
-                    // we can safely unwrap the code_offset
-                    self.handle_branch(
-                        *offset,
-                        &cond_f,
-                        scc_id,
-                        exec_block.block_id,
-                        outgoing_edges,
-                        scc_info,
-                    );
-                    self.handle_branch(
-                        exec_block.code_offset.unwrap() + 1,
-                        &cond_t,
+                    let offset_t = exec_block.code_offset.unwrap()
+                        + (exec_block.instructions.len() as CodeOffset);
+                    let offset_f = *offset;
+                    self.conditional_branch(
+                        offset_t,
+                        offset_f,
+                        &sym,
+                        reach_cond,
                         scc_id,
                         exec_block.block_id,
                         outgoing_edges,
@@ -722,7 +710,7 @@ impl<'a> SymVM<'a> {
                 }
                 // misc
                 Bytecode::Nop => {}
-                // the rest
+                // TODO: the rest
                 _ => {
                     println!("INSTRUCTION NOT SUPPORTED: {:?}", instruction);
                 }
@@ -783,6 +771,53 @@ impl<'a> SymVM<'a> {
                     current_frame.stack_push(field_sym);
                 }
             }
+        }
+    }
+
+    fn conditional_branch<'smt>(
+        &'smt self,
+        offset_t: CodeOffset,
+        offset_f: CodeOffset,
+        pred: &SymValue<'smt>,
+        reach_cond: &SmtExpr<'smt>,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_info: &mut SymSccInfo<'smt>,
+    ) {
+        // it is theoretically possible that both branches
+        // go to the same block, if this happens, treat it
+        // like an unconditional branch
+        if offset_t == offset_f {
+            self.handle_branch(
+                offset_t,
+                reach_cond,
+                src_scc_id,
+                src_block_id,
+                outgoing_edges,
+                scc_info,
+            );
+        } else {
+            let cond_t = pred.flatten_as_predicate(true).and(reach_cond);
+            let cond_f = pred.flatten_as_predicate(false).and(reach_cond);
+
+            // we can safely unwrap the code_offset
+            self.handle_branch(
+                offset_t,
+                &cond_t,
+                src_scc_id,
+                src_block_id,
+                outgoing_edges,
+                scc_info,
+            );
+            self.handle_branch(
+                offset_f,
+                &cond_f,
+                src_scc_id,
+                src_block_id,
+                outgoing_edges,
+                scc_info,
+            );
         }
     }
 
