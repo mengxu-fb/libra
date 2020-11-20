@@ -446,12 +446,14 @@ impl fmt::Display for SmtExpr<'_> {
                 self.ctxt.ctxt,
                 self.kind.to_z3_sort(self.ctxt),
             ))
+            .to_owned()
         }
-        .to_str()
+        .into_string()
         .unwrap();
-        let expr_repr = unsafe { CStr::from_ptr(Z3_ast_to_string(self.ctxt.ctxt, self.ast)) }
-            .to_str()
-            .unwrap();
+        let expr_repr =
+            unsafe { CStr::from_ptr(Z3_ast_to_string(self.ctxt.ctxt, self.ast)).to_owned() }
+                .into_string()
+                .unwrap();
         write!(f, "[{}] {}", sort_repr, expr_repr)
     }
 }
