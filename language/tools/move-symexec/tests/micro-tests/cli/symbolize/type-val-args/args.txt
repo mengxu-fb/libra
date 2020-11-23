@@ -1,0 +1,9 @@
+# preparation
+compile move_src --track
+
+# concrete value
+symbolize -t u8 -v C::0u8
+symbolize -t u64 -v C::42u8
+
+# symbolic value
+symbolize -t bool -v S::x

@@ -35,7 +35,7 @@ pub static GENESIS_CHANGE_SET_FRESH: Lazy<ChangeSet> =
 ///
 /// Tests use this to set up state, and pass in a reference to the cache whenever a `StateView` or
 /// `RemoteCache` is needed.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub struct FakeDataStore {
     data: HashMap<AccessPath, Vec<u8>>,
 }

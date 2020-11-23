@@ -570,6 +570,7 @@ fn eval_transaction<TComp: Compiler>(
 
     let parsed_script_or_module =
         if let Some(compiled_script) = is_precompiled_script(&transaction.input) {
+            compiler.hook_notify_precompiled_script(&transaction.input)?;
             ScriptOrModule::Script(compiled_script)
         } else {
             let compiler_log = |s| {
@@ -622,6 +623,7 @@ fn eval_transaction<TComp: Compiler>(
             }
             let script_transaction =
                 make_script_transaction(&exec, &transaction.config, compiled_script)?;
+            compiler.hook_pre_exec_script_txn(&script_transaction)?;
 
             if global_config.exp_mode {
                 run_transaction_exp_mode(exec, script_transaction, log, &transaction.config)?;
@@ -673,6 +675,7 @@ fn eval_transaction<TComp: Compiler>(
             }
             let module_transaction =
                 make_module_transaction(&exec, &transaction.config, compiled_module)?;
+            compiler.hook_pre_exec_module_txn(&module_transaction)?;
 
             if global_config.exp_mode {
                 run_transaction_exp_mode(exec, module_transaction, log, &transaction.config)?;

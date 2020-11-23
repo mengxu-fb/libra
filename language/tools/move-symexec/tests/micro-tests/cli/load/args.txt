@@ -1,0 +1,7 @@
+# modules
+load ../../../../../../stdlib/compiled/stdlib --dry-run
+load ../../../../../../stdlib/compiled/stdlib --track
+
+# scripts
+load ../../../../../../stdlib/compiled/transaction_scripts/burn.mv --script --dry-run
+load ../../../../../../stdlib/compiled/transaction_scripts/burn.mv --script --track

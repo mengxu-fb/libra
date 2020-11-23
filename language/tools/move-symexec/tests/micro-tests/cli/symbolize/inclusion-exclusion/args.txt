@@ -1,0 +1,19 @@
+compile move_src --track
+
+# default
+symbolize
+
+# inclusion
+symbolize -i .*::.*::.*
+symbolize -i .*::L::.*
+symbolize -i .*::.*::bar
+symbolize -i (0*)42::.*::.*
+
+# exclusion
+symbolize -e .*::.*::.*
+symbolize -e .*::M::.*
+symbolize -e .*::.*::baz
+symbolize -e (0*)43::.*::.*
+
+# both
+symbolize -i .*::.*::foo -e (0*)43::.*::.*

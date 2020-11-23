@@ -1,0 +1,8 @@
+# preparation
+compile move_src --track
+
+# execution success
+execute -t u8 -v 0u8
+
+# execution failure
+execute -t u64 -v 42u8 -F

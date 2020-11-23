@@ -1,0 +1,388 @@
+// Copyright (c) The Libra Core Contributors
+// SPDX-License-Identifier: Apache-2.0
+
+use anyhow::{anyhow, bail, Result};
+use log::debug;
+use std::{
+    fs,
+    io::{stderr, Write},
+    path::{Path, PathBuf},
+};
+use tempfile::tempdir;
+
+use move_lang::{
+    compiled_unit::CompiledUnit, errors::report_errors_to_buffer, extension_equals, find_filenames,
+    generate_interface_files, move_compile_no_report, shared::Address, MOVE_COMPILED_EXTENSION,
+};
+use vm::{file_format::CompiledScript, CompiledModule};
+
+use crate::utils::{PathToString, PathsToStrings};
+
+/// Default directory containing interfaces under the builder workdir
+const MOVE_COMPILED_INTERFACES_DIR: &str = "mv_interfaces";
+
+/// A builder worker in a stateful implementation that can build Move programs in steps
+struct MoveBuilder {
+    workdir: PathBuf,
+    all_interface_dir: Vec<PathBuf>,
+}
+
+impl MoveBuilder {
+    /// Create a new builder, assuming that `workdir` is already created.
+    pub fn new(workdir: PathBuf, parent: Option<&MoveBuilder>) -> Result<Self> {
+        // prepare the directory
+        let interface_dir = workdir.join(MOVE_COMPILED_INTERFACES_DIR);
+        fs::create_dir(&interface_dir)?;
+
+        // append the interface dir
+        let mut all_interface_dir =
+            parent.map_or(vec![], |builder| builder.all_interface_dir.clone());
+        all_interface_dir.push(interface_dir);
+
+        // done
+        Ok(Self {
+            workdir,
+            all_interface_dir,
+        })
+    }
+
+    pub fn load_modules<P: AsRef<Path>, A: AsRef<[P]>>(
+        &self,
+        move_bin: A,
+        commit: bool,
+    ) -> Result<Vec<CompiledModule>> {
+        // load
+        let compiled_modules = find_filenames(&move_bin.paths_to_strings()?, |path| {
+            extension_equals(path, MOVE_COMPILED_EXTENSION)
+        })?
+        .iter()
+        .map(|entry| {
+            CompiledModule::deserialize(&fs::read(entry)?)
+                .map_err(|e| anyhow!("Failed to deserialize module {}: {:?}", entry, e))
+        })
+        .collect::<Result<_>>()?;
+
+        // generate interfaces if commit: once committed, these modules will serve as dependencies
+        // for the next round of compilation as well as execution.
+        if commit {
+            generate_interface_files(
+                &move_bin.paths_to_strings()?,
+                Some(self.workdir.path_to_string()?),
+                false,
+            )?;
+        }
+
+        // done
+        Ok(compiled_modules)
+    }
+
+    pub fn load_scripts<P: AsRef<Path>, A: AsRef<[P]>>(
+        &self,
+        move_bin: A,
+    ) -> Result<Vec<CompiledScript>> {
+        // load
+        let compiled_scripts = find_filenames(&move_bin.paths_to_strings()?, |path| {
+            extension_equals(path, MOVE_COMPILED_EXTENSION)
+        })?
+        .iter()
+        .map(|entry| {
+            CompiledScript::deserialize(&fs::read(entry)?)
+                .map_err(|e| anyhow!("Failed to deserialize script {}: {:?}", entry, e))
+        })
+        .collect::<Result<_>>()?;
+
+        // done
+        Ok(compiled_scripts)
+    }
+
+    pub fn compile<P: AsRef<Path>, A: AsRef<[P]>>(
+        &self,
+        move_src: A,
+        sender: Option<Address>,
+        commit: bool,
+    ) -> Result<(Vec<CompiledModule>, Vec<CompiledScript>)> {
+        // compile
+        let (files, units_or_errors) = move_compile_no_report(
+            &move_src.paths_to_strings()?,
+            &self.all_interface_dir.paths_to_strings()?,
+            sender,
+            None,
+        )?;
+
+        let compiled_units = match units_or_errors {
+            Err(errors) => {
+                stderr()
+                    .lock()
+                    .write_all(&report_errors_to_buffer(files, errors))?;
+                bail!("Unexpected failure in Move compilation");
+            }
+            Ok(units) => units,
+        };
+
+        // collect modules and scripts
+        let mut compiled_modules = vec![];
+        let mut compiled_scripts = vec![];
+        for unit in compiled_units.iter() {
+            match unit {
+                CompiledUnit::Script { script, .. } => {
+                    compiled_scripts.push(script.clone());
+                }
+                CompiledUnit::Module { module, .. } => {
+                    compiled_modules.push(module.clone());
+                }
+            }
+        }
+
+        // generate interfaces if commit: once committed, these modules will serve as dependencies
+        // for next round of compilation
+        if commit {
+            // filter out scripts from compiled units
+            let compiled_units_modules = compiled_units
+                .into_iter()
+                .filter(|unit| match unit {
+                    CompiledUnit::Script { .. } => false,
+                    CompiledUnit::Module { .. } => true,
+                })
+                .collect();
+
+            let mv_dir = tempdir()?;
+            let mv_dir_path = mv_dir.path().path_to_string()?;
+            move_lang::output_compiled_units(false, files, compiled_units_modules, &mv_dir_path)?;
+            move_lang::generate_interface_files(
+                &[mv_dir_path],
+                Some(self.workdir.path_to_string()?),
+                false,
+            )?;
+        }
+
+        // done
+        Ok((compiled_modules, compiled_scripts))
+    }
+}
+
+/// Compilation units with additional marking and information
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MarkedModule {
+    module: CompiledModule,
+    track: bool,
+}
+
+impl MarkedModule {
+    fn filter(&self, track_opt: Option<bool>) -> Option<&CompiledModule> {
+        match track_opt {
+            None => Some(&self.module),
+            Some(v) => {
+                if self.track == v {
+                    Some(&self.module)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+struct MarkedScript {
+    script: CompiledScript,
+    track: bool,
+}
+
+impl MarkedScript {
+    fn filter(&self, track_opt: Option<bool>) -> Option<&CompiledScript> {
+        match track_opt {
+            None => Some(&self.script),
+            Some(v) => {
+                if self.track == v {
+                    Some(&self.script)
+                } else {
+                    None
+                }
+            }
+        }
+    }
+}
+
+/// Holds the current build state
+struct OpBuildState {
+    builder: MoveBuilder,
+    compiled_modules: Vec<MarkedModule>,
+    compiled_scripts: Vec<MarkedScript>,
+}
+
+impl OpBuildState {
+    pub fn new(workdir: PathBuf, parent: Option<&MoveBuilder>) -> Result<Self> {
+        fs::create_dir(&workdir)?;
+        Ok(Self {
+            builder: MoveBuilder::new(workdir, parent)?,
+            compiled_modules: vec![],
+            compiled_scripts: vec![],
+        })
+    }
+}
+
+/// A stateful controller to run multiple build operations on Move programs
+pub struct MoveStatefulBuilder {
+    workdir: PathBuf,
+    op_stack: Vec<OpBuildState>,
+    num_contexts: usize,
+}
+
+impl MoveStatefulBuilder {
+    /// Create a new controller, assuming that `workdir` is already created
+    pub fn new(workdir: PathBuf) -> Result<Self> {
+        // create the initial states
+        let state = OpBuildState::new(workdir.join("0"), None)?;
+
+        // done
+        Ok(Self {
+            workdir,
+            op_stack: vec![state],
+            num_contexts: 1,
+        })
+    }
+
+    // core operations
+    pub fn load<P: AsRef<Path>, A: AsRef<[P]>>(
+        &mut self,
+        move_bin: A,
+        script_loading: bool,
+        track: bool,
+        commit: bool,
+    ) -> Result<()> {
+        let state = self.get_state_mut();
+
+        if script_loading {
+            let scripts = state.builder.load_scripts(move_bin)?;
+            debug!("{} script(s) loaded", scripts.len());
+
+            if commit {
+                state.compiled_scripts.extend(
+                    scripts
+                        .into_iter()
+                        .map(|script| MarkedScript { script, track }),
+                );
+            }
+        } else {
+            let modules = state.builder.load_modules(move_bin, commit)?;
+            debug!("{} module(s) loaded", modules.len());
+
+            if commit {
+                state.compiled_modules.extend(
+                    modules
+                        .into_iter()
+                        .map(|module| MarkedModule { module, track }),
+                );
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn compile<P: AsRef<Path>, A: AsRef<[P]>>(
+        &mut self,
+        move_src: A,
+        sender: Option<Address>,
+        track: bool,
+        commit: bool,
+    ) -> Result<()> {
+        let state = self.get_state_mut();
+
+        let (modules, scripts) = state.builder.compile(move_src, sender, commit)?;
+        debug!(
+            "{} module(s) + {} script(s) compiled",
+            modules.len(),
+            scripts.len()
+        );
+
+        if commit {
+            state.compiled_modules.extend(
+                modules
+                    .into_iter()
+                    .map(|module| MarkedModule { module, track }),
+            );
+            state.compiled_scripts.extend(
+                scripts
+                    .into_iter()
+                    .map(|script| MarkedScript { script, track }),
+            );
+        }
+
+        Ok(())
+    }
+
+    // stack operations
+    fn get_state(&self) -> &OpBuildState {
+        self.op_stack.last().unwrap()
+    }
+
+    fn get_state_mut(&mut self) -> &mut OpBuildState {
+        self.op_stack.last_mut().unwrap()
+    }
+
+    pub fn push(&mut self) -> Result<()> {
+        let old_state = self.get_state();
+        let new_state = OpBuildState::new(
+            self.workdir.join(self.num_contexts.to_string()),
+            Some(&old_state.builder),
+        )?;
+
+        self.op_stack.push(new_state);
+        self.num_contexts += 1;
+        Ok(())
+    }
+
+    pub fn pop(&mut self) -> Result<()> {
+        if self.op_stack.len() == 1 {
+            bail!("Build controller: more pops than push?");
+        } else {
+            self.op_stack.pop();
+        }
+        Ok(())
+    }
+
+    // get results (maybe across stack)
+    fn get_compiled_modules_recent(&self, track_opt: Option<bool>) -> Vec<&CompiledModule> {
+        self.get_state()
+            .compiled_modules
+            .iter()
+            .filter_map(|m| m.filter(track_opt))
+            .collect()
+    }
+
+    pub fn get_compiled_scripts_recent(&self, track_opt: Option<bool>) -> Vec<&CompiledScript> {
+        self.get_state()
+            .compiled_scripts
+            .iter()
+            .filter_map(|s| s.filter(track_opt))
+            .collect()
+    }
+
+    pub fn get_compiled_units_recent(
+        &self,
+        track_opt: Option<bool>,
+    ) -> (Vec<&CompiledModule>, Vec<&CompiledScript>) {
+        (
+            self.get_compiled_modules_recent(track_opt),
+            self.get_compiled_scripts_recent(track_opt),
+        )
+    }
+
+    pub fn get_compiled_modules_all(&self, track_opt: Option<bool>) -> Vec<&CompiledModule> {
+        self.op_stack
+            .iter()
+            .map(|state| state.compiled_modules.iter())
+            .flatten()
+            .filter_map(|m| m.filter(track_opt))
+            .collect()
+    }
+
+    pub fn get_compiled_scripts_all(&self, track_opt: Option<bool>) -> Vec<&CompiledScript> {
+        self.op_stack
+            .iter()
+            .map(|state| state.compiled_scripts.iter())
+            .flatten()
+            .filter_map(|s| s.filter(track_opt))
+            .collect()
+    }
+}

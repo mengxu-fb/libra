@@ -142,6 +142,7 @@ members = [
     "move-lang-ir-utils",
     "move-lang-test-utils",
     "move-prover-test-utils",
+    "move-symexec",
     "move-vm-integration-tests",
     "serializer-tests",
     "smoke-test",
