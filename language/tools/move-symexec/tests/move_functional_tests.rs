@@ -1,11 +1,12 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{bail, Result};
+use anyhow::{anyhow, bail, Result};
 use once_cell::sync::Lazy;
 use std::{
     collections::HashSet,
     convert::TryFrom,
+    fs,
     io::Write,
     path::{Path, PathBuf},
 };
@@ -20,10 +21,10 @@ use libra_types::{
     account_address::AccountAddress,
     transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
 };
-use move_lang::{shared::Address, MOVE_COMPILED_EXTENSION};
+use move_lang::{shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_BIN_SCRIPTS, MOVE_LIBSYMEXEC, MOVE_STDLIB_BIN_MODULES},
+    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_LIBSYMEXEC, MOVE_STDLIB_MODULES},
     controller::MoveController,
     crate_path, crate_path_string,
     sym_vm_types::SymTransactionArgument,
@@ -83,7 +84,6 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
         // compile in a separate session
         self.controller.push()?;
-
         if self
             .controller
             .compile(&[tmp_file.path()], Some(sender), true, true)
@@ -124,13 +124,14 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
     fn hook_notify_precompiled_script(&mut self, input: &str) -> Result<()> {
         // find the script path
         let script_name = input.strip_prefix("stdlib_script::").unwrap();
-        let script_path = MOVE_LIBRA_BIN_SCRIPTS
+        let script_path = MOVE_LIBRA_SCRIPTS
             .join(script_name)
-            .with_extension(MOVE_COMPILED_EXTENSION);
+            .with_extension(MOVE_EXTENSION);
 
-        // load the script in a separate session
+        // compile the script in a separate session
         self.controller.push()?;
-        self.controller.load(&[&script_path], true, true, true)
+        self.controller
+            .compile(&[&script_path], Some(Address::LIBRA_CORE), true, true)
     }
 
     fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
@@ -177,14 +178,23 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
 
     // derive workdir
     let test_workdir = MOVE_FUNCTIONAL_TESTS_WORKDIR.join(&test_name);
+    if test_workdir.exists() {
+        fs::remove_dir_all(&test_workdir)
+            .map_err(|e| anyhow!("Failed to clean up workdir {:?}: {:?}", test_workdir, e))?;
+    }
 
     // setup the compiler
     let mut controller = MoveController::new(test_workdir)?;
 
-    // preload libraries, stdlib will be tracked
-    controller.load(&[&*MOVE_STDLIB_BIN_MODULES], false, true, true)?;
-    controller.compile(&[&*MOVE_LIBNURSERY], None, true, true)?;
-    controller.compile(&[&*MOVE_LIBSYMEXEC], None, false, true)?;
+    // compile libraries, stdlib (including nursery) will be tracked
+    controller.compile(
+        &[&*MOVE_STDLIB_MODULES],
+        Some(Address::LIBRA_CORE),
+        true,
+        true,
+    )?;
+    controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true, true)?;
+    controller.compile(&[&*MOVE_LIBSYMEXEC], Some(Address::LIBRA_CORE), false, true)?;
 
     // test
     testsuite::functional_tests(

@@ -11,13 +11,10 @@ use std::{
 };
 use structopt::StructOpt;
 
-use move_lang::{MOVE_COMPILED_EXTENSION, MOVE_EXTENSION};
+use move_lang::{shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{
-        MOVE_LIBNURSERY, MOVE_LIBRA_BIN_SCRIPTS, MOVE_LIBRA_SRC_SCRIPTS, MOVE_LIBSYMEXEC,
-        MOVE_STDLIB_BIN_MODULES, MOVE_STDLIB_SRC_MODULES,
-    },
+    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_LIBSYMEXEC, MOVE_STDLIB_MODULES},
     controller::MoveController,
 };
 
@@ -44,10 +41,6 @@ struct MainArgs {
     #[structopt(long = "no-stdlib")]
     no_stdlib: bool,
 
-    /// Mark that the stdlib library needs to be built instead of using the compiled version
-    #[structopt(long = "build-stdlib", conflicts_with = "no-stdlib")]
-    build_stdlib: bool,
-
     /// Mark that the stdlib library needs to be tracked for symbolic execution, regardless of
     /// whether they are compiled or loaded
     #[structopt(long = "track-stdlib", conflicts_with = "no-stdlib")]
@@ -64,10 +57,6 @@ struct MainArgs {
     /// Mark that the libra script will be prepared
     #[structopt(long = "use-libra", conflicts_with = "no-stdlib")]
     use_libra: Option<String>,
-
-    /// Mark that the libra script needs to be built instead of using the compiled version
-    #[structopt(long = "build-libra", requires = "use-libra")]
-    build_libra: bool,
 
     /// Mark that the libra script needs to be tracked for symbolic execution, regardless of
     /// whether they are compiled or loaded
@@ -125,41 +114,35 @@ fn main() -> Result<()> {
 
     // preprocessing
     if !args.no_stdlib {
-        if args.build_stdlib {
-            controller.compile(&[&*MOVE_STDLIB_SRC_MODULES], None, args.track_stdlib, true)?;
-        } else {
-            controller.load(&[&*MOVE_STDLIB_BIN_MODULES], false, args.track_stdlib, true)?;
-        }
-
+        controller.compile(
+            &[&*MOVE_STDLIB_MODULES],
+            Some(Address::LIBRA_CORE),
+            args.track_stdlib,
+            true,
+        )?;
         if !args.no_libnursery {
-            controller.compile(&[&*MOVE_LIBNURSERY], None, args.track_stdlib, true)?;
+            controller.compile(
+                &[&*MOVE_LIBNURSERY],
+                Some(Address::LIBRA_CORE),
+                args.track_stdlib,
+                true,
+            )?;
         }
     }
 
     if !args.no_libsymexec {
-        controller.compile(&[&*MOVE_LIBSYMEXEC], None, false, true)?;
+        controller.compile(&[&*MOVE_LIBSYMEXEC], Some(Address::LIBRA_CORE), false, true)?;
     }
 
     if let Some(script_name) = args.use_libra {
-        if args.build_libra {
-            controller.compile(
-                &[&(*MOVE_LIBRA_SRC_SCRIPTS
-                    .join(script_name)
-                    .with_extension(MOVE_EXTENSION))],
-                None,
-                args.track_libra,
-                true,
-            )?;
-        } else {
-            controller.load(
-                &[&(*MOVE_LIBRA_BIN_SCRIPTS
-                    .join(script_name)
-                    .with_extension(MOVE_COMPILED_EXTENSION))],
-                true,
-                args.track_libra,
-                true,
-            )?;
-        }
+        controller.compile(
+            &[&(*MOVE_LIBRA_SCRIPTS
+                .join(script_name)
+                .with_extension(MOVE_EXTENSION))],
+            Some(Address::LIBRA_CORE),
+            args.track_libra,
+            true,
+        )?;
     }
 
     // go through the inputs

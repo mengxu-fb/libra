@@ -23,34 +23,14 @@ crate_path!(MOVE_LIBSYMEXEC, "libsymexec");
 crate_path!(MOVE_LIBNURSERY, "..", "..", "stdlib", "nursery");
 
 // Default path to directory containing stdlib modules (source)
-crate_path!(MOVE_STDLIB_SRC_MODULES, "..", "..", "stdlib", "modules");
-
-// Default path to directory containing stdlib modules (pre-built)
-crate_path!(
-    MOVE_STDLIB_BIN_MODULES,
-    "..",
-    "..",
-    "stdlib",
-    "compiled",
-    "stdlib"
-);
+crate_path!(MOVE_STDLIB_MODULES, "..", "..", "stdlib", "modules");
 
 // Default path to directory containing libra scripts (source)
 crate_path!(
-    MOVE_LIBRA_SRC_SCRIPTS,
+    MOVE_LIBRA_SCRIPTS,
     "..",
     "..",
     "stdlib",
-    "transaction_scripts"
-);
-
-// Default path to directory containing libra scripts (pre-built)
-crate_path!(
-    MOVE_LIBRA_BIN_SCRIPTS,
-    "..",
-    "..",
-    "stdlib",
-    "compiled",
     "transaction_scripts"
 );
 

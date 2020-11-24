@@ -46,31 +46,6 @@ struct OpArgs {
 
 #[derive(StructOpt)]
 enum OpCommand {
-    /// Load pre-compiled Move units (modules or scripts) from input paths given.
-    #[structopt(name = "load")]
-    Load {
-        /// Directories storing compiled Move modules or scripts
-        /// Modules in this directory
-        ///  1. will be loaded before script execution, but
-        ///  2. will not be symbolically executed unless `--track` is set, instead, they must be
-        ///     statically modeled.
-        /// Either modules (default) or scripts (with `--script` set) will be loaded, but not both.
-        #[structopt()]
-        input: Vec<PathBuf>,
-
-        /// Mark that the scripts will be loaded instead of modules.
-        #[structopt(long = "script", short = "s")]
-        script_loading: bool,
-
-        /// Mark that the loaded Move compiled units will be tracked for symbolication execution.
-        #[structopt(long = "track", short = "t", conflicts_with = "dry-run")]
-        track: bool,
-
-        /// Mark that this operation should have no impact on future operations.
-        #[structopt(long = "dry-run", short = "x")]
-        dry_run: bool,
-    },
-
     /// Compile Move source files from input paths given.
     #[structopt(name = "compile")]
     Compile {
@@ -228,16 +203,6 @@ impl MoveController {
         })
     }
 
-    pub fn load<P: AsRef<Path>, A: AsRef<[P]>>(
-        &mut self,
-        move_bin: A,
-        script_loading: bool,
-        track: bool,
-        commit: bool,
-    ) -> Result<()> {
-        self.builder.load(move_bin, script_loading, track, commit)
-    }
-
     pub fn compile<P: AsRef<Path>, A: AsRef<[P]>>(
         &mut self,
         move_src: A,
@@ -369,12 +334,6 @@ impl MoveController {
 
         // handle commands
         match args.cmd {
-            OpCommand::Load {
-                input,
-                script_loading,
-                track,
-                dry_run,
-            } => self.load(&input, script_loading, track, !dry_run),
             OpCommand::Compile {
                 input,
                 sender,

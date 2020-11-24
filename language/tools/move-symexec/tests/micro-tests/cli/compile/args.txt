@@ -2,11 +2,8 @@
 push
 compile ../../../../../../stdlib/modules --dry-run
 compile ../../../../../../stdlib/modules --track
-pop
 
 # scripts
-push
-load ../../../../../../stdlib/compiled/stdlib --track
 compile ../../../../../../stdlib/transaction_scripts/burn.move --dry-run
 compile ../../../../../../stdlib/transaction_scripts/burn.move --track
 pop

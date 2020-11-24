@@ -14,4 +14,4 @@ cargo run -- args.txt -v
 cargo run -- args.txt -v --use-libra burn
 
 # all fresh build
-cargo run -- args.txt -v --build-stdlib --track-stdlib --use-libra burn --build-libra --track-libra
+cargo run -- args.txt -v --track-stdlib --use-libra burn --track-libra

@@ -1,7 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use anyhow::{anyhow, bail, Result};
+use anyhow::{bail, Result};
 use log::debug;
 use std::{
     fs,
@@ -11,8 +11,8 @@ use std::{
 use tempfile::tempdir;
 
 use move_lang::{
-    compiled_unit::CompiledUnit, errors::report_errors_to_buffer, extension_equals, find_filenames,
-    generate_interface_files, move_compile_no_report, shared::Address, MOVE_COMPILED_EXTENSION,
+    compiled_unit::CompiledUnit, errors::report_errors_to_buffer, move_compile_no_report,
+    shared::Address,
 };
 use vm::{file_format::CompiledScript, CompiledModule};
 
@@ -44,55 +44,6 @@ impl MoveBuilder {
             workdir,
             all_interface_dir,
         })
-    }
-
-    pub fn load_modules<P: AsRef<Path>, A: AsRef<[P]>>(
-        &self,
-        move_bin: A,
-        commit: bool,
-    ) -> Result<Vec<CompiledModule>> {
-        // load
-        let compiled_modules = find_filenames(&move_bin.paths_to_strings()?, |path| {
-            extension_equals(path, MOVE_COMPILED_EXTENSION)
-        })?
-        .iter()
-        .map(|entry| {
-            CompiledModule::deserialize(&fs::read(entry)?)
-                .map_err(|e| anyhow!("Failed to deserialize module {}: {:?}", entry, e))
-        })
-        .collect::<Result<_>>()?;
-
-        // generate interfaces if commit: once committed, these modules will serve as dependencies
-        // for the next round of compilation as well as execution.
-        if commit {
-            generate_interface_files(
-                &move_bin.paths_to_strings()?,
-                Some(self.workdir.path_to_string()?),
-                false,
-            )?;
-        }
-
-        // done
-        Ok(compiled_modules)
-    }
-
-    pub fn load_scripts<P: AsRef<Path>, A: AsRef<[P]>>(
-        &self,
-        move_bin: A,
-    ) -> Result<Vec<CompiledScript>> {
-        // load
-        let compiled_scripts = find_filenames(&move_bin.paths_to_strings()?, |path| {
-            extension_equals(path, MOVE_COMPILED_EXTENSION)
-        })?
-        .iter()
-        .map(|entry| {
-            CompiledScript::deserialize(&fs::read(entry)?)
-                .map_err(|e| anyhow!("Failed to deserialize script {}: {:?}", entry, e))
-        })
-        .collect::<Result<_>>()?;
-
-        // done
-        Ok(compiled_scripts)
     }
 
     pub fn compile<P: AsRef<Path>, A: AsRef<[P]>>(
@@ -208,6 +159,7 @@ struct OpBuildState {
     builder: MoveBuilder,
     compiled_modules: Vec<MarkedModule>,
     compiled_scripts: Vec<MarkedScript>,
+    source_locations: Vec<PathBuf>,
 }
 
 impl OpBuildState {
@@ -217,6 +169,7 @@ impl OpBuildState {
             builder: MoveBuilder::new(workdir, parent)?,
             compiled_modules: vec![],
             compiled_scripts: vec![],
+            source_locations: vec![],
         })
     }
 }
@@ -243,42 +196,6 @@ impl MoveStatefulBuilder {
     }
 
     // core operations
-    pub fn load<P: AsRef<Path>, A: AsRef<[P]>>(
-        &mut self,
-        move_bin: A,
-        script_loading: bool,
-        track: bool,
-        commit: bool,
-    ) -> Result<()> {
-        let state = self.get_state_mut();
-
-        if script_loading {
-            let scripts = state.builder.load_scripts(move_bin)?;
-            debug!("{} script(s) loaded", scripts.len());
-
-            if commit {
-                state.compiled_scripts.extend(
-                    scripts
-                        .into_iter()
-                        .map(|script| MarkedScript { script, track }),
-                );
-            }
-        } else {
-            let modules = state.builder.load_modules(move_bin, commit)?;
-            debug!("{} module(s) loaded", modules.len());
-
-            if commit {
-                state.compiled_modules.extend(
-                    modules
-                        .into_iter()
-                        .map(|module| MarkedModule { module, track }),
-                );
-            }
-        }
-
-        Ok(())
-    }
-
     pub fn compile<P: AsRef<Path>, A: AsRef<[P]>>(
         &mut self,
         move_src: A,
@@ -288,7 +205,7 @@ impl MoveStatefulBuilder {
     ) -> Result<()> {
         let state = self.get_state_mut();
 
-        let (modules, scripts) = state.builder.compile(move_src, sender, commit)?;
+        let (modules, scripts) = state.builder.compile(move_src.as_ref(), sender, commit)?;
         debug!(
             "{} module(s) + {} script(s) compiled",
             modules.len(),
@@ -305,6 +222,12 @@ impl MoveStatefulBuilder {
                 scripts
                     .into_iter()
                     .map(|script| MarkedScript { script, track }),
+            );
+            state.source_locations.extend(
+                move_src
+                    .as_ref()
+                    .iter()
+                    .map(|path| path.as_ref().to_path_buf()),
             );
         }
 
