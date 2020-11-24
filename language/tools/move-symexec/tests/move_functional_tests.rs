@@ -6,11 +6,10 @@ use once_cell::sync::Lazy;
 use std::{
     collections::HashSet,
     convert::TryFrom,
-    fs,
+    fs::{self, File},
     io::Write,
     path::{Path, PathBuf},
 };
-use tempfile::NamedTempFile;
 
 use datatest_stable::{self, harness};
 use functional_tests::{
@@ -24,7 +23,7 @@ use libra_types::{
 use move_lang::{shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_LIBSYMEXEC, MOVE_STDLIB_MODULES},
+    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
     controller::MoveController,
     crate_path, crate_path_string,
     sym_vm_types::SymTransactionArgument,
@@ -48,6 +47,9 @@ crate_path!(
     "move-functional-tests"
 );
 
+/// Default directory where the generated source code file live
+const DEFAULT_SOURCE_LOC: &str = "sources";
+
 /// An error mark that the test validator expects
 const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 
@@ -66,6 +68,8 @@ static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
 /// Piggyback on the test-infra to run tests
 struct MoveFunctionalTestCompiler<'a> {
     controller: &'a mut MoveController,
+    source_loc: PathBuf,
+    source_num: usize,
 }
 
 impl Compiler for MoveFunctionalTestCompiler<'_> {
@@ -76,8 +80,13 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         input: &str,
     ) -> Result<ScriptOrModule> {
         // save content to a file first
-        let tmp_file = NamedTempFile::new()?;
-        tmp_file.reopen()?.write_all(input.as_bytes())?;
+        let src_file_path = self
+            .source_loc
+            .join(self.source_num.to_string())
+            .with_extension(MOVE_EXTENSION);
+        let mut fp = File::create(&src_file_path)?;
+        self.source_num += 1;
+        fp.write_all(input.as_bytes())?;
 
         // parse sender address
         let sender = Address::try_from(address.as_ref()).unwrap();
@@ -86,14 +95,14 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         self.controller.push()?;
         if self
             .controller
-            .compile(&[tmp_file.path()], Some(sender), true, true)
+            .compile(&[&src_file_path], Some(sender), true)
             .is_err()
         {
             bail!(MOVE_COMPILER_ERROR_MARK);
         }
 
         // get the compiled units
-        let (mut modules, mut scripts) = self.controller.get_compiled_units_recent(None);
+        let (mut modules, mut scripts) = self.controller.get_compiled_units_recent();
 
         // return results
         if !modules.is_empty() {
@@ -131,7 +140,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         // compile the script in a separate session
         self.controller.push()?;
         self.controller
-            .compile(&[&script_path], Some(Address::LIBRA_CORE), true, true)
+            .compile(&[&script_path], Some(Address::LIBRA_CORE), true)
     }
 
     fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
@@ -161,7 +170,10 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
         // symbolize it
         self.controller
-            .symbolize(&signers, &sym_args, &type_tags, None, &[], true, true, true)
+            .symbolize(&signers, &sym_args, &type_tags, None, &[], true, true)?;
+
+        // now pop the stack to remove the script
+        self.controller.pop()
     }
 }
 
@@ -182,24 +194,22 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
         fs::remove_dir_all(&test_workdir)
             .map_err(|e| anyhow!("Failed to clean up workdir {:?}: {:?}", test_workdir, e))?;
     }
+    let source_loc = test_workdir.join(DEFAULT_SOURCE_LOC);
+    fs::create_dir_all(&source_loc)?;
 
     // setup the compiler
     let mut controller = MoveController::new(test_workdir)?;
 
-    // compile libraries, stdlib (including nursery) will be tracked
-    controller.compile(
-        &[&*MOVE_STDLIB_MODULES],
-        Some(Address::LIBRA_CORE),
-        true,
-        true,
-    )?;
-    controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true, true)?;
-    controller.compile(&[&*MOVE_LIBSYMEXEC], Some(Address::LIBRA_CORE), false, true)?;
+    // compile stdlib (including nursery)
+    controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::LIBRA_CORE), true)?;
+    controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true)?;
 
     // test
     testsuite::functional_tests(
         MoveFunctionalTestCompiler {
             controller: &mut controller,
+            source_loc,
+            source_num: 0,
         },
         test_path,
     )

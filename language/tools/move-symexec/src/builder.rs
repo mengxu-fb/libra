@@ -111,54 +111,11 @@ impl MoveBuilder {
     }
 }
 
-/// Compilation units with additional marking and information
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct MarkedModule {
-    module: CompiledModule,
-    track: bool,
-}
-
-impl MarkedModule {
-    fn filter(&self, track_opt: Option<bool>) -> Option<&CompiledModule> {
-        match track_opt {
-            None => Some(&self.module),
-            Some(v) => {
-                if self.track == v {
-                    Some(&self.module)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-struct MarkedScript {
-    script: CompiledScript,
-    track: bool,
-}
-
-impl MarkedScript {
-    fn filter(&self, track_opt: Option<bool>) -> Option<&CompiledScript> {
-        match track_opt {
-            None => Some(&self.script),
-            Some(v) => {
-                if self.track == v {
-                    Some(&self.script)
-                } else {
-                    None
-                }
-            }
-        }
-    }
-}
-
 /// Holds the current build state
 struct OpBuildState {
     builder: MoveBuilder,
-    compiled_modules: Vec<MarkedModule>,
-    compiled_scripts: Vec<MarkedScript>,
+    compiled_modules: Vec<CompiledModule>,
+    compiled_scripts: Vec<CompiledScript>,
     source_locations: Vec<PathBuf>,
 }
 
@@ -200,12 +157,12 @@ impl MoveStatefulBuilder {
         &mut self,
         move_src: A,
         sender: Option<Address>,
-        track: bool,
         commit: bool,
     ) -> Result<()> {
         let state = self.get_state_mut();
 
-        let (modules, scripts) = state.builder.compile(move_src.as_ref(), sender, commit)?;
+        let (mut modules, mut scripts) =
+            state.builder.compile(move_src.as_ref(), sender, commit)?;
         debug!(
             "{} module(s) + {} script(s) compiled",
             modules.len(),
@@ -213,16 +170,8 @@ impl MoveStatefulBuilder {
         );
 
         if commit {
-            state.compiled_modules.extend(
-                modules
-                    .into_iter()
-                    .map(|module| MarkedModule { module, track }),
-            );
-            state.compiled_scripts.extend(
-                scripts
-                    .into_iter()
-                    .map(|script| MarkedScript { script, track }),
-            );
+            state.compiled_modules.append(&mut modules);
+            state.compiled_scripts.append(&mut scripts);
             state.source_locations.extend(
                 move_src
                     .as_ref()
@@ -265,47 +214,36 @@ impl MoveStatefulBuilder {
     }
 
     // get results (maybe across stack)
-    fn get_compiled_modules_recent(&self, track_opt: Option<bool>) -> Vec<&CompiledModule> {
-        self.get_state()
-            .compiled_modules
-            .iter()
-            .filter_map(|m| m.filter(track_opt))
-            .collect()
+    pub fn get_compiled_modules_recent(&self) -> Vec<&CompiledModule> {
+        self.get_state().compiled_modules.iter().collect()
     }
 
-    pub fn get_compiled_scripts_recent(&self, track_opt: Option<bool>) -> Vec<&CompiledScript> {
-        self.get_state()
-            .compiled_scripts
-            .iter()
-            .filter_map(|s| s.filter(track_opt))
-            .collect()
+    pub fn get_compiled_scripts_recent(&self) -> Vec<&CompiledScript> {
+        self.get_state().compiled_scripts.iter().collect()
     }
 
-    pub fn get_compiled_units_recent(
-        &self,
-        track_opt: Option<bool>,
-    ) -> (Vec<&CompiledModule>, Vec<&CompiledScript>) {
-        (
-            self.get_compiled_modules_recent(track_opt),
-            self.get_compiled_scripts_recent(track_opt),
-        )
-    }
-
-    pub fn get_compiled_modules_all(&self, track_opt: Option<bool>) -> Vec<&CompiledModule> {
+    pub fn get_compiled_modules_all(&self) -> Vec<&CompiledModule> {
         self.op_stack
             .iter()
             .map(|state| state.compiled_modules.iter())
             .flatten()
-            .filter_map(|m| m.filter(track_opt))
             .collect()
     }
 
-    pub fn get_compiled_scripts_all(&self, track_opt: Option<bool>) -> Vec<&CompiledScript> {
+    pub fn get_compiled_scripts_all(&self) -> Vec<&CompiledScript> {
         self.op_stack
             .iter()
             .map(|state| state.compiled_scripts.iter())
             .flatten()
-            .filter_map(|s| s.filter(track_opt))
+            .collect()
+    }
+
+    pub fn get_source_locations_all(&self) -> Vec<&Path> {
+        self.op_stack
+            .iter()
+            .map(|state| state.source_locations.iter())
+            .flatten()
+            .map(|path| path.as_path())
             .collect()
     }
 }

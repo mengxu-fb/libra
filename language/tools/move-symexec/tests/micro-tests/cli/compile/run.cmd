@@ -1,1 +1,1 @@
-cargo run -- args.txt -v --no-stdlib --no-libsymexec
+cargo run -- args.txt -v --no-stdlib

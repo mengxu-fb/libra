@@ -4259,6 +4259,7 @@ dependencies = [
  "serde_json",
  "shell-words",
  "simplelog",
+ "spec-lang",
  "structopt 0.3.20",
  "tempfile",
  "vm",

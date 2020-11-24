@@ -14,7 +14,7 @@ use structopt::StructOpt;
 use move_lang::{shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_LIBSYMEXEC, MOVE_STDLIB_MODULES},
+    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
     controller::MoveController,
 };
 
@@ -41,27 +41,13 @@ struct MainArgs {
     #[structopt(long = "no-stdlib")]
     no_stdlib: bool,
 
-    /// Mark that the stdlib library needs to be tracked for symbolic execution, regardless of
-    /// whether they are compiled or loaded
-    #[structopt(long = "track-stdlib", conflicts_with = "no-stdlib")]
-    track_stdlib: bool,
-
     /// Mark that the libnursery library will not be prepared
     #[structopt(long = "no-libnursery", conflicts_with = "no-stdlib")]
     no_libnursery: bool,
 
-    /// Mark that the libsymexec library will not be prepared
-    #[structopt(long = "no-libsymexec")]
-    no_libsymexec: bool,
-
     /// Mark that the libra script will be prepared
     #[structopt(long = "use-libra", conflicts_with = "no-stdlib")]
     use_libra: Option<String>,
-
-    /// Mark that the libra script needs to be tracked for symbolic execution, regardless of
-    /// whether they are compiled or loaded
-    #[structopt(long = "track-libra", requires = "use-libra")]
-    track_libra: bool,
 
     /// Do not clean the workspace after running the commands
     #[structopt(long = "no-clean", short = "C")]
@@ -114,24 +100,10 @@ fn main() -> Result<()> {
 
     // preprocessing
     if !args.no_stdlib {
-        controller.compile(
-            &[&*MOVE_STDLIB_MODULES],
-            Some(Address::LIBRA_CORE),
-            args.track_stdlib,
-            true,
-        )?;
+        controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::LIBRA_CORE), true)?;
         if !args.no_libnursery {
-            controller.compile(
-                &[&*MOVE_LIBNURSERY],
-                Some(Address::LIBRA_CORE),
-                args.track_stdlib,
-                true,
-            )?;
+            controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true)?;
         }
-    }
-
-    if !args.no_libsymexec {
-        controller.compile(&[&*MOVE_LIBSYMEXEC], Some(Address::LIBRA_CORE), false, true)?;
     }
 
     if let Some(script_name) = args.use_libra {
@@ -140,7 +112,6 @@ fn main() -> Result<()> {
                 .join(script_name)
                 .with_extension(MOVE_EXTENSION))],
             Some(Address::LIBRA_CORE),
-            args.track_libra,
             true,
         )?;
     }

@@ -1,1 +1,1 @@
-cargo run -- args.txt --track-stdlib -v
+cargo run -- args.txt -v

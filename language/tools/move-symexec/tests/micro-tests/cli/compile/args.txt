@@ -1,16 +1,15 @@
 # modules
 push
 compile ../../../../../../stdlib/modules --dry-run
-compile ../../../../../../stdlib/modules --track
+compile ../../../../../../stdlib/modules
 
 # scripts
 compile ../../../../../../stdlib/transaction_scripts/burn.move --dry-run
-compile ../../../../../../stdlib/transaction_scripts/burn.move --track
+compile ../../../../../../stdlib/transaction_scripts/burn.move
 pop
 
 # progressive
 push
-compile ../../../../../../stdlib/modules --sender 0x2 --track
-compile ../../../../../../stdlib/transaction_scripts/burn.move --sender 0x2 --dry-run
-compile ../../../../../../stdlib/transaction_scripts/burn.move --sender 0x2 --track
+compile ../../../../../../stdlib/modules --sender 0x2
+compile ../../../../../../stdlib/transaction_scripts/burn.move --sender 0x2
 pop

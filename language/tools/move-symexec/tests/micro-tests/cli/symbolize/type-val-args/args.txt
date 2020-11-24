@@ -1,5 +1,5 @@
 # preparation
-compile move_src --track
+compile move_src
 
 # concrete value
 symbolize -t u8 -v C::0u8

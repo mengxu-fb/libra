@@ -1,5 +1,5 @@
 # preparation
-compile move_src --track
+compile move_src
 
 # execution success
 execute -t u8 -v 0u8

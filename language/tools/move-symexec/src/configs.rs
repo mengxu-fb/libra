@@ -16,9 +16,6 @@ macro_rules! crate_path {
     }
 }
 
-// Default path to directory containing libsymexec
-crate_path!(MOVE_LIBSYMEXEC, "libsymexec");
-
 // Default path to directory containing nursery (source)
 crate_path!(MOVE_LIBNURSERY, "..", "..", "stdlib", "nursery");
 

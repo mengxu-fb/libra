@@ -1,2 +1,2 @@
-compile move_src --track
+compile move_src
 execute
