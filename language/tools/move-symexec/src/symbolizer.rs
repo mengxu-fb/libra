@@ -2,19 +2,12 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Result};
-use std::{
-    collections::{HashMap, HashSet},
-    path::PathBuf,
-};
+use std::path::PathBuf;
 
-use move_core_types::{
-    account_address::AccountAddress,
-    identifier::IdentStr,
-    language_storage::{ModuleId, TypeTag},
-};
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use vm::{
     access::ScriptAccess,
-    file_format::{CompiledModule, CompiledScript, SignatureToken},
+    file_format::{CompiledScript, SignatureToken},
 };
 
 use crate::sym_vm_types::SymTransactionArgument;
@@ -34,8 +27,6 @@ impl MoveSymbolizer {
     pub fn symbolize(
         &mut self,
         script: &CompiledScript,
-        _modules: &[&CompiledModule],
-        _tracked_functions: &HashMap<ModuleId, HashSet<&IdentStr>>,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
         type_tags: &[TypeTag],

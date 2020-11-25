@@ -3,10 +3,8 @@
 
 use anyhow::{bail, Result};
 use regex::Regex;
-use std::collections::{HashMap, HashSet};
 
-use move_core_types::{identifier::IdentStr, language_storage::ModuleId};
-use vm::{access::ModuleAccess, file_format::CompiledModule};
+use spec_lang::env::{FunctionEnv, GlobalEnv};
 
 // identifier matching
 pub struct FuncIdMatcher {
@@ -28,11 +26,10 @@ impl FuncIdMatcher {
         })
     }
 
-    fn is_match(&self, module_id: &ModuleId, func_id: &IdentStr) -> bool {
-        self.module_addr_regex
-            .is_match(&module_id.address().to_string())
-            && self.module_name_regex.is_match(&module_id.name().as_str())
-            && self.func_name_regex.is_match(func_id.as_str())
+    fn is_match(&self, module_addr: &str, module_name: &str, func_name: &str) -> bool {
+        self.module_addr_regex.is_match(module_addr)
+            && self.module_name_regex.is_match(module_name)
+            && self.func_name_regex.is_match(func_name)
     }
 }
 
@@ -41,20 +38,22 @@ struct FuncIdMatcherList<'a> {
 }
 
 impl FuncIdMatcherList<'_> {
-    fn is_match(&self, module_id: &ModuleId, func_id: &IdentStr) -> bool {
+    fn is_match(&self, module_addr: &str, module_name: &str, func_name: &str) -> bool {
         match &self.matchers {
             None => true,
-            Some(matchers) => matchers.iter().any(|m| m.is_match(module_id, func_id)),
+            Some(matchers) => matchers
+                .iter()
+                .any(|m| m.is_match(module_addr, module_name, func_name)),
         }
     }
 }
 
 // identifier filtering
-pub fn collect_tracked_functions<'a>(
-    tracked_modules: &[&'a CompiledModule],
+pub fn collect_tracked_functions<'env>(
+    global_env: &'env GlobalEnv,
     inclusion: Option<&[FuncIdMatcher]>,
     exclusion: Option<&[FuncIdMatcher]>,
-) -> HashMap<ModuleId, HashSet<&'a IdentStr>> {
+) -> Vec<FunctionEnv<'env>> {
     // build filters
     let inc_matcher = FuncIdMatcherList {
         matchers: inclusion,
@@ -63,43 +62,24 @@ pub fn collect_tracked_functions<'a>(
         matchers: exclusion,
     };
 
-    // filter through the inclusion matchers
-    let mut included_functions: HashMap<ModuleId, HashSet<&IdentStr>> = HashMap::new();
-    for module in tracked_modules {
-        let module_id = module.self_id();
-        let func_set = module
-            .function_defs()
-            .iter()
-            .filter_map(|func_def| {
-                let handle = module.function_handle_at(func_def.function);
-                let func_id = module.identifier_at(handle.name);
-                if inc_matcher.is_match(&module_id, func_id) {
-                    Some(func_id)
-                } else {
-                    None
-                }
-            })
-            .collect();
+    // filter through the matchers
+    let mut functions = vec![];
+    for module_env in global_env.get_modules() {
+        let module_id = module_env.get_name();
+        let module_addr = format!("{:#X}", module_id.addr());
+        let module_name = module_env.symbol_pool().string(module_id.name());
 
-        // ensure that we do not have duplicated modules
-        let exists = included_functions.insert(module.self_id(), func_set);
-        debug_assert!(exists.is_none());
-    }
-
-    // filter through the exclusion matchers
-    let mut tracked_functions = HashMap::new();
-    for (module_id, func_set) in included_functions.into_iter() {
-        let filtered_set: HashSet<_> = func_set
-            .into_iter()
-            .filter(|func_id| !exc_matcher.is_match(&module_id, &func_id))
-            .collect();
-
-        if !filtered_set.is_empty() {
-            let exists = tracked_functions.insert(module_id, filtered_set);
-            debug_assert!(exists.is_none());
+        // iterate over the functions
+        for func_env in module_env.clone().into_functions() {
+            let func_name = func_env.symbol_pool().string(func_env.get_name());
+            if inc_matcher.is_match(&module_addr, &module_name, &func_name)
+                && !exc_matcher.is_match(&module_addr, &module_name, &func_name)
+            {
+                functions.push(func_env);
+            }
         }
     }
 
     // done
-    tracked_functions
+    functions
 }

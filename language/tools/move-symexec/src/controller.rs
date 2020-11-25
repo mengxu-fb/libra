@@ -250,15 +250,11 @@ impl MoveController {
         // TODO: address_opt is set to None, but I don't know whether this is has any implications.
         // There is possible that across different compilation batches, the sender address can be
         // different and hence, there might not be a common sender address for all sources.
-        let _global_env = run_spec_lang_compiler(sources.paths_to_strings()?, vec![], None)?;
+        let global_env = run_spec_lang_compiler(sources.paths_to_strings()?, vec![], None)?;
 
         // collect information
-        let modules = self.builder.get_compiled_modules_all();
-        let tracked_functions = collect_tracked_functions(&modules, inclusion, Some(&exclusion));
-        debug!(
-            "{} functions to be tracked symbolically",
-            tracked_functions.values().flatten().count()
-        );
+        let tracked_functions = collect_tracked_functions(&global_env, inclusion, Some(&exclusion));
+        debug!("{} functions tracked symbolically", tracked_functions.len());
 
         // prepare a new symbolizer
         let workdir = self
@@ -271,8 +267,6 @@ impl MoveController {
         // symbolize it
         symbolizer.symbolize(
             script,
-            &modules,
-            &tracked_functions,
             &signers,
             &sym_args,
             &type_tags,
