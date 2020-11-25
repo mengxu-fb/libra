@@ -22,7 +22,8 @@ use vm::file_format::{CompiledModule, CompiledScript};
 use crate::{
     builder::MoveStatefulBuilder,
     executor::MoveExecutor,
-    sym_filter::{collect_tracked_functions, FuncIdMatcher},
+    sym_filter::FuncIdMatcher,
+    sym_oracle::SymOracle,
     sym_vm_types::{parse_sym_transaction_argument, SymTransactionArgument},
     symbolizer::MoveSymbolizer,
     utils::PathsToStrings,
@@ -245,16 +246,19 @@ impl MoveController {
         }
         let script = scripts.pop().unwrap();
 
-        // collect sources
+        // build the global env
         let sources = self.builder.get_source_locations_all();
         // TODO: address_opt is set to None, but I don't know whether this is has any implications.
         // There is possible that across different compilation batches, the sender address can be
         // different and hence, there might not be a common sender address for all sources.
         let global_env = run_spec_lang_compiler(sources.paths_to_strings()?, vec![], None)?;
 
-        // collect information
-        let tracked_functions = collect_tracked_functions(&global_env, inclusion, Some(&exclusion));
-        debug!("{} functions tracked symbolically", tracked_functions.len());
+        // build the oracle
+        let oracle = SymOracle::new(&global_env, inclusion, exclusion);
+        debug!(
+            "{} functions tracked symbolically",
+            oracle.num_tracked_functions()
+        );
 
         // prepare a new symbolizer
         let workdir = self
@@ -267,6 +271,7 @@ impl MoveController {
         // symbolize it
         symbolizer.symbolize(
             script,
+            &oracle,
             &signers,
             &sym_args,
             &type_tags,

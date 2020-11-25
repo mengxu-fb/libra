@@ -24,6 +24,7 @@ structopt = "0.3.18"
 tempfile = "3.1.0"
 
 compiled-stdlib = { path = "../../stdlib/compiled", version = "0.1.0" }
+bytecode = { path = "../../move-prover/bytecode", version = "0.1.0" }
 bytecode-verifier = { path = "../../bytecode-verifier", version = "0.1.0" }
 datatest-stable = { path = "../../../common/datatest-stable", version = "0.1.0" }
 functional-tests = { path = "../../testing-infra/functional-tests", version = "0.1.0" }

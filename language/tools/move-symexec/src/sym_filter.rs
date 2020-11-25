@@ -3,8 +3,9 @@
 
 use anyhow::{bail, Result};
 use regex::Regex;
+use std::collections::HashMap;
 
-use spec_lang::env::{FunctionEnv, GlobalEnv};
+use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, ModuleId};
 
 // identifier matching
 pub struct FuncIdMatcher {
@@ -53,7 +54,7 @@ pub fn collect_tracked_functions<'env>(
     global_env: &'env GlobalEnv,
     inclusion: Option<&[FuncIdMatcher]>,
     exclusion: Option<&[FuncIdMatcher]>,
-) -> Vec<FunctionEnv<'env>> {
+) -> HashMap<ModuleId, HashMap<FunId, FunctionEnv<'env>>> {
     // build filters
     let inc_matcher = FuncIdMatcherList {
         matchers: inclusion,
@@ -63,23 +64,30 @@ pub fn collect_tracked_functions<'env>(
     };
 
     // filter through the matchers
-    let mut functions = vec![];
+    let mut module_map = HashMap::new();
     for module_env in global_env.get_modules() {
         let module_id = module_env.get_name();
         let module_addr = format!("{:#X}", module_id.addr());
         let module_name = module_env.symbol_pool().string(module_id.name());
 
         // iterate over the functions
+        let mut func_map = HashMap::new();
         for func_env in module_env.clone().into_functions() {
             let func_name = func_env.symbol_pool().string(func_env.get_name());
-            if inc_matcher.is_match(&module_addr, &module_name, &func_name)
+            if !func_env.is_native() // native functions are ignored by default
+                && inc_matcher.is_match(&module_addr, &module_name, &func_name)
                 && !exc_matcher.is_match(&module_addr, &module_name, &func_name)
             {
-                functions.push(func_env);
+                let exists = func_map.insert(func_env.get_id(), func_env);
+                debug_assert!(exists.is_none());
             }
         }
+
+        // add to module map
+        let exists = module_map.insert(module_env.get_id(), func_map);
+        debug_assert!(exists.is_none());
     }
 
     // done
-    functions
+    module_map
 }

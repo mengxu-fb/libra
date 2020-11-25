@@ -10,7 +10,7 @@ use vm::{
     file_format::{CompiledScript, SignatureToken},
 };
 
-use crate::sym_vm_types::SymTransactionArgument;
+use crate::{sym_oracle::SymOracle, sym_vm_types::SymTransactionArgument};
 
 /// The symbolizer
 #[derive(Clone, Debug)]
@@ -27,6 +27,7 @@ impl MoveSymbolizer {
     pub fn symbolize(
         &mut self,
         script: &CompiledScript,
+        _oracle: &SymOracle,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
         type_tags: &[TypeTag],
