@@ -236,8 +236,8 @@ impl MoveController {
         type_tags: &[TypeTag],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: &[FuncIdMatcher],
-        output_exec_graph: bool,
-        output_exec_graph_stats: bool,
+        _output_exec_graph: bool,
+        _output_exec_graph_stats: bool,
     ) -> Result<()> {
         // get the script
         let mut scripts = self.builder.get_compiled_scripts_all();
@@ -266,18 +266,10 @@ impl MoveController {
             .join(self.counter_symbolizer.to_string());
         fs::create_dir(&workdir)?;
         self.counter_symbolizer += 1;
-        let mut symbolizer = MoveSymbolizer::new(workdir);
+        let symbolizer = MoveSymbolizer::new(workdir, script, &oracle, type_tags)?;
 
         // symbolize it
-        symbolizer.symbolize(
-            script,
-            &oracle,
-            &signers,
-            &sym_args,
-            &type_tags,
-            output_exec_graph,
-            output_exec_graph_stats,
-        )
+        symbolizer.symbolize(signers, sym_args)
     }
 
     pub fn push(&mut self) -> Result<()> {

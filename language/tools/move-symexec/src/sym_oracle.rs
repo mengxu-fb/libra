@@ -7,9 +7,9 @@ use bytecode::{
     function_target::FunctionTargetData, stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
-use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, ModuleId};
+use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId};
 
-use crate::sym_filter::{collect_tracked_functions, FuncIdMatcher};
+use crate::sym_filter::{collect_tracked_functions_and_script, FuncIdMatcher};
 
 /// Bridges and extends the `FunctionEnv` in move-prover
 struct SymFuncRecord<'env> {
@@ -38,6 +38,7 @@ impl<'env> SymFuncRecord<'env> {
 /// Bridges to the move-prover internals
 pub(crate) struct SymOracle<'env> {
     global_env: &'env GlobalEnv,
+    script_env: ModuleEnv<'env>,
     tracked_functions: HashMap<ModuleId, HashMap<FunId, SymFuncRecord<'env>>>,
 }
 
@@ -48,8 +49,8 @@ impl<'env> SymOracle<'env> {
         exclusion: &[FuncIdMatcher],
     ) -> Self {
         // collect tracked functions
-        let tracked_function_envs =
-            collect_tracked_functions(global_env, inclusion, Some(exclusion));
+        let (tracked_function_envs, script_env) =
+            collect_tracked_functions_and_script(global_env, inclusion, Some(exclusion));
 
         // build per-function record
         let tracked_functions = tracked_function_envs
@@ -68,6 +69,7 @@ impl<'env> SymOracle<'env> {
         // done
         Self {
             global_env,
+            script_env,
             tracked_functions,
         }
     }

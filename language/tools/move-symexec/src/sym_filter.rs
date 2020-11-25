@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use regex::Regex;
 use std::collections::HashMap;
 
-use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, ModuleId};
+use spec_lang::env::{FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId};
 
 // identifier matching
 pub struct FuncIdMatcher {
@@ -50,11 +50,14 @@ impl FuncIdMatcherList<'_> {
 }
 
 // identifier filtering
-pub fn collect_tracked_functions<'env>(
+pub fn collect_tracked_functions_and_script<'env>(
     global_env: &'env GlobalEnv,
     inclusion: Option<&[FuncIdMatcher]>,
     exclusion: Option<&[FuncIdMatcher]>,
-) -> HashMap<ModuleId, HashMap<FunId, FunctionEnv<'env>>> {
+) -> (
+    HashMap<ModuleId, HashMap<FunId, FunctionEnv<'env>>>,
+    ModuleEnv<'env>,
+) {
     // build filters
     let inc_matcher = FuncIdMatcherList {
         matchers: inclusion,
@@ -64,18 +67,32 @@ pub fn collect_tracked_functions<'env>(
     };
 
     // filter through the matchers
+    let mut script_env = None;
     let mut module_map = HashMap::new();
     for module_env in global_env.get_modules() {
-        let module_id = module_env.get_name();
-        let module_addr = format!("{:#X}", module_id.addr());
-        let module_name = module_env.symbol_pool().string(module_id.name());
+        // found the script
+        if module_env.is_script_module() {
+            debug_assert!(script_env.is_none());
+            script_env = Some(module_env.clone());
+        }
+
+        // module basics
+        let module_key = module_env.get_name();
+        let module_addr = format!("{:#X}", module_key.addr());
+        let module_name = module_env.symbol_pool().string(module_key.name());
+        let module_id = module_env.get_id();
 
         // iterate over the functions
         let mut func_map = HashMap::new();
-        for func_env in module_env.clone().into_functions() {
+        for func_env in module_env.into_functions() {
+            // ignore native functions
+            if func_env.is_native() {
+                continue;
+            }
+
+            // check matches
             let func_name = func_env.symbol_pool().string(func_env.get_name());
-            if !func_env.is_native() // native functions are ignored by default
-                && inc_matcher.is_match(&module_addr, &module_name, &func_name)
+            if inc_matcher.is_match(&module_addr, &module_name, &func_name)
                 && !exc_matcher.is_match(&module_addr, &module_name, &func_name)
             {
                 let exists = func_map.insert(func_env.get_id(), func_env);
@@ -84,10 +101,10 @@ pub fn collect_tracked_functions<'env>(
         }
 
         // add to module map
-        let exists = module_map.insert(module_env.get_id(), func_map);
+        let exists = module_map.insert(module_id, func_map);
         debug_assert!(exists.is_none());
     }
 
     // done
-    module_map
+    (module_map, script_env.unwrap())
 }

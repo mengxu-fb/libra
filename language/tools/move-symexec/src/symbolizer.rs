@@ -13,29 +13,40 @@ use vm::{
 use crate::{sym_oracle::SymOracle, sym_vm_types::SymTransactionArgument};
 
 /// The symbolizer
-#[derive(Clone, Debug)]
-pub(crate) struct MoveSymbolizer {
+pub(crate) struct MoveSymbolizer<'env> {
     _workdir: PathBuf,
+    script: &'env CompiledScript,
+    oracle: &'env SymOracle<'env>,
 }
 
-impl MoveSymbolizer {
+impl<'env> MoveSymbolizer<'env> {
     /// Create a new symbolizer, assuming that `workdir` is already created.
-    pub fn new(workdir: PathBuf) -> Self {
-        Self { _workdir: workdir }
+    pub fn new(
+        workdir: PathBuf,
+        script: &'env CompiledScript,
+        oracle: &'env SymOracle<'env>,
+        type_tags: &[TypeTag],
+    ) -> Result<Self> {
+        // check that we got the correct number of type arguments
+        if type_tags.len() != script.as_inner().type_parameters.len() {
+            bail!("The number of type tags does not match the number of type arguments");
+        }
+
+        // done
+        Ok(Self {
+            _workdir: workdir,
+            script,
+            oracle,
+        })
     }
 
     pub fn symbolize(
-        &mut self,
-        script: &CompiledScript,
-        _oracle: &SymOracle,
+        &self,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
-        type_tags: &[TypeTag],
-        _output_exec_graph: bool,
-        _output_exec_graph_stats: bool,
     ) -> Result<()> {
         // check that we got the correct number of symbolic arguments
-        let val_arg_sigs = script.signature_at(script.as_inner().parameters);
+        let val_arg_sigs = self.script.signature_at(self.script.as_inner().parameters);
         let use_signers = !val_arg_sigs.is_empty()
             && match val_arg_sigs.0.get(0).unwrap() {
                 SignatureToken::Reference(inner) => matches!(&**inner, SignatureToken::Signer),
@@ -45,11 +56,6 @@ impl MoveSymbolizer {
         // NOTE: signers must come before value arguments, if present in the signature
         if val_arg_sigs.len() != if use_signers { signers.len() } else { 0 } + sym_args.len() {
             bail!("The number of symbols does not match the number of value arguments");
-        }
-
-        // check that we got the correct number of type arguments
-        if type_tags.len() != script.as_inner().type_parameters.len() {
-            bail!("The number of type tags does not match the number of type arguments");
         }
 
         // done
