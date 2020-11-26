@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     convert::TryFrom,
     fs::{self, File},
-    io::Write,
+    io::{SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -28,6 +28,7 @@ use move_symexec::{
     crate_path, crate_path_string,
     sym_vm_types::SymTransactionArgument,
 };
+use std::io::Seek;
 
 // Path to the directory of move-lang functional testsuites
 crate_path_string!(
@@ -113,6 +114,13 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
                     scripts.len()
                 );
             }
+
+            // for compiled modules, we force the sender address to be added to the source
+            fp.seek(SeekFrom::Start(0))?;
+            fp.write_all(format!("address 0x{} {{\n", address.short_str_lossless()).as_bytes())?;
+            fp.write_all(input.as_bytes())?;
+            fp.write_all(b"\n}")?;
+
             Ok(ScriptOrModule::Module(modules.pop().unwrap().clone()))
         } else {
             if scripts.len() != 1 {

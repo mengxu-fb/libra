@@ -4,6 +4,7 @@
 use anyhow::{bail, Result};
 use log::debug;
 use std::{
+    collections::HashSet,
     fs,
     io::{stderr, Write},
     path::{Path, PathBuf},
@@ -117,6 +118,7 @@ struct OpBuildState {
     compiled_modules: Vec<CompiledModule>,
     compiled_scripts: Vec<CompiledScript>,
     source_locations: Vec<PathBuf>,
+    sender_addresses: HashSet<Address>,
 }
 
 impl OpBuildState {
@@ -127,6 +129,7 @@ impl OpBuildState {
             compiled_modules: vec![],
             compiled_scripts: vec![],
             source_locations: vec![],
+            sender_addresses: HashSet::new(),
         })
     }
 }
@@ -170,13 +173,19 @@ impl MoveStatefulBuilder {
         );
 
         if commit {
+            if !scripts.is_empty() {
+                if let Some(address) = sender {
+                    state.sender_addresses.insert(address);
+                }
+            }
             state.compiled_modules.append(&mut modules);
             state.compiled_scripts.append(&mut scripts);
             state.source_locations.extend(
                 move_src
                     .as_ref()
                     .iter()
-                    .map(|path| path.as_ref().to_path_buf()),
+                    .map(fs::canonicalize)
+                    .collect::<Result<Vec<_>, _>>()?,
             );
         }
 
@@ -244,6 +253,14 @@ impl MoveStatefulBuilder {
             .map(|state| state.source_locations.iter())
             .flatten()
             .map(|path| path.as_path())
+            .collect()
+    }
+
+    pub fn get_sender_addresses_all(&self) -> HashSet<&Address> {
+        self.op_stack
+            .iter()
+            .map(|state| state.sender_addresses.iter())
+            .flatten()
             .collect()
     }
 }

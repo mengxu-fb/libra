@@ -242,16 +242,29 @@ impl MoveController {
         // get the script
         let mut scripts = self.builder.get_compiled_scripts_all();
         if scripts.len() != 1 {
-            bail!("Expecting only one script, found {}", scripts.len());
+            bail!(
+                "Expecting one and only one compiled script, found {}",
+                scripts.len()
+            );
         }
         let script = scripts.pop().unwrap();
 
+        // get the address
+        let addresses = self.builder.get_sender_addresses_all();
+        if addresses.len() > 1 {
+            bail!(
+                "Expecting at most one sender address, found {}",
+                addresses.len()
+            );
+        }
+        // NOTE: this address is the sender address for the one and only script, and this value is
+        // needed by `run_spec_lang_compiler`
+        let address = addresses.into_iter().next().map(|addr| addr.to_string());
+
         // build the global env
         let sources = self.builder.get_source_locations_all();
-        // TODO: address_opt is set to None, but I don't know whether this is has any implications.
-        // There is possible that across different compilation batches, the sender address can be
-        // different and hence, there might not be a common sender address for all sources.
-        let global_env = run_spec_lang_compiler(sources.paths_to_strings()?, vec![], None)?;
+        let global_env =
+            run_spec_lang_compiler(sources.paths_to_strings()?, vec![], address.as_deref())?;
 
         // build the oracle
         let oracle = SymOracle::new(&global_env, inclusion, exclusion);
