@@ -300,6 +300,10 @@ impl MoveController {
         )
     }
 
+    pub fn get_compilation_interfaces(&self) -> Vec<&Path> {
+        self.builder.get_compilation_interfaces()
+    }
+
     pub fn handle_command(&mut self, cmdl: &str) -> Result<()> {
         let args = OpArgs::from_iter(&shell_words::split(cmdl)?);
 

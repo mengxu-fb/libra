@@ -263,4 +263,13 @@ impl MoveStatefulBuilder {
             .flatten()
             .collect()
     }
+
+    pub fn get_compilation_interfaces(&self) -> Vec<&Path> {
+        self.get_state()
+            .builder
+            .all_interface_dir
+            .iter()
+            .map(|path| path.as_path())
+            .collect()
+    }
 }

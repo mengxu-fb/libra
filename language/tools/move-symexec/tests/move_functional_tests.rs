@@ -7,7 +7,7 @@ use std::{
     collections::HashSet,
     convert::TryFrom,
     fs::{self, File},
-    io::{SeekFrom, Write},
+    io::{Seek, SeekFrom, Write},
     path::{Path, PathBuf},
 };
 
@@ -20,15 +20,15 @@ use libra_types::{
     account_address::AccountAddress,
     transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
 };
-use move_lang::{shared::Address, MOVE_EXTENSION};
+use move_lang::{move_compile_no_report, shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
     configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
     controller::MoveController,
     crate_path, crate_path_string,
     sym_vm_types::SymTransactionArgument,
+    utils::PathToString,
 };
-use std::io::Seek;
 
 // Path to the directory of move-lang functional testsuites
 crate_path_string!(
@@ -92,6 +92,14 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
         // parse sender address
         let sender = Address::try_from(address.as_ref()).unwrap();
 
+        // save the compilation dependencies first
+        let deps = self
+            .controller
+            .get_compilation_interfaces()
+            .into_iter()
+            .map(|path| path.path_to_string())
+            .collect::<Result<Vec<_>>>()?;
+
         // compile in a separate session
         self.controller.push()?;
         if self
@@ -115,11 +123,26 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
                 );
             }
 
-            // for compiled modules, we force the sender address to be added to the source
-            fp.seek(SeekFrom::Start(0))?;
-            fp.write_all(format!("address 0x{} {{\n", address.short_str_lossless()).as_bytes())?;
-            fp.write_all(input.as_bytes())?;
-            fp.write_all(b"\n}")?;
+            // NOTE: for compiled modules, we force the sender address to be added to the source.
+            // But occasionally, the original source code already has the address info, so we do a
+            // compilation on the original source file --- with None as sender_opt --- and see
+            // whether it returns with error. If an error is encountered, we further modify the
+            // source file by manually adding the `address _ {}` wrap around the original source.
+            let (_, result) =
+                move_compile_no_report(&[src_file_path.path_to_string()?], &deps, None, None)?;
+            if result.is_err() {
+                fp.seek(SeekFrom::Start(0))?;
+                fp.write_all(
+                    format!("address 0x{} {{\n", address.short_str_lossless()).as_bytes(),
+                )?;
+                fp.write_all(input.as_bytes())?;
+                fp.write_all(b"\n}")?;
+
+                // second trial
+                let (_, result) =
+                    move_compile_no_report(&[src_file_path.path_to_string()?], &deps, None, None)?;
+                debug_assert!(result.is_ok());
+            }
 
             Ok(ScriptOrModule::Module(modules.pop().unwrap().clone()))
         } else {

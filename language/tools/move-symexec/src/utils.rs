@@ -5,7 +5,7 @@ use anyhow::{anyhow, Result};
 use std::path::Path;
 
 // path to string conversion
-pub(crate) trait PathToString {
+pub trait PathToString {
     fn path_to_string(&self) -> Result<String>;
 }
 
@@ -19,7 +19,7 @@ impl<P: AsRef<Path>> PathToString for P {
     }
 }
 
-pub(crate) trait PathsToStrings<P> {
+pub trait PathsToStrings<P> {
     fn paths_to_strings(&self) -> Result<Vec<String>>;
 }
 
