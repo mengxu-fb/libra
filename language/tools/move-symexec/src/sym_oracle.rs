@@ -7,7 +7,10 @@ use bytecode::{
     function_target::FunctionTargetData, stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
-use move_core_types::{identifier::Identifier, language_storage::ModuleId as ModuleIdByMove};
+use move_core_types::{
+    identifier::{IdentStr, Identifier},
+    language_storage::ModuleId as ModuleIdByMove,
+};
 use spec_lang::env::{
     FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId as ModuleIdBySpec, StructEnv, StructId,
 };
@@ -19,7 +22,7 @@ use crate::sym_filter::{collect_tracked_functions_and_script, FuncIdMatcher};
 struct SymFuncId(usize);
 
 /// Bridges and extends the `FunctionEnv` in move-prover
-struct SymFuncInfo<'env> {
+pub(crate) struct SymFuncInfo<'env> {
     func_env: FunctionEnv<'env>,
     func_data: FunctionTargetData,
     func_cfg: StacklessControlFlowGraph,
@@ -47,7 +50,7 @@ impl<'env> SymFuncInfo<'env> {
 struct SymStructId(usize);
 
 /// Bridges and extends the `StructEnv` in move-prover
-struct SymStructInfo<'env> {
+pub(crate) struct SymStructInfo<'env> {
     struct_env: StructEnv<'env>,
 }
 
@@ -153,6 +156,55 @@ impl<'env> SymOracle<'env> {
             defined_structs_by_spec,
             defined_structs_by_move,
         }
+    }
+
+    // lookup
+    pub fn get_tracked_function_by_spec(
+        &self,
+        module_id: &ModuleIdBySpec,
+        func_id: &FunId,
+    ) -> Option<&SymFuncInfo<'env>> {
+        self.tracked_functions_by_spec
+            .get(module_id)
+            .map(|funcs| funcs.get(func_id))
+            .flatten()
+            .map(|sym_id| self.tracked_functions.get(sym_id).unwrap())
+    }
+
+    pub fn get_tracked_function_by_move(
+        &self,
+        module_id: &ModuleIdByMove,
+        func_id: &IdentStr,
+    ) -> Option<&SymFuncInfo<'env>> {
+        self.tracked_functions_by_move
+            .get(module_id)
+            .map(|funcs| funcs.get(func_id))
+            .flatten()
+            .map(|sym_id| self.tracked_functions.get(sym_id).unwrap())
+    }
+
+    pub fn get_defined_struct_by_spec(
+        &self,
+        module_id: &ModuleIdBySpec,
+        struct_id: &StructId,
+    ) -> Option<&SymStructInfo<'env>> {
+        self.defined_structs_by_spec
+            .get(module_id)
+            .map(|funcs| funcs.get(struct_id))
+            .flatten()
+            .map(|sym_id| self.defined_structs.get(sym_id).unwrap())
+    }
+
+    pub fn get_defined_struct_by_move(
+        &self,
+        module_id: &ModuleIdByMove,
+        struct_id: &IdentStr,
+    ) -> Option<&SymStructInfo<'env>> {
+        self.defined_structs_by_move
+            .get(module_id)
+            .map(|funcs| funcs.get(struct_id))
+            .flatten()
+            .map(|sym_id| self.defined_structs.get(sym_id).unwrap())
     }
 
     // misc

@@ -10,7 +10,7 @@ use vm::{
     file_format::{CompiledScript, SignatureToken},
 };
 
-use crate::{sym_oracle::SymOracle, sym_vm_types::SymTransactionArgument};
+use crate::{sym_oracle::SymOracle, sym_typing::ExecTypeArg, sym_vm_types::SymTransactionArgument};
 
 /// The symbolizer
 pub(crate) struct MoveSymbolizer<'env> {
@@ -31,6 +31,12 @@ impl<'env> MoveSymbolizer<'env> {
         if type_tags.len() != script.as_inner().type_parameters.len() {
             bail!("The number of type tags does not match the number of type arguments");
         }
+
+        // convert type args
+        let type_args: Vec<ExecTypeArg> = type_tags
+            .iter()
+            .map(ExecTypeArg::convert_from_type_tag)
+            .collect();
 
         // done
         Ok(Self {
