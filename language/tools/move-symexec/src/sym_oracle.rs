@@ -1,10 +1,12 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use once_cell::sync::OnceCell;
 use std::collections::HashMap;
 
 use bytecode::{
-    function_target::FunctionTargetData, stackless_bytecode_generator::StacklessBytecodeGenerator,
+    function_target::{FunctionTarget, FunctionTargetData},
+    stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
 use move_core_types::{
@@ -26,6 +28,7 @@ pub(crate) struct SymFuncInfo<'env> {
     func_env: FunctionEnv<'env>,
     func_data: FunctionTargetData,
     func_cfg: StacklessControlFlowGraph,
+    func_target: OnceCell<FunctionTarget<'env>>,
 }
 
 impl<'env> SymFuncInfo<'env> {
@@ -41,7 +44,23 @@ impl<'env> SymFuncInfo<'env> {
             func_env,
             func_data,
             func_cfg,
+            func_target: OnceCell::new(),
         }
+    }
+
+    // getters
+    pub fn get_context_string(&self) -> String {
+        format!(
+            "{}::{}::{}",
+            self.func_env.module_env.self_address(),
+            self.func_env.module_env.get_identifier(),
+            self.func_env.get_identifier()
+        )
+    }
+
+    pub fn get_function_target(&'env self) -> &FunctionTarget<'env> {
+        self.func_target
+            .get_or_init(|| FunctionTarget::new(&self.func_env, &self.func_data))
     }
 }
 

@@ -15,6 +15,8 @@ pub mod sym_typing;
 
 pub mod sym_oracle;
 
+pub mod sym_exec_graph;
+
 pub mod sym_vm_types;
 
 pub mod symbolizer;

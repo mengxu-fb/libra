@@ -1,6 +1,9 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use itertools::Itertools;
+use std::fmt;
+
 use move_core_types::{
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
@@ -57,6 +60,38 @@ impl ExecTypeArg {
                     .map(ExecTypeArg::convert_from_type_tag)
                     .collect(),
             },
+        }
+    }
+}
+
+impl fmt::Display for ExecTypeArg {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            ExecTypeArg::Bool => write!(f, "bool"),
+            ExecTypeArg::U8 => write!(f, "u8"),
+            ExecTypeArg::U64 => write!(f, "u64"),
+            ExecTypeArg::U128 => write!(f, "u128"),
+            ExecTypeArg::Address => write!(f, "address"),
+            ExecTypeArg::Signer => write!(f, "signer"),
+            ExecTypeArg::Vector { element_type } => write!(f, "vector<{}>", element_type),
+            ExecTypeArg::Struct {
+                module_id,
+                struct_name,
+                type_args,
+            } => write!(
+                f,
+                "struct {}::{}::{}<{}>",
+                module_id.address().short_str_lossless(),
+                module_id.name(),
+                struct_name,
+                type_args.iter().map(|ty_arg| ty_arg.to_string()).join(", ")
+            ),
+            ExecTypeArg::Reference { referred_type } => write!(f, "&{}", referred_type),
+            ExecTypeArg::MutableReference { referred_type } => write!(f, "&mut {}", referred_type),
+            ExecTypeArg::TypeParameter {
+                param_index,
+                actual_type,
+            } => write!(f, "#{}-{}", param_index, actual_type),
         }
     }
 }
