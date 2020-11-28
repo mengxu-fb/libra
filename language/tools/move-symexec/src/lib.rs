@@ -11,9 +11,9 @@ pub mod executor;
 
 pub mod sym_filter;
 
-pub mod sym_typing;
-
 pub mod sym_oracle;
+
+pub mod sym_typing;
 
 pub mod sym_exec_graph;
 

@@ -10,13 +10,17 @@ use vm::{
     file_format::{CompiledScript, SignatureToken},
 };
 
-use crate::{sym_oracle::SymOracle, sym_typing::ExecTypeArg, sym_vm_types::SymTransactionArgument};
+use crate::{
+    sym_exec_graph::ExecGraph, sym_oracle::SymOracle, sym_typing::ExecTypeArg,
+    sym_vm_types::SymTransactionArgument,
+};
 
 /// The symbolizer
 pub(crate) struct MoveSymbolizer<'env> {
     _workdir: PathBuf,
     script: &'env CompiledScript,
     oracle: &'env SymOracle<'env>,
+    exec_graph: ExecGraph<'env>,
 }
 
 impl<'env> MoveSymbolizer<'env> {
@@ -35,14 +39,18 @@ impl<'env> MoveSymbolizer<'env> {
         // convert type args
         let type_args: Vec<ExecTypeArg> = type_tags
             .iter()
-            .map(ExecTypeArg::convert_from_type_tag)
+            .map(|tag| ExecTypeArg::convert_from_type_tag(tag, oracle))
             .collect();
+
+        // build execution graph
+        let exec_graph = ExecGraph::new(&type_args, oracle);
 
         // done
         Ok(Self {
             _workdir: workdir,
             script,
             oracle,
+            exec_graph,
         })
     }
 

@@ -70,8 +70,13 @@ pub fn collect_tracked_functions_and_script<'env>(
     let mut script_env = None;
     let mut module_map = HashMap::new();
     for module_env in global_env.get_modules() {
+        let script_mod = module_env.is_script_module();
+
         // found the script
-        if module_env.is_script_module() {
+        if script_mod {
+            debug_assert_eq!(module_env.get_function_count(), 1);
+
+            // ensure one and only one script
             debug_assert!(script_env.is_none());
             script_env = Some(module_env.clone());
         }
@@ -92,8 +97,9 @@ pub fn collect_tracked_functions_and_script<'env>(
 
             // check matches
             let func_name = func_env.symbol_pool().string(func_env.get_name());
-            if inc_matcher.is_match(&module_addr, &module_name, &func_name)
-                && !exc_matcher.is_match(&module_addr, &module_name, &func_name)
+            if script_mod // NOTE: the script main function is always tracked
+                || (inc_matcher.is_match(&module_addr, &module_name, &func_name)
+                    && !exc_matcher.is_match(&module_addr, &module_name, &func_name))
             {
                 let exists = func_map.insert(func_env.get_id(), func_env);
                 debug_assert!(exists.is_none());
