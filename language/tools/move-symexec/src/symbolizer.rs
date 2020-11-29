@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Result};
-use std::path::PathBuf;
+use log::debug;
+use serde_json::{self, json};
+use std::{fs::File, io::Write, path::PathBuf};
 
 use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use vm::{
@@ -15,9 +17,15 @@ use crate::{
     sym_vm_types::SymTransactionArgument,
 };
 
+/// The default file name for the exec graph dot plot
+const EXEC_GRAPH_DOT_FILE: &str = "exec_graph.dot";
+
+/// The default file name for the exec graph statistics
+const EXEC_GRAPH_STATS_FILE: &str = "exec_graph_stats.json";
+
 /// The symbolizer
 pub(crate) struct MoveSymbolizer<'env> {
-    _workdir: PathBuf,
+    workdir: PathBuf,
     script: &'env CompiledScript,
     oracle: &'env SymOracle<'env>,
     exec_graph: ExecGraph<'env>,
@@ -47,7 +55,7 @@ impl<'env> MoveSymbolizer<'env> {
 
         // done
         Ok(Self {
-            _workdir: workdir,
+            workdir,
             script,
             oracle,
             exec_graph,
@@ -71,6 +79,35 @@ impl<'env> MoveSymbolizer<'env> {
         if val_arg_sigs.len() != if use_signers { signers.len() } else { 0 } + sym_args.len() {
             bail!("The number of symbols does not match the number of value arguments");
         }
+
+        // done
+        Ok(())
+    }
+
+    pub fn save_exec_graph(&self) -> Result<()> {
+        let path = self.workdir.join(EXEC_GRAPH_DOT_FILE);
+        let mut file = File::create(path)?;
+        file.write_all(self.exec_graph.to_dot().as_bytes())?;
+        Ok(())
+    }
+
+    pub fn save_exec_graph_stats(&self) -> Result<()> {
+        // show node and edge stats
+        debug!(
+            "{} nodes + {} edges in exec graph",
+            self.exec_graph.node_count(),
+            self.exec_graph.edge_count()
+        );
+
+        // construct the stats json
+        let stats = json!({
+            "node_count": self.exec_graph.node_count(),
+            "edge_count": self.exec_graph.edge_count(),
+        });
+
+        // save the stats to file
+        let path = self.workdir.join(EXEC_GRAPH_STATS_FILE);
+        serde_json::to_writer(&File::create(path)?, &stats)?;
 
         // done
         Ok(())

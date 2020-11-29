@@ -75,17 +75,17 @@ impl<'env> ExecBlock<'env> {
 impl<'env> fmt::Display for ExecBlock<'env> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // block head
-        write!(
+        writeln!(
             f,
-            "[{} - {}::{} <{}>]",
+            "[{} - {}<{}> - {}]",
             self.block_id.0,
             self.exec_unit.get_context_string(),
-            self.code_offset
-                .map_or_else(|| String::from("X"), |offset| offset.to_string()),
             self.type_args
                 .iter()
                 .map(|ty_arg| ty_arg.to_string())
-                .join(", ")
+                .join(", "),
+            self.code_offset
+                .map_or_else(|| String::from("X"), |offset| offset.to_string())
         )?;
 
         // block content
