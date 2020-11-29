@@ -1,0 +1,4 @@
+compile move_src
+execute -v 42u8
+execute -v 0u8 -F
+symbolize -v S::x --output-exec-graph --output-exec-graph-stats
