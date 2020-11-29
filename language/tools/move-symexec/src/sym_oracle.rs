@@ -54,10 +54,15 @@ impl<'env> SymFuncInfo<'env> {
 
     // getters
     pub fn get_context_string(&self) -> String {
+        let module_env = &self.func_env.module_env;
         format!(
             "{}::{}::{}",
-            self.func_env.module_env.self_address(),
-            self.func_env.module_env.get_identifier(),
+            if module_env.is_script_module() {
+                String::from("X")
+            } else {
+                module_env.self_address().to_string()
+            },
+            module_env.get_identifier(),
             self.func_env.get_identifier()
         )
     }
@@ -104,10 +109,15 @@ impl<'env> SymStructInfo<'env> {
 
     // getters
     pub fn get_context_string(&self) -> String {
+        let module_env = &self.struct_env.module_env;
         format!(
             "{}::{}::{}",
-            self.struct_env.module_env.self_address(),
-            self.struct_env.module_env.get_identifier(),
+            if module_env.is_script_module() {
+                String::from("X")
+            } else {
+                module_env.self_address().to_string()
+            },
+            module_env.get_identifier(),
             self.struct_env.get_identifier()
         )
     }

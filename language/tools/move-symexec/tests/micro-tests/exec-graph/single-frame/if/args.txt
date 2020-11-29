@@ -1,0 +1,2 @@
+compile move_src
+symbolize -v S::x --output-exec-graph --output-exec-graph-stats
