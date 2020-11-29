@@ -236,7 +236,7 @@ impl<'env> ExecGraph<'env> {
         id_counter: &mut ExecBlockId,
         recursions: &mut HashMap<(ExecBlockId, ExecBlockId), ExecBlockId>,
         oracle: &'env SymOracle<'env>,
-    ) -> HashSet<ExecBlockId> {
+    ) -> (ExecBlockId, HashSet<ExecBlockId>) {
         // prepare
         let instructions = exec_unit.get_instructions();
         let cfg = exec_unit.get_cfg();
@@ -248,6 +248,9 @@ impl<'env> ExecGraph<'env> {
         // (return_into_exec_block_id, Set<return_from_exec_block_id>)
         let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, HashSet<ExecBlockId>)> =
             HashMap::new();
+
+        // locate the entry block of this function CFG
+        let mut entry_point = None;
 
         // iterate CFG with reverse postorder DFS
         for block_id in cfg_reverse_postorder_dfs(&cfg, instructions) {
@@ -272,6 +275,9 @@ impl<'env> ExecGraph<'env> {
             // NOTE: since we traverse the CFG in reverse postorder dfs, this is guaranteed to be
             // executed before any other blocks are visited
             if block_id == cfg.entry_blocks().pop().unwrap() {
+                debug_assert!(entry_point.is_none());
+                entry_point = Some(exec_block.block_id);
+
                 let call_site = CallSite {
                     exec_unit,
                     type_args: type_args.to_vec(),
@@ -360,6 +366,7 @@ impl<'env> ExecGraph<'env> {
                                 recursions,
                                 oracle,
                             )
+                            .1
                         } else {
                             // recursive call: do not further expand the CFG of that function, just
                             // connect the blocks.
@@ -467,7 +474,7 @@ impl<'env> ExecGraph<'env> {
         exit_table.insert(call_site.entry_block_id, exit_points.clone());
 
         // done
-        exit_points
+        (entry_point.unwrap(), exit_points)
     }
 
     pub fn new(type_args: &[ExecTypeArg<'env>], oracle: &'env SymOracle<'env>) -> Self {
@@ -481,16 +488,18 @@ impl<'env> ExecGraph<'env> {
         let mut recursions = HashMap::new();
 
         let mut exec_graph = ExecGraph::empty();
-        exec_graph.incorporate(
-            &init_unit,
-            type_args,
-            None,
-            &mut call_stack,
-            &mut exit_table,
-            &mut id_counter,
-            &mut recursions,
-            oracle,
-        );
+        let init_entry_point = exec_graph
+            .incorporate(
+                &init_unit,
+                type_args,
+                None,
+                &mut call_stack,
+                &mut exit_table,
+                &mut id_counter,
+                &mut recursions,
+                oracle,
+            )
+            .0;
 
         // at the end of the execution, we should have no calls in stack
         debug_assert!(call_stack.is_empty());
@@ -570,6 +579,27 @@ impl<'env> ExecGraph<'env> {
                     .map(|node| exec_graph.get_block_by_node(node).block_id.0.to_string())
                     .join(", ")
             )
+        }
+
+        // construct the entry node to this eCFG if not exists
+        //
+        // NOTE: if an entry node does not exist, this eCFG is essentially an infinite loop. To
+        // handle this case, we create a dummy header block (i.e., containing no instructions) and
+        // link the header with the first block of the init unit.
+        if entry_node.is_none() {
+            let header_block = ExecBlock::new(id_counter, init_unit, None, type_args.to_vec());
+            id_counter.0 += 1;
+
+            let header_block_id = header_block.block_id;
+            let header_block_node = exec_graph.add_block(header_block);
+            exec_graph.add_flow(
+                header_block_id,
+                init_entry_point,
+                ExecFlowType::Branch(None),
+            );
+
+            // now set the header block node as the entry node
+            entry_node = Some(header_block_node);
         }
 
         // this statement checks that entry_note must exist
