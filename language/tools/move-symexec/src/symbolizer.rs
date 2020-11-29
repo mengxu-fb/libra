@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Result};
-use log::debug;
+use log::{debug, warn};
 use serde_json::{self, json};
 use std::{fs::File, io::Write, path::PathBuf};
 
@@ -13,7 +13,9 @@ use vm::{
 };
 
 use crate::{
-    sym_exec_graph::ExecGraph, sym_oracle::SymOracle, sym_typing::ExecTypeArg,
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
+    sym_oracle::SymOracle,
+    sym_typing::ExecTypeArg,
     sym_vm_types::SymTransactionArgument,
 };
 
@@ -22,6 +24,9 @@ const EXEC_GRAPH_DOT_FILE: &str = "exec_graph.dot";
 
 /// The default file name for the exec graph statistics
 const EXEC_GRAPH_STATS_FILE: &str = "exec_graph_stats.json";
+
+/// Limit of path count
+const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: u128 = std::u16::MAX as u128;
 
 /// The symbolizer
 pub(crate) struct MoveSymbolizer<'env> {
@@ -99,10 +104,28 @@ impl<'env> MoveSymbolizer<'env> {
             self.exec_graph.edge_count()
         );
 
+        // build the ref graph
+        let ref_graph = ExecRefGraph::from_graph(&self.exec_graph);
+
+        // build the scc graph
+        let scc_graph = ExecSccGraph::new(&ref_graph);
+
+        // count paths with our handwritten algorithm
+        let path_count = scc_graph.count_paths();
+        debug!("{} paths in top-level scc graph", path_count);
+
+        // cross-checking with the petgraph's algorithm
+        if path_count > EXEC_GRAPH_PATH_ENUMERATION_LIMIT {
+            warn!("path count exceeds limit, will not enumerate paths");
+        } else {
+            debug_assert_eq!(path_count, scc_graph.enumerate_paths().len() as u128);
+        }
+
         // construct the stats json
         let stats = json!({
             "node_count": self.exec_graph.node_count(),
             "edge_count": self.exec_graph.edge_count(),
+            "path_count": path_count.to_string(),  // u128 not supported
         });
 
         // save the stats to file

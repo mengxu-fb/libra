@@ -16,6 +16,7 @@ use petgraph::{
 use std::{
     collections::{HashMap, HashSet},
     fmt,
+    iter::FromIterator,
 };
 
 use bytecode::{
@@ -29,7 +30,7 @@ use crate::{
     sym_typing::ExecTypeArg,
 };
 
-/// An id that uniquely identifies a basic block in the eCFG
+/// An id that uniquely identifies a basic block in the eCFG (i.e., `ExecGraph`)
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub(crate) struct ExecBlockId(usize);
 
@@ -644,6 +645,483 @@ impl<'env> ExecGraph<'env> {
                 "shape=box".to_string()
             })
         )
+    }
+}
+
+/// A shadow graph that may refer to the whole or part (i.e., an scc) of the `ExecGraph`
+pub(crate) struct ExecRefGraph {
+    /// The graph structure
+    graph: Graph<ExecBlockId, (ExecBlockId, ExecBlockId)>,
+    /// A map mapping block id to node index
+    node_map: HashMap<ExecBlockId, NodeIndex>,
+    /// A map mapping a pair of connecting blocks to edge index
+    edge_map: HashMap<(ExecBlockId, ExecBlockId), EdgeIndex>,
+    /// The block id of the graph entry block
+    entry_block_id: ExecBlockId,
+}
+
+impl ExecRefGraph {
+    fn empty() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_map: HashMap::new(),
+            edge_map: HashMap::new(),
+            entry_block_id: ExecBlockId(0),
+        }
+    }
+
+    fn add_block(&mut self, block_id: ExecBlockId) -> NodeIndex {
+        let node_index = self.graph.add_node(block_id);
+        let exists = self.node_map.insert(block_id, node_index);
+        debug_assert!(exists.is_none());
+        node_index
+    }
+
+    fn get_node_by_block_id(&self, block_id: ExecBlockId) -> NodeIndex {
+        *self.node_map.get(&block_id).unwrap()
+    }
+
+    fn get_block_id_by_node(&self, node: NodeIndex) -> ExecBlockId {
+        *self.graph.node_weight(node).unwrap()
+    }
+
+    fn add_flow(&mut self, src_block_id: ExecBlockId, dst_block_id: ExecBlockId) -> EdgeIndex {
+        let edge_index = self.graph.add_edge(
+            self.get_node_by_block_id(src_block_id),
+            self.get_node_by_block_id(dst_block_id),
+            (src_block_id, dst_block_id),
+        );
+        let exists = self
+            .edge_map
+            .insert((src_block_id, dst_block_id), edge_index);
+        debug_assert!(exists.is_none());
+        edge_index
+    }
+
+    fn populate(
+        &mut self,
+        exec_graph: &ExecGraph,
+        scope_block_ids: &HashSet<ExecBlockId>,
+        entry_block_id: ExecBlockId,
+        break_scc: bool, // break cycles connecting to entry node
+    ) {
+        // add nodes
+        for block_id in exec_graph.node_map.keys() {
+            // only add blocks that belong to the scc
+            if !scope_block_ids.contains(block_id) {
+                continue;
+            }
+            self.add_block(*block_id);
+        }
+
+        // add edges
+        for (src_block_id, dst_block_id) in exec_graph.edge_map.keys() {
+            // only add edges that connects within the scc
+            if !scope_block_ids.contains(src_block_id) || !scope_block_ids.contains(dst_block_id) {
+                continue;
+            }
+            // drop back edges to the entry block (this is important when constructing for an scc)
+            if break_scc && *dst_block_id == entry_block_id {
+                continue;
+            }
+            self.add_flow(*src_block_id, *dst_block_id);
+        }
+
+        // set entry block
+        self.entry_block_id = entry_block_id;
+    }
+
+    pub fn from_graph(exec_graph: &ExecGraph) -> Self {
+        let scope_block_ids = HashSet::from_iter(exec_graph.node_map.keys().copied())
+            .difference(&exec_graph.dead_block_ids)
+            .copied()
+            .collect();
+        let mut ref_graph = ExecRefGraph::empty();
+        ref_graph.populate(
+            exec_graph,
+            &scope_block_ids,
+            exec_graph.entry_block_id,
+            false,
+        );
+        ref_graph
+    }
+
+    pub fn from_graph_scc(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {
+        let mut ref_graph = ExecRefGraph::empty();
+        ref_graph.populate(exec_graph, &scc.scope_block_ids, scc.entry_block_id, true);
+        ref_graph
+    }
+}
+
+/// An id that uniquely identifies an scc in an `ExecRefGraph`
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+pub(crate) struct ExecSccId(usize);
+
+/// An scc is a self-contained set of blocks (can be either a single block or a loop) in the shadow
+/// graph of the eCFG, (i.e., in the `ExecRefGraph`)
+pub(crate) struct ExecScc {
+    /// A unique identifier for the scc
+    scc_id: ExecSccId,
+    /// A set of block ids defining the scope of this scc
+    scope_block_ids: HashSet<ExecBlockId>,
+    /// The entry block in this scc
+    entry_block_id: ExecBlockId,
+    /// Whether this scc is cyclic with a backedge to the entry block
+    is_cyclic_on_entry: bool,
+}
+
+impl ExecScc {
+    pub fn new(
+        scc_id: ExecSccId,
+        scope_block_ids: HashSet<ExecBlockId>,
+        entry_block_id: ExecBlockId,
+        is_cyclic_on_entry: bool,
+    ) -> Self {
+        Self {
+            scc_id,
+            scope_block_ids,
+            entry_block_id,
+            is_cyclic_on_entry,
+        }
+    }
+}
+
+/// A graph that condenses a `ExecRefGraph` into a scc graph
+pub(crate) struct ExecSccGraph {
+    /// The graph structure
+    graph: Graph<ExecScc, (ExecBlockId, ExecBlockId)>,
+    /// A map mapping scc id to node index
+    node_map: HashMap<ExecSccId, NodeIndex>,
+    /// A map mapping a pair of connecting sccs to a set of edge indices
+    edge_map: HashMap<(ExecSccId, ExecSccId), HashSet<EdgeIndex>>,
+    /// The scc that is marked as the entry of this scc graph
+    entry_scc_id: ExecSccId,
+    /// A set of sccs that have no outgoing edges
+    exit_scc_ids: HashSet<ExecSccId>,
+    /// Node-level linkage between exec graph to this scc graph
+    linkage_node: HashMap<ExecBlockId, HashSet<ExecSccId>>,
+    /// Edge-level linkage between exec graph to this scc graph
+    linkage_edge: HashMap<(ExecBlockId, ExecBlockId), HashSet<(ExecSccId, ExecSccId)>>,
+}
+
+impl ExecSccGraph {
+    fn empty() -> Self {
+        Self {
+            graph: Graph::new(),
+            node_map: HashMap::new(),
+            edge_map: HashMap::new(),
+            entry_scc_id: ExecSccId(0),
+            exit_scc_ids: HashSet::new(),
+            linkage_node: HashMap::new(),
+            linkage_edge: HashMap::new(),
+        }
+    }
+
+    fn add_scc(&mut self, scc: ExecScc) -> NodeIndex {
+        let scc_id = scc.scc_id;
+
+        // establish linkage
+        for block_id in scc.scope_block_ids.iter() {
+            let non_exists = self
+                .linkage_node
+                .entry(*block_id)
+                .or_insert_with(HashSet::new)
+                .insert(scc_id);
+            debug_assert!(non_exists);
+        }
+
+        // add node to graph
+        let node_index = self.graph.add_node(scc);
+        let exists = self.node_map.insert(scc_id, node_index);
+        debug_assert!(exists.is_none());
+        node_index
+    }
+
+    fn get_node_by_scc_id(&self, scc_id: ExecSccId) -> NodeIndex {
+        *self.node_map.get(&scc_id).unwrap()
+    }
+
+    fn get_scc_by_node(&self, node: NodeIndex) -> &ExecScc {
+        self.graph.node_weight(node).unwrap()
+    }
+
+    fn get_scc_by_scc_id(&self, scc_id: ExecSccId) -> &ExecScc {
+        self.get_scc_by_node(self.get_node_by_scc_id(scc_id))
+    }
+
+    fn add_flow(
+        &mut self,
+        src_scc_id: ExecSccId,
+        dst_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_block_id: ExecBlockId,
+    ) -> EdgeIndex {
+        // establish linkage
+        let non_exists = self
+            .linkage_edge
+            .entry((src_block_id, dst_block_id))
+            .or_insert_with(HashSet::new)
+            .insert((src_scc_id, dst_scc_id));
+        debug_assert!(non_exists);
+
+        // add edge to graph
+        let edge_index = self.graph.add_edge(
+            self.get_node_by_scc_id(src_scc_id),
+            self.get_node_by_scc_id(dst_scc_id),
+            (src_block_id, dst_block_id),
+        );
+        self.edge_map
+            .entry((src_scc_id, dst_scc_id))
+            .or_insert_with(HashSet::new)
+            .insert(edge_index);
+        edge_index
+    }
+
+    /// build the scc graph out of the exec shadow graph (i.e., the `ExecRefGraph`)
+    pub fn new(ref_graph: &ExecRefGraph) -> Self {
+        let mut scc_count = 0;
+        let mut scc_graph = ExecSccGraph::empty();
+
+        // holds the associated scc id that an edge is branching into
+        //
+        // NOTE: if a scc with multiple entries, the scc will be multiplexed, and each entering edge
+        // is associated with one of the duplicated sccs
+        let mut scc_edge_association: HashMap<(ExecBlockId, ExecBlockId), ExecSccId> =
+            HashMap::new();
+
+        // build the nodes and edges in the scc graph
+        //
+        // NOTE: this for-loop relies on a property of tarjan_scc
+        //  - it iterates the sccs in reverse topological order
+        for scc_nodes in tarjan_scc(&ref_graph.graph).into_iter() {
+            // build the scope
+            let scope_block_ids = HashSet::from_iter(
+                scc_nodes
+                    .iter()
+                    .map(|node| ref_graph.get_block_id_by_node(*node)),
+            );
+
+            // find the entry blocks in this scc
+            let mut scc_entry_map: HashMap<ExecBlockId, HashSet<ExecBlockId>> = HashMap::new();
+            let mut scc_intra_edge_dst_block_ids = HashSet::new();
+            for node in scc_nodes.iter() {
+                for edge in ref_graph
+                    .graph
+                    .edges_directed(*node, EdgeDirection::Incoming)
+                {
+                    let (src_block_id, dst_block_id) = edge.weight();
+                    // ignore edges within this scc, just mark the dst block id so we can tell
+                    // whether this scc is cyclic with a back edge to the entry block
+                    if scope_block_ids.contains(src_block_id) {
+                        scc_intra_edge_dst_block_ids.insert(dst_block_id);
+                        continue;
+                    }
+                    // found an incoming edge into this scc
+                    let non_exists = scc_entry_map
+                        .entry(*dst_block_id)
+                        .or_insert_with(HashSet::new)
+                        .insert(*src_block_id);
+                    debug_assert!(non_exists);
+                }
+            }
+
+            // the only way when scc_entry_map is empty is that this scc contains the entry block
+            // in the ref_graph, and vice versa
+            if scc_entry_map.is_empty() {
+                debug_assert!(scope_block_ids.contains(&ref_graph.entry_block_id));
+                scc_entry_map.insert(ref_graph.entry_block_id, HashSet::new());
+            }
+
+            // collect edges branching out of this scc
+            let mut outlet_map: HashMap<(ExecBlockId, ExecBlockId), ExecSccId> = HashMap::new();
+            for node in scc_nodes.iter() {
+                for edge in ref_graph
+                    .graph
+                    .edges_directed(*node, EdgeDirection::Outgoing)
+                {
+                    let (src_block_id, dst_block_id) = edge.weight();
+                    // ignore edges within this scc
+                    if scope_block_ids.contains(dst_block_id) {
+                        continue;
+                    }
+                    // found an outgoing edge from this scc
+                    let dst_scc_id = *scc_edge_association
+                        .get(&(*src_block_id, *dst_block_id))
+                        .unwrap();
+                    let exists = outlet_map.insert((*src_block_id, *dst_block_id), dst_scc_id);
+                    debug_assert!(exists.is_none());
+                }
+            }
+
+            // register scc to scc graph
+            for (scc_entry_block_id, foreign_block_ids) in scc_entry_map.into_iter() {
+                let scc_id = ExecSccId(scc_count);
+                scc_count += 1;
+
+                // register this scc to graph
+                scc_graph.add_scc(ExecScc::new(
+                    scc_id,
+                    scope_block_ids.clone(),
+                    scc_entry_block_id,
+                    scc_intra_edge_dst_block_ids.contains(&scc_entry_block_id),
+                ));
+
+                // mark that all edges joining into this entry block are associated with this scc id
+                for foreign_block_id in foreign_block_ids {
+                    let exists =
+                        scc_edge_association.insert((foreign_block_id, scc_entry_block_id), scc_id);
+                    debug_assert!(exists.is_none());
+                }
+
+                // detect leaf scc
+                if outlet_map.is_empty() {
+                    let non_exists = scc_graph.exit_scc_ids.insert(scc_id);
+                    debug_assert!(non_exists);
+                }
+
+                // add edges between sccs
+                for ((src_block_id, dst_block_id), dst_scc_id) in outlet_map.iter() {
+                    scc_graph.add_flow(scc_id, *dst_scc_id, *src_block_id, *dst_block_id);
+                }
+            }
+        }
+
+        // find the entry scc - as asserted before, the entry block in ref_graph can only be mapped
+        // to one scc in the scc_graph
+        let entry_scc_ids = scc_graph
+            .linkage_node
+            .get(&ref_graph.entry_block_id)
+            .unwrap();
+        debug_assert_eq!(entry_scc_ids.len(), 1);
+        scc_graph.entry_scc_id = *entry_scc_ids.iter().next().unwrap();
+
+        // done
+        scc_graph
+    }
+
+    /// count paths
+    pub fn count_paths(&self) -> u128 {
+        // each path_end_scc (i.e., a leaf node in the scc graph) stores how many reachable paths
+        // from any_scc to path_end_scc
+        let mut path_map: HashMap<NodeIndex, HashMap<NodeIndex, u128>> = HashMap::new();
+
+        // go with reverse topological order
+        for node in toposort(&self.graph, None).unwrap().into_iter().rev() {
+            let mut out_edges_iter = self
+                .graph
+                .edges_directed(node, EdgeDirection::Outgoing)
+                .peekable();
+            if out_edges_iter.peek().is_none() {
+                // this is a termination scc
+                let mut term_path_map = HashMap::new();
+                term_path_map.insert(node, 1);
+                let exists = path_map.insert(node, term_path_map);
+                debug_assert!(exists.is_none());
+            } else {
+                // update path count map
+                let mut scc_reach_map: HashMap<NodeIndex, u128> = HashMap::new();
+                for out_edge in out_edges_iter {
+                    for (path_end_scc, path_end_reach_map) in path_map.iter() {
+                        if let Some(path_count) = path_end_reach_map.get(&out_edge.target()) {
+                            // there is a way from this exit_scc to path_end_scc, add to count
+                            let existing_count = scc_reach_map.entry(*path_end_scc).or_insert(0);
+                            *existing_count += path_count;
+                        }
+                    }
+                }
+
+                // merge into the path map
+                for (path_end_scc, path_end_reach_count) in scc_reach_map {
+                    let exists = path_map
+                        .get_mut(&path_end_scc)
+                        .unwrap()
+                        .insert(node, path_end_reach_count);
+                    debug_assert!(exists.is_none());
+                }
+            }
+        }
+
+        // derive end-to-end path count
+        let entry_scc_node = self.get_node_by_scc_id(self.entry_scc_id);
+        let mut total_count = 0;
+        for path_end_reach_map in path_map.values() {
+            total_count += path_end_reach_map.get(&entry_scc_node).unwrap();
+        }
+        total_count
+    }
+
+    /// enumerate all paths from entry to the end
+    pub fn enumerate_paths(&self) -> Vec<Vec<NodeIndex>> {
+        let entry_scc_node = self.get_node_by_scc_id(self.entry_scc_id);
+        let mut paths = vec![];
+        for exit_scc_id in self.exit_scc_ids.iter() {
+            if *exit_scc_id == self.entry_scc_id {
+                // the all_simple_paths does not count single node path, hence we add it here to
+                // reconcile with the output from the algorithm in scc_path_count
+                paths.push(vec![]);
+            } else {
+                paths.extend(all_simple_paths::<Vec<NodeIndex>, _>(
+                    &self.graph,
+                    entry_scc_node,
+                    self.get_node_by_scc_id(*exit_scc_id),
+                    0,
+                    None,
+                ));
+            }
+        }
+        paths
+    }
+
+    /// get all incoming edges into an scc, within this graph only
+    pub fn get_incoming_edges_for_block(
+        &self,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+    ) -> Vec<(ExecSccId, ExecBlockId)> {
+        // sanity checking
+        let scc = self.get_scc_by_scc_id(scc_id);
+        debug_assert!(scc.scope_block_ids.contains(&block_id));
+
+        // collect incoming edges
+        let dst_node = self.get_node_by_scc_id(scc_id);
+        self.graph
+            .edges_directed(dst_node, EdgeDirection::Incoming)
+            .filter_map(|edge| {
+                let (src_block_id, dst_block_id) = edge.weight();
+                if *dst_block_id == block_id {
+                    let src_node = edge.source();
+                    Some((self.get_scc_by_node(src_node).scc_id, *src_block_id))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    /// get all outgoing edges from an scc, within this graph only
+    pub fn get_outgoing_edges_for_block(
+        &self,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+    ) -> Vec<(ExecSccId, ExecBlockId)> {
+        // sanity checking
+        let scc = self.get_scc_by_scc_id(scc_id);
+        debug_assert!(scc.scope_block_ids.contains(&block_id));
+
+        // collect outgoing edges
+        let src_node = self.get_node_by_scc_id(scc_id);
+        self.graph
+            .edges_directed(src_node, EdgeDirection::Outgoing)
+            .filter_map(|edge| {
+                let (src_block_id, dst_block_id) = edge.weight();
+                if *src_block_id == block_id {
+                    let dst_node = edge.target();
+                    Some((self.get_scc_by_node(dst_node).scc_id, *dst_block_id))
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
 
