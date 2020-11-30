@@ -43,9 +43,8 @@ pub(crate) struct ExecBlock<'env> {
     exec_unit: &'env SymFuncInfo<'env>,
     /// The starting offset of the instructions in code context
     ///
-    /// NOTE: A None value means that this is an arbitrary block which will host no instructions.
-    /// However, not all arbitrary blocks have None as code_offset, those that do host instructions
-    /// will have a valid code_offset.
+    /// NOTE: A None value means that this is an arbitrary block which will host no instructions,
+    /// vice versa, all arbitrary blocks will have None as code_offset
     code_offset: Option<CodeOffset>,
     /// The type argument for the function in the code context
     type_args: Vec<ExecTypeArg<'env>>,
@@ -330,16 +329,17 @@ impl<'env> ExecGraph<'env> {
                         // done with building of this exec block
                         self.add_block(exec_block);
 
+                        // NOTE: we know that the termination instruction of every basic block in a
+                        // stackless CFG must be a branch instruction, hence, a call can never be
+                        // the termination instruction, hence this inequality assertion.
+                        debug_assert_ne!(offset, block_code_offset_upper);
+
                         // clear this exec block so that it can be reused to host the rest of
                         // instructions in current basic block, after the call.
                         exec_block = ExecBlock::new(
                             *id_counter,
                             exec_unit,
-                            if offset == block_code_offset_upper {
-                                None
-                            } else {
-                                Some(offset + 1)
-                            },
+                            Some(offset + 1),
                             type_args.to_vec(),
                         );
                         id_counter.0 += 1;
@@ -530,15 +530,17 @@ impl<'env> ExecGraph<'env> {
         let mut exit_nodes = vec![];
         let mut dead_nodes = vec![];
         for node in exec_graph.graph.node_indices() {
+            let exec_block = exec_graph.get_block_by_node(node);
+            // we have not created any arbitrary blocks so far, so we should never see a None here
+            debug_assert!(exec_block.code_offset.is_some());
+
             if exec_graph
                 .graph
                 .first_edge(node, EdgeDirection::Incoming)
                 .is_none()
             {
-                match exec_graph.get_block_by_node(node).code_offset {
-                    None => {
-                        dead_nodes.push(node);
-                    }
+                match exec_block.code_offset {
+                    None => panic!("Unexpected arbitrary block"),
                     Some(offset) => {
                         if offset == 0 {
                             // this is the true entry node
