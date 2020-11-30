@@ -15,6 +15,7 @@ use vm::{
 use crate::{
     sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
     sym_oracle::SymOracle,
+    sym_type_graph::TypeGraph,
     sym_typing::ExecTypeArg,
     sym_vm_types::SymTransactionArgument,
 };
@@ -34,6 +35,7 @@ pub(crate) struct MoveSymbolizer<'env> {
     script: &'env CompiledScript,
     oracle: &'env SymOracle<'env>,
     exec_graph: ExecGraph<'env>,
+    type_graph: TypeGraph,
 }
 
 impl<'env> MoveSymbolizer<'env> {
@@ -55,8 +57,11 @@ impl<'env> MoveSymbolizer<'env> {
             .map(|tag| ExecTypeArg::convert_from_type_tag(tag, oracle))
             .collect();
 
-        // build execution graph
+        // build exec graph
         let exec_graph = ExecGraph::new(&type_args, oracle);
+
+        // build type graph
+        let type_graph = TypeGraph::new(&exec_graph, oracle);
 
         // done
         Ok(Self {
@@ -64,6 +69,7 @@ impl<'env> MoveSymbolizer<'env> {
             script,
             oracle,
             exec_graph,
+            type_graph,
         })
     }
 

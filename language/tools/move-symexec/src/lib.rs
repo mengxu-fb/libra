@@ -17,6 +17,8 @@ pub mod sym_typing;
 
 pub mod sym_exec_graph;
 
+pub mod sym_type_graph;
+
 pub mod sym_vm_types;
 
 pub mod symbolizer;

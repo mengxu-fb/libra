@@ -50,7 +50,7 @@ pub(crate) struct ExecBlock<'env> {
     /// The type argument for the function in the code context
     type_args: Vec<ExecTypeArg<'env>>,
     /// The instructions within this basic block. It is OK to be empty.
-    instructions: Vec<&'env Bytecode>,
+    pub instructions: Vec<&'env Bytecode>,
 }
 
 impl<'env> ExecBlock<'env> {
