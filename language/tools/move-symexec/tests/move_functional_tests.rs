@@ -20,7 +20,7 @@ use libra_types::{
     account_address::AccountAddress,
     transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
 };
-use move_lang::{move_compile_no_report, shared::Address, MOVE_EXTENSION};
+use move_lang::{move_compile, shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
     configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
@@ -128,8 +128,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             // compilation on the original source file --- with None as sender_opt --- and see
             // whether it returns with error. If an error is encountered, we further modify the
             // source file by manually adding the `address _ {}` wrap around the original source.
-            let (_, result) =
-                move_compile_no_report(&[src_file_path.path_to_string()?], &deps, None, None)?;
+            let (_, result) = move_compile(&[src_file_path.path_to_string()?], &deps, None, None)?;
             if result.is_err() {
                 fp.seek(SeekFrom::Start(0))?;
                 fp.write_all(
@@ -140,7 +139,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
                 // second trial
                 let (_, result) =
-                    move_compile_no_report(&[src_file_path.path_to_string()?], &deps, None, None)?;
+                    move_compile(&[src_file_path.path_to_string()?], &deps, None, None)?;
                 debug_assert!(result.is_ok());
             }
 

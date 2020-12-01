@@ -12,8 +12,7 @@ use std::{
 use tempfile::tempdir;
 
 use move_lang::{
-    compiled_unit::CompiledUnit, errors::report_errors_to_buffer, move_compile_no_report,
-    shared::Address,
+    compiled_unit::CompiledUnit, errors::report_errors_to_buffer, move_compile, shared::Address,
 };
 use vm::{file_format::CompiledScript, CompiledModule};
 
@@ -54,7 +53,7 @@ impl MoveBuilder {
         commit: bool,
     ) -> Result<(Vec<CompiledModule>, Vec<CompiledScript>)> {
         // compile
-        let (files, units_or_errors) = move_compile_no_report(
+        let (files, units_or_errors) = move_compile(
             &move_src.paths_to_strings()?,
             &self.all_interface_dir.paths_to_strings()?,
             sender,
