@@ -419,14 +419,9 @@ impl<'env> ExecGraph<'env> {
             let term_offset = cfg.block_end(block_id);
             let term_instruction = &instructions[term_offset as usize];
 
-            // derive origin node id
-            let origin_block_id = call_inst_map.get(&term_offset).map_or_else(
-                || inst_map.get(&term_offset).unwrap(),
-                |(ret_to_id, _)| ret_to_id,
-            );
-
             // it seems that in stackless CFG, every termination instruction is a branch
             debug_assert!(term_instruction.is_branch());
+            let origin_block_id = inst_map.get(&term_offset).unwrap();
 
             for successor_offset in
                 Bytecode::get_successors(term_offset, instructions, &label_offsets)
@@ -531,26 +526,19 @@ impl<'env> ExecGraph<'env> {
         let mut dead_nodes = vec![];
         for node in exec_graph.graph.node_indices() {
             let exec_block = exec_graph.get_block_by_node(node);
-            // we have not created any arbitrary blocks so far, so we should never see a None here
-            debug_assert!(exec_block.code_offset.is_some());
-
             if exec_graph
                 .graph
                 .first_edge(node, EdgeDirection::Incoming)
                 .is_none()
             {
-                match exec_block.code_offset {
-                    None => panic!("Unexpected arbitrary block"),
-                    Some(offset) => {
-                        if offset == 0 {
-                            // this is the true entry node
-                            debug_assert!(entry_node.is_none());
-                            entry_node = Some(node);
-                        } else {
-                            dead_nodes.push(node);
-                        }
-                    }
-                };
+                // we have not created any arbitrary blocks so far, should never see a None here
+                if exec_block.code_offset.unwrap() == 0 {
+                    // this is the true entry node
+                    debug_assert!(entry_node.is_none());
+                    entry_node = Some(node);
+                } else {
+                    dead_nodes.push(node);
+                }
             }
             if exec_graph
                 .graph
