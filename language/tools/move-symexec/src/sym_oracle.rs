@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use once_cell::sync::OnceCell;
-use std::{cmp, collections::HashMap};
+use std::{cmp, collections::HashMap, hash};
 
 use bytecode::{
     function_target::{FunctionTarget, FunctionTargetData},
@@ -91,12 +91,12 @@ impl cmp::Eq for SymFuncInfo<'_> {}
 
 /// Lookup id for a `SymStructInfo` in a `SymOracle`
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-struct SymStructId(usize);
+pub(crate) struct SymStructId(usize);
 
 /// Bridges and extends the `StructEnv` in move-prover
 pub(crate) struct SymStructInfo<'env> {
-    struct_id: SymStructId,
-    struct_env: StructEnv<'env>,
+    pub struct_id: SymStructId,
+    pub struct_env: StructEnv<'env>,
 }
 
 impl<'env> SymStructInfo<'env> {
@@ -130,6 +130,12 @@ impl cmp::PartialEq for SymStructInfo<'_> {
 }
 
 impl cmp::Eq for SymStructInfo<'_> {}
+
+impl hash::Hash for SymStructInfo<'_> {
+    fn hash<H: hash::Hasher>(&self, state: &mut H) {
+        self.struct_id.hash(state);
+    }
+}
 
 /// Bridges to the move-prover internals
 pub(crate) struct SymOracle<'env> {

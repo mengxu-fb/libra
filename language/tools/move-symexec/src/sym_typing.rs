@@ -11,7 +11,7 @@ use vm::file_format::TypeParameterIndex;
 use crate::sym_oracle::{SymOracle, SymStructInfo};
 
 /// Flattened type tracking
-#[derive(Clone, Eq, PartialEq)]
+#[derive(Clone, Eq, PartialEq, Hash)]
 pub(crate) enum ExecTypeArg<'env> {
     Bool,
     U8,

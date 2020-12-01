@@ -47,7 +47,7 @@ pub(crate) struct ExecBlock<'env> {
     /// vice versa, all arbitrary blocks will have None as code_offset
     code_offset: Option<CodeOffset>,
     /// The type argument for the function in the code context
-    type_args: Vec<ExecTypeArg<'env>>,
+    pub type_args: Vec<ExecTypeArg<'env>>,
     /// The instructions within this basic block. It is OK to be empty.
     pub instructions: Vec<&'env Bytecode>,
 }
