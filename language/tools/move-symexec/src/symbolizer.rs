@@ -26,6 +26,9 @@ const EXEC_GRAPH_DOT_FILE: &str = "exec_graph.dot";
 /// The default file name for the exec graph statistics
 const EXEC_GRAPH_STATS_FILE: &str = "exec_graph_stats.json";
 
+/// The default file name for the type graph listing
+const TYPE_GRAPH_LISTING_FILE: &str = "type_graph_listing.txt";
+
 /// Limit of path count
 const EXEC_GRAPH_PATH_ENUMERATION_LIMIT: u128 = std::u16::MAX as u128;
 
@@ -137,6 +140,21 @@ impl<'env> MoveSymbolizer<'env> {
         // save the stats to file
         let path = self.workdir.join(EXEC_GRAPH_STATS_FILE);
         serde_json::to_writer(&File::create(path)?, &stats)?;
+
+        // done
+        Ok(())
+    }
+
+    pub fn save_type_graph_listing(&self) -> Result<()> {
+        // show number of types tracked
+        debug!("{} types in type graph", self.type_graph.type_count());
+
+        // write the sorted types to file
+        let path = self.workdir.join(TYPE_GRAPH_LISTING_FILE);
+        let mut fp = File::create(path)?;
+        for (name, _) in self.type_graph.reverse_topological_sort() {
+            writeln!(&mut fp, "{}", name)?;
+        }
 
         // done
         Ok(())

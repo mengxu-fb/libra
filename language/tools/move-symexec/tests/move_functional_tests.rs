@@ -200,7 +200,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
 
         // symbolize it
         self.controller
-            .symbolize(&signers, &sym_args, &type_tags, None, &[], true, true)?;
+            .symbolize(&signers, &sym_args, &type_tags, None, &[], true, true, true)?;
 
         // now pop the stack to remove the script
         self.controller.pop()

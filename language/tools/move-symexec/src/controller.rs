@@ -134,9 +134,13 @@ enum OpCommand {
         #[structopt(long = "output-exec-graph")]
         output_exec_graph: bool,
 
-        /// Output statistics  about the composed execution graph
+        /// Output statistics about the composed execution graph
         #[structopt(long = "output-exec-graph-stats")]
         output_exec_graph_stats: bool,
+
+        /// Output the type graph in flattened listing
+        #[structopt(long = "output-type-graph-listing")]
+        output_type_graph_listing: bool,
     },
 
     /// Push the state stack:
@@ -238,6 +242,7 @@ impl MoveController {
         exclusion: &[FuncIdMatcher],
         output_exec_graph: bool,
         output_exec_graph_stats: bool,
+        output_type_graph_listing: bool,
     ) -> Result<()> {
         // get the script
         let mut scripts = self.builder.get_compiled_scripts_all();
@@ -288,6 +293,9 @@ impl MoveController {
         if output_exec_graph_stats {
             symbolizer.save_exec_graph_stats()?;
         }
+        if output_type_graph_listing {
+            symbolizer.save_type_graph_listing()?;
+        }
 
         // symbolize it
         symbolizer.symbolize(signers, sym_args)
@@ -337,6 +345,7 @@ impl MoveController {
                 exclusion,
                 output_exec_graph,
                 output_exec_graph_stats,
+                output_type_graph_listing,
             } => self.symbolize(
                 &signers,
                 &sym_args,
@@ -345,6 +354,7 @@ impl MoveController {
                 &exclusion,
                 output_exec_graph,
                 output_exec_graph_stats,
+                output_type_graph_listing,
             ),
             OpCommand::Push => self.push(),
             OpCommand::Pop => self.pop(),

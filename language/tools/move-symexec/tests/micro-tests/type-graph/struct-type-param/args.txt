@@ -1,0 +1,2 @@
+compile move_src
+symbolize --output-type-graph-listing

@@ -1,6 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use itertools::Itertools;
 use log::debug;
 use petgraph::{
     algo::{is_cyclic_directed, toposort},
@@ -219,6 +220,10 @@ impl<'env> TypeGraph<'env> {
         }
     }
 
+    pub fn type_count(&self) -> usize {
+        self.analyzed_structs.len()
+    }
+
     pub fn reverse_topological_sort(&self) -> Vec<(&str, &ExecStructInfo<'env>)> {
         // we can use toposort here because we know that the type graph must be acyclic
         let nodes = toposort(&self.graph, None).unwrap();
@@ -245,7 +250,15 @@ fn collect_involved_structs_recursive<'env>(
         .or_insert_with(HashMap::new);
 
     if !variants.contains_key(type_args) {
-        let inst_name = format!("{}-{}", struct_info.get_context_string(), variants.len());
+        let inst_name = format!(
+            "{}<{}>-{}",
+            struct_info.get_context_string(),
+            type_args
+                .iter()
+                .map(|type_arg| type_arg.to_string())
+                .join(", "),
+            variants.len()
+        );
         variants.insert(type_args.to_vec(), inst_name.clone());
 
         // recursively handle the fields in this struct
@@ -256,8 +269,17 @@ fn collect_involved_structs_recursive<'env>(
             let mut field_map = HashMap::new();
             for field_env in struct_info.struct_env.get_fields() {
                 field_vec.push(field_env.get_id());
+
+                // handle field type recursively
                 let field_type_actual =
                     ExecTypeArg::convert_from_type_actual(&field_env.get_type(), type_args, oracle);
+                collect_involved_structs_in_type_arg(
+                    &field_type_actual,
+                    oracle,
+                    involved_structs,
+                    analyzed_structs,
+                );
+
                 field_map.insert(field_env.get_id(), field_type_actual);
             }
             debug_assert_eq!(field_vec.len(), field_map.len());
@@ -266,18 +288,6 @@ fn collect_involved_structs_recursive<'env>(
                 field_map,
             }
         };
-
-        // this should be redundant, as there is no reason to declare a generic struct
-        // without using its type parameters in (at least) one of the fields, but just in
-        // case, this is added here.
-        for type_arg in type_args {
-            collect_involved_structs_in_type_arg(
-                type_arg,
-                oracle,
-                involved_structs,
-                analyzed_structs,
-            );
-        }
 
         // mark that we have handled this struct
         let exists = analyzed_structs.insert(inst_name, exec_struct_info);
