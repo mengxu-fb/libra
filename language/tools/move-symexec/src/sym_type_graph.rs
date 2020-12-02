@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use log::debug;
+use petgraph::{
+    algo::{is_cyclic_directed, toposort},
+    graph::{Graph, NodeIndex},
+};
 use std::collections::HashMap;
 
 use bytecode::stackless_bytecode::{Bytecode, Operation};
@@ -15,7 +19,7 @@ use crate::{
 
 /// Fully instantiated struct information. This is generated only when the struct is actually
 /// involved in the exec graph (a.k.a., the eCFG)
-enum ExecStructInfo<'env> {
+pub(crate) enum ExecStructInfo<'env> {
     Native,
     Declared {
         field_vec: Vec<FieldId>,
@@ -24,10 +28,14 @@ enum ExecStructInfo<'env> {
 }
 
 /// Records the dependencies between the types, especially structs, involved in the execution.
-pub(crate) struct TypeGraph {}
+pub(crate) struct TypeGraph<'env> {
+    involved_structs: HashMap<SymStructId, HashMap<Vec<ExecTypeArg<'env>>, String>>,
+    analyzed_structs: HashMap<String, ExecStructInfo<'env>>,
+    graph: Graph<String, ()>,
+}
 
-impl TypeGraph {
-    pub fn new<'env>(exec_graph: &ExecGraph<'env>, oracle: &'env SymOracle<'env>) -> Self {
+impl<'env> TypeGraph<'env> {
+    pub fn new(exec_graph: &ExecGraph<'env>, oracle: &'env SymOracle<'env>) -> Self {
         // holds the struct types we have discovered so far
         let mut involved_structs = HashMap::new();
         let mut analyzed_structs = HashMap::new();
@@ -116,8 +124,112 @@ impl TypeGraph {
         debug_assert!(base_scc.is_none());
         debug_assert!(scc_stack.is_empty());
 
+        // start building the graph
+        let mut graph = Graph::new();
+
+        // create nodes
+        let node_map = analyzed_structs
+            .keys()
+            .map(|variant_name| (variant_name.clone(), graph.add_node(variant_name.clone())))
+            .collect();
+
+        // create edges
+        for (variant_name, variant_info) in analyzed_structs.iter() {
+            match variant_info {
+                ExecStructInfo::Native => {}
+                ExecStructInfo::Declared { field_map, .. } => {
+                    for field_type in field_map.values() {
+                        TypeGraph::link(
+                            variant_name,
+                            field_type,
+                            &involved_structs,
+                            &node_map,
+                            &mut graph,
+                        );
+                    }
+                }
+            }
+        }
+
+        // the type graph should not have cycles
+        debug_assert!(!is_cyclic_directed(&graph));
+
         // done
-        TypeGraph {}
+        Self {
+            involved_structs,
+            analyzed_structs,
+            graph,
+        }
+    }
+
+    fn link(
+        variant_name: &str,
+        variant_type_arg: &ExecTypeArg<'env>,
+        involved_structs: &HashMap<SymStructId, HashMap<Vec<ExecTypeArg<'env>>, String>>,
+        graph_node_map: &HashMap<String, NodeIndex>,
+        graph: &mut Graph<String, ()>,
+    ) {
+        match variant_type_arg {
+            ExecTypeArg::Bool
+            | ExecTypeArg::U8
+            | ExecTypeArg::U64
+            | ExecTypeArg::U128
+            | ExecTypeArg::Address
+            | ExecTypeArg::Signer => {}
+            ExecTypeArg::Vector { element_type } => {
+                TypeGraph::link(
+                    variant_name,
+                    element_type.as_ref(),
+                    involved_structs,
+                    graph_node_map,
+                    graph,
+                );
+            }
+            ExecTypeArg::Struct {
+                struct_info,
+                type_args,
+            } => {
+                let dep_name = involved_structs
+                    .get(&struct_info.struct_id)
+                    .unwrap()
+                    .get(type_args)
+                    .unwrap();
+                let dep_node_id = graph_node_map.get(dep_name).unwrap();
+                let src_node_id = graph_node_map.get(variant_name).unwrap();
+                graph.add_edge(*src_node_id, *dep_node_id, ());
+            }
+            ExecTypeArg::Reference { referred_type, .. } => {
+                TypeGraph::link(
+                    variant_name,
+                    referred_type.as_ref(),
+                    involved_structs,
+                    graph_node_map,
+                    graph,
+                );
+            }
+            ExecTypeArg::TypeParameter { actual_type, .. } => {
+                TypeGraph::link(
+                    variant_name,
+                    actual_type.as_ref(),
+                    involved_structs,
+                    graph_node_map,
+                    graph,
+                );
+            }
+        }
+    }
+
+    pub fn reverse_topological_sort(&self) -> Vec<(&str, &ExecStructInfo<'env>)> {
+        // we can use toposort here because we know that the type graph must be acyclic
+        let nodes = toposort(&self.graph, None).unwrap();
+        nodes
+            .into_iter()
+            .rev()
+            .map(|node| {
+                let name = self.graph.node_weight(node).unwrap();
+                (name.as_str(), self.analyzed_structs.get(name).unwrap())
+            })
+            .collect()
     }
 }
 

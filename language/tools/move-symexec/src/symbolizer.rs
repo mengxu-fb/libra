@@ -35,7 +35,7 @@ pub(crate) struct MoveSymbolizer<'env> {
     script: &'env CompiledScript,
     oracle: &'env SymOracle<'env>,
     exec_graph: ExecGraph<'env>,
-    type_graph: TypeGraph,
+    type_graph: TypeGraph<'env>,
 }
 
 impl<'env> MoveSymbolizer<'env> {
