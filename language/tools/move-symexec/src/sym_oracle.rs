@@ -28,7 +28,7 @@ struct SymFuncId(usize);
 pub(crate) struct SymFuncInfo<'env> {
     func_id: SymFuncId,
     func_env: FunctionEnv<'env>,
-    func_data: FunctionTargetData,
+    pub func_data: FunctionTargetData,
     func_cfg: StacklessControlFlowGraph,
     func_target: OnceCell<FunctionTarget<'env>>,
 }

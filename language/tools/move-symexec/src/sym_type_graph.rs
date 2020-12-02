@@ -59,10 +59,12 @@ impl<'env> TypeGraph<'env> {
                     for instruction in &block.instructions {
                         match instruction {
                             Bytecode::Call(_, _, op, _) => {
-                                let (struct_info_opt, type_actuals_opt) = match op {
-                                    Operation::Function(_, _, type_actuals) => {
-                                        (None, Some(type_actuals))
-                                    }
+                                let (func_info_opt, struct_info_opt, type_actuals_opt) = match op {
+                                    Operation::Function(mid, fid, type_actuals) => (
+                                        oracle.get_tracked_function_by_spec(mid, fid),
+                                        None,
+                                        Some(type_actuals),
+                                    ),
                                     Operation::Pack(mid, sid, type_actuals)
                                     | Operation::Unpack(mid, sid, type_actuals)
                                     | Operation::MoveTo(mid, sid, type_actuals)
@@ -72,15 +74,16 @@ impl<'env> TypeGraph<'env> {
                                     | Operation::BorrowGlobal(mid, sid, type_actuals)
                                     | Operation::GetField(mid, sid, type_actuals, _)
                                     | Operation::GetGlobal(mid, sid, type_actuals) => (
+                                        None,
                                         Some(oracle.get_defined_struct_by_spec(mid, sid).unwrap()),
                                         Some(type_actuals),
                                     ),
                                     // other operation types do not have struct information
-                                    _ => (None, None),
+                                    _ => (None, None, None),
                                 };
 
                                 // collect types in type actuals
-                                let mut struct_type_actuals = vec![];
+                                let mut sub_type_actuals = vec![];
                                 if let Some(type_actuals) = type_actuals_opt {
                                     for type_arg in type_actuals {
                                         let exec_type_arg = ExecTypeArg::convert_from_type_actual(
@@ -94,7 +97,38 @@ impl<'env> TypeGraph<'env> {
                                             &mut involved_structs,
                                             &mut analyzed_structs,
                                         );
-                                        struct_type_actuals.push(exec_type_arg);
+                                        sub_type_actuals.push(exec_type_arg);
+                                    }
+                                }
+
+                                // collect types in function info
+                                if let Some(func_info) = func_info_opt {
+                                    for type_arg in &func_info.func_data.local_types {
+                                        let exec_type_arg = ExecTypeArg::convert_from_type_actual(
+                                            type_arg,
+                                            &sub_type_actuals,
+                                            oracle,
+                                        );
+                                        collect_involved_structs_in_type_arg(
+                                            &exec_type_arg,
+                                            oracle,
+                                            &mut involved_structs,
+                                            &mut analyzed_structs,
+                                        );
+                                    }
+
+                                    for type_arg in &func_info.func_data.return_types {
+                                        let exec_type_arg = ExecTypeArg::convert_from_type_actual(
+                                            type_arg,
+                                            &sub_type_actuals,
+                                            oracle,
+                                        );
+                                        collect_involved_structs_in_type_arg(
+                                            &exec_type_arg,
+                                            oracle,
+                                            &mut involved_structs,
+                                            &mut analyzed_structs,
+                                        );
                                     }
                                 }
 
@@ -102,7 +136,7 @@ impl<'env> TypeGraph<'env> {
                                 if let Some(struct_info) = struct_info_opt {
                                     collect_involved_structs_recursive(
                                         struct_info,
-                                        &struct_type_actuals,
+                                        &sub_type_actuals,
                                         oracle,
                                         &mut involved_structs,
                                         &mut analyzed_structs,
