@@ -517,3 +517,60 @@ pub fn parse_sym_transaction_argument(s: &str) -> Result<SymTransactionArgument>
         bail!("Invalid symbolic transaction argument");
     }
 }
+
+/// A symbolic memory slot that tracks not only the symbolic value, but also the liveliness
+/// condition (i.e., the condition on which the symbolic value is valid when the slot is loaded)
+struct SymMemSlot<'smt> {
+    repr: SymRepr<'smt>,
+    alive: SmtExpr<'smt>,
+}
+
+/// A symbolic version for cells that serve the purpose of memory
+struct SymMemCell<'smt> {
+    /// A reference to the smt context
+    ctxt: &'smt SmtCtxt,
+    /// Possible slots
+    slots: Vec<SymMemSlot<'smt>>,
+}
+
+impl<'smt> SymMemCell<'smt> {
+    fn new(ctxt: &'smt SmtCtxt) -> Self {
+        Self {
+            ctxt,
+            slots: vec![],
+        }
+    }
+
+    fn store(&mut self, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) {
+        let ctxt = self.ctxt;
+        for variant in &sym.variants {
+            // filter infeasible read
+            let cond_variant_read = variant.cond.and(cond);
+            if !match ctxt.solve(&[&cond_variant_read]) {
+                SmtResult::SAT => true,
+                SmtResult::UNSAT => false,
+                SmtResult::UNKNOWN => {
+                    // TODO: assume that things are decidable for now
+                    panic!("SMT solver returns an unknown result");
+                }
+            } {
+                continue;
+            }
+
+            // filter infeasible writes
+            for slot in &self.slots {
+                let cond_variant_write = cond_variant_read.and(&slot.repr.cond).and(&slot.alive);
+                if !match ctxt.solve(&[&cond_variant_read]) {
+                    SmtResult::SAT => true,
+                    SmtResult::UNSAT => false,
+                    SmtResult::UNKNOWN => {
+                        // TODO: assume that things are decidable for now
+                        panic!("SMT solver returns an unknown result");
+                    }
+                } {
+                    continue;
+                }
+            }
+        }
+    }
+}
