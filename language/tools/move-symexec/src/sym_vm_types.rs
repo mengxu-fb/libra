@@ -3,7 +3,6 @@
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
-use log::debug;
 use std::fmt;
 
 use move_core_types::{
@@ -51,8 +50,7 @@ impl fmt::Display for SymValue<'_> {
 impl<'smt> SymValue<'smt> {
     pub fn flatten_as_predicate(&self, pred: bool) -> SmtExpr<'smt> {
         if self.variants.is_empty() {
-            // if there is no variants, it means that there is no way to
-            // set this symbolic value
+            // if there is no variants, it means that there is no way to set this symbolic value
             self.ctxt.bool_const(false)
         } else {
             self.variants
@@ -352,89 +350,89 @@ impl<'smt> SymValue<'smt> {
     }
 
     // bool operations
-    pub fn not(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn not(&self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_unary!(not, self, cond)
     }
 
-    pub fn and(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(and, self, rhs, cond)
     }
 
-    pub fn or(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(or, self, rhs, cond)
     }
 
     // bitvec operations
-    pub fn add(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn add(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(add, self, rhs, cond)
     }
 
-    pub fn sub(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn sub(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(sub, self, rhs, cond)
     }
 
-    pub fn mul(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn mul(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(mul, self, rhs, cond)
     }
 
-    pub fn div(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn div(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(div, self, rhs, cond)
     }
 
-    pub fn rem(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn rem(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(rem, self, rhs, cond)
     }
 
-    pub fn cast_u8(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn cast_u8(&self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_unary!(cast_u8, self, cond)
     }
 
-    pub fn cast_u64(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn cast_u64(&self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_unary!(cast_u64, self, cond)
     }
 
-    pub fn cast_u128(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn cast_u128(&self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_unary!(cast_u128, self, cond)
     }
 
-    pub fn bit_and(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn bit_and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(bit_and, self, rhs, cond)
     }
 
-    pub fn bit_or(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn bit_or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(bit_or, self, rhs, cond)
     }
 
-    pub fn bit_xor(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn bit_xor(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(bit_xor, self, rhs, cond)
     }
 
-    pub fn shl(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn shl(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(shl, self, rhs, cond)
     }
 
-    pub fn shr(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn shr(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(shr, self, rhs, cond)
     }
 
-    pub fn gt(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn gt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(gt, self, rhs, cond)
     }
 
-    pub fn ge(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn ge(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(ge, self, rhs, cond)
     }
 
-    pub fn le(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn le(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(le, self, rhs, cond)
     }
 
-    pub fn lt(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn lt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(lt, self, rhs, cond)
     }
 
     // struct operations
-    pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Vec<SymValue<'smt>> {
+    pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Vec<Self> {
         let ctxt = self.ctxt;
 
         // initialize the unpacked fields
@@ -487,11 +485,11 @@ impl<'smt> SymValue<'smt> {
     }
 
     // generic operations
-    pub fn eq(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn eq(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(eq, self, rhs, cond)
     }
 
-    pub fn ne(&self, rhs: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn ne(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
         sym_op_binary!(ne, self, rhs, cond)
     }
 }

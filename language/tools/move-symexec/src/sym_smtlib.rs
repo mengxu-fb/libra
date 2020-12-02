@@ -565,57 +565,57 @@ impl<'smt> SmtExpr<'smt> {
         debug_assert!(matches!(self.kind, SmtKind::Bitvec { .. }));
     }
 
-    fn check_binary_op(&self, rhs: &SmtExpr<'smt>) {
+    fn check_binary_op(&self, rhs: &Self) {
         debug_assert!(self.ctxt.smt_ctxt_matches(rhs.ctxt));
         debug_assert_eq!(self.kind, rhs.kind);
     }
 
-    fn check_binary_op_bool(&self, rhs: &SmtExpr<'smt>) {
+    fn check_binary_op_bool(&self, rhs: &Self) {
         self.check_binary_op(rhs);
         debug_assert!(matches!(self.kind, SmtKind::Bool));
     }
 
-    fn check_binary_op_bitvec(&self, rhs: &SmtExpr<'smt>) {
+    fn check_binary_op_bitvec(&self, rhs: &Self) {
         self.check_binary_op(rhs);
         debug_assert!(matches!(self.kind, SmtKind::Bitvec { .. }));
     }
 
     // bool logic operators
-    pub fn not(&self) -> SmtExpr<'smt> {
+    pub fn not(&self) -> Self {
         smt_unary_op_bool!(Z3_mk_not, self)
     }
 
-    pub fn and(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn and(&self, rhs: &Self) -> Self {
         smt_binary_op_bool!(Z3_mk_and, self, rhs)
     }
 
-    pub fn or(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn or(&self, rhs: &Self) -> Self {
         smt_binary_op_bool!(Z3_mk_or, self, rhs)
     }
 
     // bitvec arith operators
-    pub fn add(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn add(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvadd, self, rhs)
     }
 
-    pub fn sub(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn sub(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvsub, self, rhs)
     }
 
-    pub fn mul(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn mul(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvmul, self, rhs)
     }
 
-    pub fn div(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn div(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvsdiv, Z3_mk_bvudiv, self, rhs)
     }
 
-    pub fn rem(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn rem(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvsmod, Z3_mk_bvurem, self, rhs)
     }
 
     // bitvec casting operators
-    fn cast(&self, into_signed: bool, into_width: u16) -> SmtExpr<'smt> {
+    fn cast(&self, into_signed: bool, into_width: u16) -> Self {
         self.check_unary_op_bitvec();
 
         let ctxt = self.ctxt;
@@ -648,67 +648,67 @@ impl<'smt> SmtExpr<'smt> {
         SmtExpr { ast, ctxt, kind }
     }
 
-    pub fn cast_u8(&self) -> SmtExpr<'smt> {
+    pub fn cast_u8(&self) -> Self {
         self.cast(false, 8)
     }
 
-    pub fn cast_u64(&self) -> SmtExpr<'smt> {
+    pub fn cast_u64(&self) -> Self {
         self.cast(false, 64)
     }
 
-    pub fn cast_u128(&self) -> SmtExpr<'smt> {
+    pub fn cast_u128(&self) -> Self {
         self.cast(false, 128)
     }
 
     // bitvec bitwise operators
-    pub fn bit_and(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn bit_and(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvand, self, rhs)
     }
 
-    pub fn bit_or(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn bit_or(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvor, self, rhs)
     }
 
-    pub fn bit_xor(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn bit_xor(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvxor, self, rhs)
     }
 
-    pub fn shl(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn shl(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec!(Z3_mk_bvshl, self, rhs)
     }
 
-    pub fn shr(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn shr(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bitvec_sign_split!(Z3_mk_bvashr, Z3_mk_bvlshr, self, rhs)
     }
 
     // bitvec comparison operators
-    pub fn gt(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn gt(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsgt, Z3_mk_bvugt, self, rhs)
     }
 
-    pub fn ge(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn ge(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsge, Z3_mk_bvuge, self, rhs)
     }
 
-    pub fn le(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn le(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvsle, Z3_mk_bvule, self, rhs)
     }
 
-    pub fn lt(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn lt(&self, rhs: &Self) -> Self {
         smt_binary_op_bitvec_to_bool_sign_split!(Z3_mk_bvslt, Z3_mk_bvult, self, rhs)
     }
 
     // equality operator (for both bool and bitvec)
-    pub fn eq(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn eq(&self, rhs: &Self) -> Self {
         smt_binary_op_generic_to_bool!(Z3_mk_eq, self, rhs)
     }
 
-    pub fn ne(&self, rhs: &SmtExpr<'smt>) -> SmtExpr<'smt> {
+    pub fn ne(&self, rhs: &Self) -> Self {
         smt_binary_op_generic_to_bool_by_term!(Z3_mk_distinct, self, rhs)
     }
 
     // struct operations
-    pub fn unpack(&self) -> Vec<SmtExpr<'smt>> {
+    pub fn unpack(&self) -> Vec<Self> {
         let ctxt = self.ctxt;
 
         // get struct info
