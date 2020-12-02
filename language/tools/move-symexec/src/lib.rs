@@ -5,6 +5,8 @@ pub mod configs;
 
 pub mod utils;
 
+pub mod deps_z3;
+
 pub mod builder;
 
 pub mod executor;
@@ -18,6 +20,8 @@ pub mod sym_typing;
 pub mod sym_exec_graph;
 
 pub mod sym_type_graph;
+
+pub mod sym_smtlib;
 
 pub mod sym_vm_types;
 
