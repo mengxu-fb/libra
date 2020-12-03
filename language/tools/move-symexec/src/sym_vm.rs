@@ -1,7 +1,9 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use log::warn;
+use itertools::Itertools;
+use log::{debug, warn};
+use std::collections::HashMap;
 
 use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
@@ -9,14 +11,86 @@ use spec_lang::ty::{PrimitiveType, Type};
 use crate::{
     sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
     sym_oracle::SymOracle,
-    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult, SmtStructInfo},
+    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::{ExecStructInfo, TypeGraph},
     sym_typing::ExecTypeArg,
-    sym_vm_types::{SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND},
+    sym_vm_types::{SymFrame, SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND},
 };
 
 /// Config: whether to simplify smt expressions upon construction
 const CONF_SMT_AUTO_SIMPLIFY: bool = true;
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+struct SymIntraSccFlow {
+    src_scc_id: ExecSccId,
+    src_block_id: ExecBlockId,
+    dst_scc_id: ExecSccId,
+    dst_block_id: ExecBlockId,
+}
+
+struct SymSccInfo<'smt> {
+    /// The scc_id where all scc_ids in the edge_conds resides in
+    scc_id: Option<ExecSccId>,
+    /// Entry condition
+    entry_cond: SmtExpr<'smt>,
+    /// Conditions for flows (i.e., edges) within this scc only
+    edge_conds: HashMap<SymIntraSccFlow, SmtExpr<'smt>>,
+}
+
+impl<'smt> SymSccInfo<'smt> {
+    fn for_base(ctxt: &'smt SmtCtxt) -> Self {
+        Self {
+            scc_id: None,
+            entry_cond: ctxt.bool_const(true),
+            edge_conds: HashMap::new(),
+        }
+    }
+
+    fn for_cycle(ctxt: &'smt SmtCtxt, scc_id: ExecSccId) -> Self {
+        Self {
+            scc_id: Some(scc_id),
+            // TODO: this is a fake condition
+            entry_cond: ctxt.bool_const(true),
+            edge_conds: HashMap::new(),
+        }
+    }
+
+    /// Get the condition associated with this edge (panic if non-exist)
+    fn get_edge_cond(
+        &self,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+    ) -> &SmtExpr<'smt> {
+        let key = SymIntraSccFlow {
+            src_scc_id,
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        self.edge_conds.get(&key).unwrap()
+    }
+
+    /// Put the condition associated with this edge (panic if exists)
+    fn put_edge_cond(
+        &mut self,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+        condition: SmtExpr<'smt>,
+    ) {
+        let key = SymIntraSccFlow {
+            src_scc_id,
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        let exists = self.edge_conds.insert(key, condition);
+        debug_assert!(exists.is_none());
+    }
+}
 
 /// The symbolic interpreter that examines instructions one by one
 pub(crate) struct SymVM<'env, 'sym> {
@@ -116,6 +190,93 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 &params.get(arg_index_start + i).unwrap().1,
                 arg,
             ));
+        }
+
+        // prepare the first frame, in particular
+        let mut call_stack = vec![SymFrame::new(
+            &self.smt_ctxt,
+            script_main.func_data.local_types.len(),
+        )];
+
+        // tracks the sccs that contain cycles only (except the base), and this is by definition,
+        // i.e., an scc containing a single block will not be able to form a stack.
+        let mut scc_stack = vec![SymSccInfo::for_base(&self.smt_ctxt)];
+
+        // symbolically walk the exec graph
+        let mut walker = ExecWalker::new(self.exec_graph);
+        while let Some(walker_step) = walker.next() {
+            match walker_step {
+                ExecWalkerStep::CycleEntry { scc_id } => {
+                    scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
+                }
+                ExecWalkerStep::CycleExit { scc_id } => {
+                    let exiting_scc_id = scc_stack.pop().unwrap().scc_id.unwrap();
+                    debug_assert_eq!(scc_id, exiting_scc_id);
+                }
+                ExecWalkerStep::Block {
+                    scc_id,
+                    block_id,
+                    incoming_edges,
+                    outgoing_edges,
+                } => {
+                    // log information
+                    debug!("Block: {} (scc: {})", block_id, scc_id);
+                    debug!(
+                        "Incoming edges: [{}]",
+                        incoming_edges
+                            .iter()
+                            .map(|(edge_scc_id, edge_block_id)| format!(
+                                "{}::{}",
+                                edge_scc_id, edge_block_id
+                            ))
+                            .join("-")
+                    );
+                    debug!(
+                        "Outgoing edges: [{}]",
+                        outgoing_edges
+                            .iter()
+                            .map(|(edge_scc_id, edge_block_id)| format!(
+                                "{}::{}",
+                                edge_scc_id, edge_block_id
+                            ))
+                            .join("-")
+                    );
+
+                    // derive the reachability condition for this block
+                    let mut scc_info = scc_stack.last_mut().unwrap();
+                    let reach_cond = if incoming_edges.is_empty() {
+                        // this is the entry block of this scc, take the entry condition
+                        scc_info.entry_cond.clone()
+                    } else {
+                        incoming_edges.iter().fold(
+                            self.smt_ctxt.bool_const(false),
+                            |cond, (src_scc_id, src_block_id)| {
+                                cond.or(scc_info.get_edge_cond(
+                                    *src_scc_id,
+                                    *src_block_id,
+                                    scc_id,
+                                    block_id,
+                                ))
+                            },
+                        )
+                    };
+                    debug!("Reaching condition: {}", reach_cond);
+
+                    // if this block is not even reachable, shortcut the execution
+                    if !self.smt_ctxt.is_feasible_assume_no_unknown(&[&reach_cond]) {
+                        for (dst_scc_id, dst_block_id) in outgoing_edges {
+                            scc_info.put_edge_cond(
+                                scc_id,
+                                block_id,
+                                dst_scc_id,
+                                dst_block_id,
+                                self.smt_ctxt.bool_const(false),
+                            );
+                        }
+                        continue;
+                    }
+                }
+            }
         }
     }
 }

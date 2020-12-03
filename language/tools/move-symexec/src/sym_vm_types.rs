@@ -655,6 +655,20 @@ impl<'smt> SymMemCell<'smt> {
     }
 }
 
+/// A symbolic version maintaining the frame for an exec unit
+pub(crate) struct SymFrame<'smt> {
+    /// A symbolic version of the struct used in concrete execution
+    locals: Vec<SymMemCell<'smt>>,
+}
+
+impl<'smt> SymFrame<'smt> {
+    pub fn new(ctxt: &'smt SmtCtxt, num_locals: usize) -> Self {
+        Self {
+            locals: (0..num_locals).map(|_| SymMemCell::new(ctxt)).collect(),
+        }
+    }
+}
+
 // utility
 fn addr_to_uint(val: &AccountAddress) -> u128 {
     let (addr, _) = val

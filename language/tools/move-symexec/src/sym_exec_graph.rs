@@ -30,10 +30,17 @@ use crate::{
     sym_oracle::{SymFuncInfo, SymOracle},
     sym_typing::ExecTypeArg,
 };
+use std::fmt::Debug;
 
 /// An id that uniquely identifies a basic block in the eCFG (i.e., `ExecGraph`)
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub(crate) struct ExecBlockId(usize);
+
+impl fmt::Display for ExecBlockId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// This is the basic block (i.e., the node) in the eCFG
 pub(crate) struct ExecBlock<'env> {
@@ -747,6 +754,12 @@ impl ExecRefGraph {
 /// An id that uniquely identifies an scc in an `ExecRefGraph`
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
 pub(crate) struct ExecSccId(usize);
+
+impl fmt::Display for ExecSccId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
 
 /// An scc is a self-contained set of blocks (can be either a single block or a loop) in the shadow
 /// graph of the eCFG, (i.e., in the `ExecRefGraph`)
