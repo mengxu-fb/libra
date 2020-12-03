@@ -4,6 +4,7 @@
 use log::warn;
 
 use move_core_types::account_address::AccountAddress;
+use spec_lang::ty::{PrimitiveType, Type};
 
 use crate::{
     sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
@@ -79,7 +80,41 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
     }
 
-    pub fn interpret(&self, _signers: &[AccountAddress], _sym_args: &[SymTransactionArgument]) {}
+    pub fn interpret(
+        &self,
+        sigs_opt: Option<&[AccountAddress]>,
+        sym_args: &[SymTransactionArgument],
+    ) {
+        // get the script exec unit to kickstart the symbolization
+        let script_main = self.oracle.get_script_exec_unit();
+        let params = script_main.func_env.get_parameters();
+
+        // turn signers into values
+        let mut sym_inputs: Vec<SymValue> = vec![];
+        if let Some(signers) = sigs_opt {
+            for (i, signer) in signers.iter().enumerate() {
+                debug_assert!(matches!(
+                    params.get(i).unwrap().1,
+                    Type::Primitive(PrimitiveType::Signer)
+                ));
+                sym_inputs.push(SymValue::address_const(
+                    &self.smt_ctxt,
+                    *signer,
+                    &self.smt_ctxt.bool_const(true),
+                ));
+            }
+        }
+
+        // turn transaction argument into values
+        let arg_index_start = sigs_opt.map_or(0, |signers| signers.len());
+        for (i, arg) in sym_args.iter().enumerate() {
+            sym_inputs.push(SymValue::from_transaction_argument(
+                &self.smt_ctxt,
+                &params.get(arg_index_start + i).unwrap().1,
+                arg,
+            ));
+        }
+    }
 }
 
 // utilities

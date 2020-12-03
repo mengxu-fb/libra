@@ -9,7 +9,7 @@ use move_core_types::{
     account_address::AccountAddress, parser::parse_transaction_argument,
     transaction_argument::TransactionArgument,
 };
-use vm::file_format::SignatureToken;
+use spec_lang::ty::{PrimitiveType, Type};
 
 use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind};
 
@@ -258,22 +258,24 @@ impl<'smt> SymValue<'smt> {
 
     pub fn from_transaction_argument(
         ctxt: &'smt SmtCtxt,
-        sig: &SignatureToken,
+        sig: &Type,
         arg: &SymTransactionArgument,
     ) -> Self {
         match sig {
-            SignatureToken::Bool => SymValue::bool_arg(ctxt, arg),
-            SignatureToken::U8 => SymValue::u8_arg(ctxt, arg),
-            SignatureToken::U64 => SymValue::u64_arg(ctxt, arg),
-            SignatureToken::U128 => SymValue::u128_arg(ctxt, arg),
-            SignatureToken::Address | SignatureToken::Signer => SymValue::address_arg(ctxt, arg),
-            SignatureToken::Vector(element) => {
-                // the only supported vector element type from
-                // TransactionArgument is U8Vector, hence the assert.
-                debug_assert_eq!(**element, SignatureToken::U8);
+            Type::Primitive(primitive) => match primitive {
+                PrimitiveType::Bool => SymValue::bool_arg(ctxt, arg),
+                PrimitiveType::U8 => SymValue::u8_arg(ctxt, arg),
+                PrimitiveType::U64 => SymValue::u64_arg(ctxt, arg),
+                PrimitiveType::U128 => SymValue::u128_arg(ctxt, arg),
+                PrimitiveType::Address => SymValue::address_arg(ctxt, arg),
+                _ => panic!("Unexpected type for transaction argument {:?}", primitive),
+            },
+            Type::Vector(element_type) => {
+                // the only supported vector element type from TransactionArgument is Vector<u8>
+                debug_assert_eq!(**element_type, Type::Primitive(PrimitiveType::U8));
                 SymValue::vector_u8_arg(ctxt, arg)
             }
-            _ => panic!("Invalid signature type for value argument"),
+            _ => panic!("Invalid type for transaction argument"),
         }
     }
 

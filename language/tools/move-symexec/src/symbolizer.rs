@@ -97,7 +97,7 @@ impl<'env> MoveSymbolizer<'env> {
 
         // leave the rest to the VM
         let vm = SymVM::new(&self.oracle, &self.exec_graph, &self.type_graph);
-        vm.interpret(signers, sym_args);
+        vm.interpret(if use_signers { Some(signers) } else { None }, sym_args);
 
         // done
         Ok(())
