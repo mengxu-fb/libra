@@ -3,6 +3,7 @@
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
+use once_cell::sync::Lazy;
 use std::fmt;
 
 use move_core_types::{
@@ -12,6 +13,47 @@ use move_core_types::{
 use spec_lang::ty::{PrimitiveType, Type};
 
 use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind};
+
+// Move first class citizen: Address
+const ADDRESS_STRUCT_NAME: &str = "-Address-";
+const ADDRESS_STRUCT_VALUE_FIELD_NAME: &str = "value";
+const ADDRESS_STRUCT_VALUE_FIELD_BITVEC_WIDTH: u16 = 128;
+pub(crate) static ADDRESS_SMT_KIND: Lazy<SmtKind> = Lazy::new(|| SmtKind::Struct {
+    struct_name: ADDRESS_STRUCT_NAME.to_owned(),
+});
+
+// Move first class citizen: Signer
+const SIGNER_STRUCT_NAME: &str = "-Signer-";
+const SIGNER_STRUCT_ADDRESS_FIELD_NAME: &str = "address";
+pub(crate) static SIGNER_SMT_KIND: Lazy<SmtKind> = Lazy::new(|| SmtKind::Struct {
+    struct_name: SIGNER_STRUCT_NAME.to_owned(),
+});
+
+// Preparation for move first class citizen types
+impl SmtCtxt {
+    pub(crate) fn create_move_type_address(&mut self) {
+        self.create_smt_struct(
+            ADDRESS_STRUCT_NAME.to_owned(),
+            vec![(
+                ADDRESS_STRUCT_VALUE_FIELD_NAME.to_owned(),
+                SmtKind::Bitvec {
+                    signed: false,
+                    width: ADDRESS_STRUCT_VALUE_FIELD_BITVEC_WIDTH,
+                },
+            )],
+        );
+    }
+
+    pub(crate) fn create_move_type_signer(&mut self) {
+        self.create_smt_struct(
+            SIGNER_STRUCT_NAME.to_owned(),
+            vec![(
+                SIGNER_STRUCT_ADDRESS_FIELD_NAME.to_owned(),
+                ADDRESS_SMT_KIND.clone(),
+            )],
+        );
+    }
+}
 
 /// Guarded symbolic representation: each symboilc expression is guarded by a condition
 #[derive(Clone, Debug)]
@@ -69,11 +111,11 @@ impl<'smt> SymValue<'smt> {
 // TODO: make SymValue pub(crate)
 
 macro_rules! make_sym_primitive {
-    ($ctxt:ident, $v:ident, $cond:ident, $func:tt $(,$extra:ident)*) => {
+    ($ctxt:ident, $cond:ident, $func:tt, $arg0:ident $(,$args:ident)*) => {
         SymValue {
             ctxt: $ctxt,
             variants: vec![SymRepr {
-                expr: $ctxt.$func($($extra,)* $v),
+                expr: $ctxt.$func($arg0, $($args,)*),
                 cond: $cond.clone(),
             }],
         }
@@ -128,45 +170,49 @@ macro_rules! sym_op_binary {
 impl<'smt> SymValue<'smt> {
     // create bool
     pub fn bool_const(ctxt: &'smt SmtCtxt, val: bool, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, val, cond, bool_const)
+        make_sym_primitive!(ctxt, cond, bool_const, val)
     }
 
     pub fn bool_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, var, cond, bool_var)
+        make_sym_primitive!(ctxt, cond, bool_var, var)
     }
 
     // create bitvec
+    fn uint_const<T: ToString>(
+        ctxt: &'smt SmtCtxt,
+        val: T,
+        width: u16,
+        cond: &SmtExpr<'smt>,
+    ) -> Self {
+        make_sym_primitive!(ctxt, cond, bitvec_const, val, false, width)
+    }
+
     pub fn u8_const(ctxt: &'smt SmtCtxt, val: u8, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, val, cond, bitvec_const_u8)
+        make_sym_primitive!(ctxt, cond, bitvec_const_u8, val)
     }
 
     pub fn u64_const(ctxt: &'smt SmtCtxt, val: u64, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, val, cond, bitvec_const_u64)
+        make_sym_primitive!(ctxt, cond, bitvec_const_u64, val)
     }
 
     pub fn u128_const(ctxt: &'smt SmtCtxt, val: u128, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, val, cond, bitvec_const_u128)
+        make_sym_primitive!(ctxt, cond, bitvec_const_u128, val)
+    }
+
+    fn uint_var(ctxt: &'smt SmtCtxt, var: &str, width: u16, cond: &SmtExpr<'smt>) -> Self {
+        make_sym_primitive!(ctxt, cond, bitvec_var, var, false, width)
     }
 
     pub fn u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, var, cond, bitvec_var_u8)
+        make_sym_primitive!(ctxt, cond, bitvec_var_u8, var)
     }
 
     pub fn u64_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, var, cond, bitvec_var_u64)
+        make_sym_primitive!(ctxt, cond, bitvec_var_u64, var)
     }
 
     pub fn u128_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, var, cond, bitvec_var_u128)
-    }
-
-    // create address
-    pub fn address_const(ctxt: &'smt SmtCtxt, val: AccountAddress, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, val, cond, address_const)
-    }
-
-    pub fn address_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
-        make_sym_primitive!(ctxt, var, cond, address_var)
+        make_sym_primitive!(ctxt, cond, bitvec_var_u128, var)
     }
 
     // create vector
@@ -190,7 +236,7 @@ impl<'smt> SymValue<'smt> {
         var: &str,
         cond: &SmtExpr<'smt>,
     ) -> Self {
-        make_sym_primitive!(ctxt, var, cond, vector_var, element_kind)
+        make_sym_primitive!(ctxt, cond, vector_var, element_kind, var)
     }
 
     // create vector (utilities)
@@ -228,7 +274,36 @@ impl<'smt> SymValue<'smt> {
         var: &str,
         cond: &SmtExpr<'smt>,
     ) -> Self {
-        make_sym_primitive!(ctxt, var, cond, struct_var, struct_kind)
+        make_sym_primitive!(ctxt, cond, struct_var, struct_kind, var)
+    }
+
+    // create address
+    pub fn address_const(ctxt: &'smt SmtCtxt, val: AccountAddress, cond: &SmtExpr<'smt>) -> Self {
+        Self::struct_const(
+            ctxt,
+            &*ADDRESS_SMT_KIND,
+            &[&SymValue::uint_const(
+                ctxt,
+                addr_to_uint(&val),
+                ADDRESS_STRUCT_VALUE_FIELD_BITVEC_WIDTH,
+                &ctxt.bool_const(true),
+            )],
+            cond,
+        )
+    }
+
+    pub fn address_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+        Self::struct_var(ctxt, &*ADDRESS_SMT_KIND, var, cond)
+    }
+
+    // create signers
+    pub fn signer_const(ctxt: &'smt SmtCtxt, val: AccountAddress, cond: &SmtExpr<'smt>) -> Self {
+        Self::struct_const(
+            ctxt,
+            &*SIGNER_SMT_KIND,
+            &[&SymValue::address_const(ctxt, val, &ctxt.bool_const(true))],
+            cond,
+        )
     }
 
     // create from argument
@@ -577,5 +652,33 @@ impl<'smt> SymMemCell<'smt> {
             ctxt: self.ctxt,
             variants,
         }
+    }
+}
+
+// utility
+fn addr_to_uint(val: &AccountAddress) -> u128 {
+    let (addr, _) = val
+        .to_u8()
+        .iter()
+        .rev()
+        .fold((0u128, 0u128), |(acc, mul), v| {
+            (acc + ((*v as u128) << mul), mul + 8)
+        });
+    addr
+}
+
+// unit testing for vm types
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::mem::size_of;
+
+    #[test]
+    fn assumptions() {
+        // check that we are using twice the number of bits for address
+        assert_eq!(
+            size_of::<AccountAddress>() * 8,
+            ADDRESS_STRUCT_VALUE_FIELD_BITVEC_WIDTH as usize
+        );
     }
 }

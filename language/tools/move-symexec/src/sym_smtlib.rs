@@ -10,13 +10,7 @@ use std::{
     ptr::null_mut,
 };
 
-use move_core_types::account_address::AccountAddress;
-
 use crate::deps_z3::*;
-
-/// configs
-const ORIGIN_ADDRESS_WIDTH: u16 = 128;
-const BITVEC_ADDRESS_WIDTH: u16 = 256;
 
 /// Possible results from the sat solver
 pub enum SmtResult {
@@ -25,8 +19,8 @@ pub enum SmtResult {
     UNKNOWN,
 }
 
-#[derive(Debug)]
-struct SmtStructInfo {
+#[derive(Clone, Debug)]
+pub struct SmtStructInfo {
     sort: Z3_sort,
     constructor: Z3_func_decl,
     field_kinds: Vec<SmtKind>,
@@ -149,7 +143,7 @@ impl SmtCtxt {
     }
 
     // create bitvecs
-    fn bitvec_const<T: ToString>(&self, val: T, signed: bool, width: u16) -> SmtExpr {
+    pub fn bitvec_const<T: ToString>(&self, val: T, signed: bool, width: u16) -> SmtExpr {
         let kind = SmtKind::Bitvec { signed, width };
         let str_repr = CString::new(val.to_string()).unwrap();
         let ast = unsafe { Z3_mk_numeral(self.ctxt, str_repr.as_ptr(), kind.to_z3_sort(self)) };
@@ -172,7 +166,7 @@ impl SmtCtxt {
         self.bitvec_const(val, false, 128)
     }
 
-    fn bitvec_var(&self, var: &str, signed: bool, width: u16) -> SmtExpr {
+    pub fn bitvec_var(&self, var: &str, signed: bool, width: u16) -> SmtExpr {
         let kind = SmtKind::Bitvec { signed, width };
         let c_str = CString::new(var).unwrap();
         let ast = unsafe {
@@ -196,35 +190,6 @@ impl SmtCtxt {
 
     pub fn bitvec_var_u128(&self, var: &str) -> SmtExpr {
         self.bitvec_var(var, false, 128)
-    }
-
-    // create address
-    pub fn address_const(&self, val: AccountAddress) -> SmtExpr {
-        let (addr, _) = val
-            .to_u8()
-            .iter()
-            .rev()
-            .fold((0u128, 0u128), |(acc, mul), v| {
-                (acc + ((*v as u128) << mul), mul + 8)
-            });
-
-        // push the address to the higher bits
-        self.bitvec_const(addr, false, ORIGIN_ADDRESS_WIDTH)
-            .shl(&self.bitvec_const(
-                BITVEC_ADDRESS_WIDTH - ORIGIN_ADDRESS_WIDTH,
-                false,
-                ORIGIN_ADDRESS_WIDTH,
-            ))
-    }
-
-    pub fn address_var(&self, var: &str) -> SmtExpr {
-        // push the address to the higher bits
-        self.bitvec_var(var, false, ORIGIN_ADDRESS_WIDTH)
-            .shl(&self.bitvec_const(
-                BITVEC_ADDRESS_WIDTH - ORIGIN_ADDRESS_WIDTH,
-                false,
-                ORIGIN_ADDRESS_WIDTH,
-            ))
     }
 
     // create vectors (i.e., sequences)
@@ -381,7 +346,6 @@ impl Drop for SmtCtxt {
 pub enum SmtKind {
     Bool,
     Bitvec { signed: bool, width: u16 },
-    Address,
     Vector { element_kind: Box<SmtKind> },
     Struct { struct_name: String },
     // TODO: the reference type is for experiment only
@@ -394,7 +358,6 @@ impl SmtKind {
         match self {
             SmtKind::Bool => unsafe { Z3_mk_bool_sort(ctxt.ctxt) },
             SmtKind::Bitvec { width, .. } => unsafe { Z3_mk_bv_sort(ctxt.ctxt, *width as c_uint) },
-            SmtKind::Address => SmtKind::bitvec_address().to_z3_sort(ctxt),
             SmtKind::Vector { element_kind } => unsafe {
                 Z3_mk_seq_sort(ctxt.ctxt, element_kind.to_z3_sort(ctxt))
             },
@@ -428,13 +391,6 @@ impl SmtKind {
         SmtKind::Bitvec {
             signed: false,
             width: 128,
-        }
-    }
-
-    pub fn bitvec_address() -> Self {
-        SmtKind::Bitvec {
-            signed: false,
-            width: BITVEC_ADDRESS_WIDTH,
         }
     }
 }
@@ -761,16 +717,6 @@ impl<'smt> SmtExpr<'smt> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::mem::size_of;
-
-    #[test]
-    fn assumptions() {
-        // check that we are using twice the number of bits for address
-        assert_eq!(
-            size_of::<AccountAddress>() * 8,
-            ORIGIN_ADDRESS_WIDTH as usize
-        );
-    }
 
     fn make_ctxt(conf_auto_simplify: bool) -> SmtCtxt {
         let mut ctxt = SmtCtxt::new(conf_auto_simplify);

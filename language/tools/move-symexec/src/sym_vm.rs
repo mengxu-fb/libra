@@ -9,10 +9,10 @@ use spec_lang::ty::{PrimitiveType, Type};
 use crate::{
     sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
     sym_oracle::SymOracle,
-    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult},
+    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult, SmtStructInfo},
     sym_type_graph::{ExecStructInfo, TypeGraph},
     sym_typing::ExecTypeArg,
-    sym_vm_types::{SymTransactionArgument, SymValue},
+    sym_vm_types::{SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND},
 };
 
 /// Config: whether to simplify smt expressions upon construction
@@ -37,6 +37,10 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         type_graph: &'sym TypeGraph<'env>,
     ) -> Self {
         let mut smt_ctxt = SmtCtxt::new(CONF_SMT_AUTO_SIMPLIFY);
+
+        // pre-compute the types for move first class citizens
+        smt_ctxt.create_move_type_address();
+        smt_ctxt.create_move_type_signer();
 
         // pre-compute the struct smt types
         for (struct_name, struct_info) in type_graph.reverse_topological_sort() {
@@ -92,12 +96,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         // turn signers into values
         let mut sym_inputs: Vec<SymValue> = vec![];
         if let Some(signers) = sigs_opt {
+            let signer_type =
+                Type::Reference(false, Box::new(Type::Primitive(PrimitiveType::Signer)));
             for (i, signer) in signers.iter().enumerate() {
-                debug_assert!(matches!(
-                    params.get(i).unwrap().1,
-                    Type::Primitive(PrimitiveType::Signer)
-                ));
-                sym_inputs.push(SymValue::address_const(
+                debug_assert_eq!(params.get(i).unwrap().1, signer_type);
+                sym_inputs.push(SymValue::signer_const(
                     &self.smt_ctxt,
                     *signer,
                     &self.smt_ctxt.bool_const(true),
@@ -124,8 +127,8 @@ fn type_arg_to_smt_kind(type_arg: &ExecTypeArg, type_graph: &TypeGraph) -> SmtKi
         ExecTypeArg::U8 => SmtKind::bitvec_u8(),
         ExecTypeArg::U64 => SmtKind::bitvec_u64(),
         ExecTypeArg::U128 => SmtKind::bitvec_u128(),
-        ExecTypeArg::Address => SmtKind::bitvec_address(),
-        ExecTypeArg::Signer => SmtKind::bitvec_address(),
+        ExecTypeArg::Address => ADDRESS_SMT_KIND.clone(),
+        ExecTypeArg::Signer => SIGNER_SMT_KIND.clone(),
         ExecTypeArg::Vector { element_type } => SmtKind::Vector {
             element_kind: Box::new(type_arg_to_smt_kind(element_type.as_ref(), type_graph)),
         },
