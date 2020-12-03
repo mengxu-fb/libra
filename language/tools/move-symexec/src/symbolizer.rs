@@ -17,6 +17,7 @@ use crate::{
     sym_oracle::SymOracle,
     sym_type_graph::TypeGraph,
     sym_typing::ExecTypeArg,
+    sym_vm::SymVM,
     sym_vm_types::SymTransactionArgument,
 };
 
@@ -93,6 +94,10 @@ impl<'env> MoveSymbolizer<'env> {
         if val_arg_sigs.len() != if use_signers { signers.len() } else { 0 } + sym_args.len() {
             bail!("The number of symbols does not match the number of value arguments");
         }
+
+        // leave the rest to the VM
+        let vm = SymVM::new(&self.oracle, &self.exec_graph, &self.type_graph);
+        vm.interpret(signers, sym_args);
 
         // done
         Ok(())

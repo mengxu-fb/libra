@@ -10,7 +10,7 @@ use petgraph::{
 use std::collections::HashMap;
 
 use bytecode::stackless_bytecode::{Bytecode, Operation};
-use spec_lang::env::FieldId;
+use spec_lang::env::{FieldEnv, FieldId};
 
 use crate::{
     sym_exec_graph::{ExecGraph, ExecWalker, ExecWalkerStep},
@@ -23,7 +23,7 @@ use crate::{
 pub(crate) enum ExecStructInfo<'env> {
     Native,
     Declared {
-        field_vec: Vec<FieldId>,
+        field_vec: Vec<FieldEnv<'env>>,
         field_map: HashMap<FieldId, ExecTypeArg<'env>>,
     },
 }
@@ -270,10 +270,25 @@ impl<'env> TypeGraph<'env> {
             })
             .collect()
     }
+
+    pub fn get_struct_name(
+        &self,
+        struct_id: &SymStructId,
+        type_args: &[ExecTypeArg<'env>],
+    ) -> Option<&str> {
+        self.involved_structs
+            .get(struct_id)
+            .map(|struct_variants| {
+                struct_variants
+                    .get(type_args)
+                    .map(|struct_name| struct_name.as_str())
+            })
+            .flatten()
+    }
 }
 
 fn collect_involved_structs_recursive<'env>(
-    struct_info: &SymStructInfo<'env>,
+    struct_info: &'env SymStructInfo<'env>,
     type_args: &[ExecTypeArg<'env>],
     oracle: &'env SymOracle<'env>,
     involved_structs: &mut HashMap<SymStructId, HashMap<Vec<ExecTypeArg<'env>>, String>>,
@@ -302,8 +317,6 @@ fn collect_involved_structs_recursive<'env>(
             let mut field_vec = vec![];
             let mut field_map = HashMap::new();
             for field_env in struct_info.struct_env.get_fields() {
-                field_vec.push(field_env.get_id());
-
                 // handle field type recursively
                 let field_type_actual =
                     ExecTypeArg::convert_from_type_actual(&field_env.get_type(), type_args, oracle);
@@ -315,6 +328,7 @@ fn collect_involved_structs_recursive<'env>(
                 );
 
                 field_map.insert(field_env.get_id(), field_type_actual);
+                field_vec.push(field_env);
             }
             debug_assert_eq!(field_vec.len(), field_map.len());
             ExecStructInfo::Declared {
