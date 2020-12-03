@@ -11,7 +11,7 @@ use move_core_types::{
 };
 use vm::file_format::SignatureToken;
 
-use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind, SmtResult};
+use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind};
 
 /// Guarded symbolic representation: each symboilc expression is guarded by a condition
 #[derive(Clone, Debug)]
@@ -307,16 +307,7 @@ impl<'smt> SymValue<'smt> {
                 .fold(base_cond.clone(), |acc, variant| acc.and(&variant.cond));
 
             // check feasibility
-            let feasible = match ctxt.solve(&[&cond]) {
-                SmtResult::SAT => true,
-                SmtResult::UNSAT => false,
-                SmtResult::UNKNOWN => {
-                    // TODO: assume that things are decidable for now
-                    panic!("SMT solver returns an unknown result");
-                }
-            };
-
-            if !feasible {
+            if !ctxt.is_feasible_assume_no_unknown(&[&cond]) {
                 continue;
             }
 
@@ -325,16 +316,9 @@ impl<'smt> SymValue<'smt> {
             let expr = (func)(&parts);
 
             // check duplicates
-            let dup = variants.iter_mut().find(|repr| {
-                match ctxt.solve(&[&repr.expr.ne(&expr)]) {
-                    SmtResult::SAT => false,
-                    SmtResult::UNSAT => true,
-                    SmtResult::UNKNOWN => {
-                        // TODO: assume that things are decidable for now
-                        panic!("SMT solver returns an unknown result");
-                    }
-                }
-            });
+            let dup = variants
+                .iter_mut()
+                .find(|repr| !ctxt.is_feasible_assume_no_unknown(&[&repr.expr.ne(&expr)]));
 
             if let Some(item) = dup {
                 // join the conditions
@@ -456,16 +440,10 @@ impl<'smt> SymValue<'smt> {
                 let field_sym = results.get_mut(i).unwrap();
 
                 // check duplicates
-                let dup = field_sym.variants.iter_mut().find(|repr| {
-                    match ctxt.solve(&[&repr.expr.ne(&expr)]) {
-                        SmtResult::SAT => false,
-                        SmtResult::UNSAT => true,
-                        SmtResult::UNKNOWN => {
-                            // TODO: assume that things are decidable for now
-                            panic!("SMT solver returns an unknown result");
-                        }
-                    }
-                });
+                let dup = field_sym
+                    .variants
+                    .iter_mut()
+                    .find(|repr| !ctxt.is_feasible_assume_no_unknown(&[&repr.expr.ne(&expr)]));
 
                 if let Some(item) = dup {
                     // join the conditions
@@ -543,34 +521,59 @@ impl<'smt> SymMemCell<'smt> {
 
     fn store(&mut self, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) {
         let ctxt = self.ctxt;
+
+        // collect newly added slots
+        let mut new_slots = vec![];
         for variant in &sym.variants {
             // filter infeasible read
-            let cond_variant_read = variant.cond.and(cond);
-            if !match ctxt.solve(&[&cond_variant_read]) {
-                SmtResult::SAT => true,
-                SmtResult::UNSAT => false,
-                SmtResult::UNKNOWN => {
-                    // TODO: assume that things are decidable for now
-                    panic!("SMT solver returns an unknown result");
-                }
-            } {
+            let new_slot_cond = variant.cond.and(cond);
+            if !ctxt.is_feasible_assume_no_unknown(&[&new_slot_cond]) {
                 continue;
             }
 
-            // filter infeasible writes
-            for slot in &self.slots {
-                let cond_variant_write = cond_variant_read.and(&slot.repr.cond).and(&slot.alive);
-                if !match ctxt.solve(&[&cond_variant_read]) {
-                    SmtResult::SAT => true,
-                    SmtResult::UNSAT => false,
-                    SmtResult::UNKNOWN => {
-                        // TODO: assume that things are decidable for now
-                        panic!("SMT solver returns an unknown result");
-                    }
-                } {
-                    continue;
-                }
+            // update liveliness conditions for existing records
+            for slot in self.slots.iter_mut() {
+                let cond_overlap = new_slot_cond.and(&slot.repr.cond).and(&slot.alive);
+                slot.alive = slot.alive.and(&cond_overlap.not());
             }
+
+            // add a new slot
+            new_slots.push(SymMemSlot {
+                repr: SymRepr {
+                    expr: variant.expr.clone(),
+                    cond: new_slot_cond.clone(),
+                },
+                alive: new_slot_cond,
+            });
+        }
+
+        // add newly created slots
+        self.slots.append(&mut new_slots);
+    }
+
+    fn load(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+        let ctxt = self.ctxt;
+        let mut variants = vec![];
+
+        // see which slot(s) are still alive given the condition
+        for slot in &self.slots {
+            let repr_cond = slot.repr.cond.and(&slot.alive).and(cond);
+
+            // filter infeasible slots
+            if !ctxt.is_feasible_assume_no_unknown(&[&repr_cond]) {
+                continue;
+            }
+
+            variants.push(SymRepr {
+                expr: slot.repr.expr.clone(),
+                cond: repr_cond,
+            });
+        }
+
+        // done
+        SymValue {
+            ctxt: self.ctxt,
+            variants,
         }
     }
 }

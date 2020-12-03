@@ -354,6 +354,18 @@ impl SmtCtxt {
             SmtResult::UNKNOWN
         }
     }
+
+    // TODO: this is not reasonable, but for simplicity...
+    pub fn is_feasible_assume_no_unknown(&self, constraints: &[&SmtExpr]) -> bool {
+        match self.solve(constraints) {
+            SmtResult::SAT => true,
+            SmtResult::UNSAT => false,
+            SmtResult::UNKNOWN => {
+                // TODO: assume that things are decidable for now
+                panic!("SMT solver returns an unknown result");
+            }
+        }
+    }
 }
 
 impl Drop for SmtCtxt {
