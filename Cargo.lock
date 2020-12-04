@@ -4262,7 +4262,7 @@ dependencies = [
  "shell-words",
  "simplelog",
  "spec-lang",
- "structopt 0.3.20",
+ "structopt 0.3.21",
  "tempfile",
  "vm",
  "vm-genesis",
