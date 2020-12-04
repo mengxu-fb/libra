@@ -3,9 +3,11 @@
 
 use anyhow::{bail, Result};
 use itertools::Itertools;
+use log::debug;
 use once_cell::sync::Lazy;
 use std::fmt;
 
+use bytecode::stackless_bytecode::TempIndex;
 use move_core_types::{
     account_address::AccountAddress, parser::parse_transaction_argument,
     transaction_argument::TransactionArgument,
@@ -576,8 +578,14 @@ pub fn parse_sym_transaction_argument(s: &str) -> Result<SymTransactionArgument>
 /// A symbolic memory slot that tracks not only the symbolic value, but also the liveliness
 /// condition (i.e., the condition on which the symbolic value is valid when the slot is loaded)
 struct SymMemSlot<'smt> {
-    repr: SymRepr<'smt>,
-    alive: SmtExpr<'smt>,
+    expr: SmtExpr<'smt>,
+    cond: SmtExpr<'smt>,
+}
+
+impl fmt::Display for SymMemSlot<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} | {}", self.expr, self.cond)
+    }
 }
 
 /// A symbolic version for cells that serve the purpose of memory
@@ -586,6 +594,17 @@ struct SymMemCell<'smt> {
     ctxt: &'smt SmtCtxt,
     /// Possible slots
     slots: Vec<SymMemSlot<'smt>>,
+}
+
+impl fmt::Display for SymMemCell<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "[")?;
+        for (i, slot) in self.slots.iter().enumerate() {
+            writeln!(f, "\t{}: {}", i, slot)?;
+        }
+        writeln!(f, "]")?;
+        Ok(())
+    }
 }
 
 impl<'smt> SymMemCell<'smt> {
@@ -610,41 +629,50 @@ impl<'smt> SymMemCell<'smt> {
 
             // update liveliness conditions for existing records
             for slot in self.slots.iter_mut() {
-                let cond_overlap = new_slot_cond.and(&slot.repr.cond).and(&slot.alive);
-                slot.alive = slot.alive.and(&cond_overlap.not());
+                slot.cond = slot.cond.and(&new_slot_cond.not());
             }
 
             // add a new slot
             new_slots.push(SymMemSlot {
-                repr: SymRepr {
-                    expr: variant.expr.clone(),
-                    cond: new_slot_cond.clone(),
-                },
-                alive: new_slot_cond,
+                expr: variant.expr.clone(),
+                cond: new_slot_cond,
             });
         }
+
+        // remove dead records
+        self.slots
+            .retain(|slot| ctxt.is_feasible_assume_no_unknown(&[&slot.cond]));
 
         // add newly created slots
         self.slots.append(&mut new_slots);
     }
 
-    fn load(&self, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    fn load(&mut self, cond: &SmtExpr<'smt>, extract: bool) -> SymValue<'smt> {
         let ctxt = self.ctxt;
         let mut variants = vec![];
 
         // see which slot(s) are still alive given the condition
-        for slot in &self.slots {
-            let repr_cond = slot.repr.cond.and(&slot.alive).and(cond);
+        let mut del_slots = vec![];
+        for (i, slot) in self.slots.iter().enumerate() {
+            let repr_cond = slot.cond.and(cond);
 
             // filter infeasible slots
             if !ctxt.is_feasible_assume_no_unknown(&[&repr_cond]) {
                 continue;
             }
 
+            del_slots.push(i);
             variants.push(SymRepr {
-                expr: slot.repr.expr.clone(),
+                expr: slot.expr.clone(),
                 cond: repr_cond,
             });
+        }
+
+        // remove extracted slots (if needed)
+        if extract {
+            for (offset, slot_index) in del_slots.into_iter().enumerate() {
+                self.slots.remove(slot_index - offset);
+            }
         }
 
         // done
@@ -666,6 +694,48 @@ impl<'smt> SymFrame<'smt> {
         Self {
             locals: (0..num_locals).map(|_| SymMemCell::new(ctxt)).collect(),
         }
+    }
+
+    fn get_local_mut(&mut self, index: TempIndex) -> &mut SymMemCell<'smt> {
+        self.locals.get_mut(index).unwrap()
+    }
+
+    pub fn store_local(&mut self, index: TempIndex, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) {
+        let cell = self.get_local_mut(index);
+        cell.store(sym, cond);
+        debug!("> [store {}]", index);
+        debug!("> sym: {}", sym);
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+    }
+
+    pub fn move_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+        let cell = self.get_local_mut(index);
+        let sym = cell.load(cond, true);
+        debug!("> [move {}]", index);
+        debug!("> sym: {}", sym);
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+        sym
+    }
+
+    pub fn copy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+        let cell = self.get_local_mut(index);
+        let sym = cell.load(cond, false);
+        debug!("> [copy {}]", index);
+        debug!("> sym: {}", sym);
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+        sym
+    }
+
+    pub fn destroy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) {
+        let cell = self.get_local_mut(index);
+        cell.load(cond, true);
+        debug!("> [destroy {}]", index);
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+        // TODO: check if any slots left
     }
 }
 

@@ -5,7 +5,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
 
-use bytecode::stackless_bytecode::Bytecode;
+use bytecode::stackless_bytecode::{Bytecode, Constant};
 use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
 
@@ -332,7 +332,10 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     return true;
                 }
-                Bytecode::Load(..) => {}
+                Bytecode::Load(_, dst, val) => {
+                    let sym = self.symbolize_constant(val, reach_cond);
+                    current_frame.store_local(*dst, &sym, reach_cond);
+                }
                 Bytecode::Branch(..) => {}
                 Bytecode::Jump(..) => {}
                 // abort
@@ -347,6 +350,25 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
         // the block is not a return block
         return false;
+    }
+
+    fn symbolize_constant<'smt>(
+        &'smt self,
+        val: &Constant,
+        cond: &SmtExpr<'smt>,
+    ) -> SymValue<'smt> {
+        match val {
+            Constant::Bool(v) => SymValue::bool_const(&self.smt_ctxt, *v, cond),
+            Constant::U8(v) => SymValue::u8_const(&self.smt_ctxt, *v, cond),
+            Constant::U64(v) => SymValue::u64_const(&self.smt_ctxt, *v, cond),
+            Constant::U128(v) => SymValue::u128_const(&self.smt_ctxt, *v, cond),
+            Constant::Address(v) => SymValue::address_const(
+                &self.smt_ctxt,
+                AccountAddress::from_hex_literal(&format!("{:#X}", v)).unwrap(),
+                cond,
+            ),
+            Constant::ByteArray(v) => SymValue::vector_u8_const(&self.smt_ctxt, v.clone(), cond),
+        }
     }
 }
 
