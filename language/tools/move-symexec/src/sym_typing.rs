@@ -147,7 +147,7 @@ impl fmt::Display for ExecTypeArg<'_> {
                 type_args,
             } => write!(
                 f,
-                "struct get_context_string{}<{}>",
+                "struct {}<{}>",
                 struct_info.get_context_string(),
                 type_args.iter().map(|ty_arg| ty_arg.to_string()).join(", ")
             ),

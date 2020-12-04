@@ -5,6 +5,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
 
+use bytecode::stackless_bytecode::Bytecode;
 use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
 
@@ -245,7 +246,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     // derive the reachability condition for this block
                     let mut scc_info = scc_stack.last_mut().unwrap();
                     let reach_cond = if incoming_edges.is_empty() {
-                        // this is the entry block of this scc, take the entry condition
+                        // this is the entry block of this scc, so just take the entry condition
                         scc_info.entry_cond.clone()
                     } else {
                         incoming_edges.iter().fold(
@@ -275,9 +276,77 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         }
                         continue;
                     }
+
+                    // now symbolize the block
+                    let block = self.exec_graph.get_block_by_block_id(block_id);
+                    let is_return_block = self.symbolize_block(
+                        scc_id,
+                        block,
+                        &reach_cond,
+                        &outgoing_edges,
+                        &mut scc_info,
+                        &mut call_stack,
+                    );
+
+                    // pop the call stack if this is a return block
+                    if is_return_block {
+                        let mut current_frame = call_stack.pop().unwrap();
+                    }
                 }
             }
         }
+
+        // pop the base scc
+        let base_scc = scc_stack.pop().unwrap();
+        debug_assert!(base_scc.scc_id.is_none());
+
+        // we should have nothing left in the stack after execution
+        debug_assert!(scc_stack.is_empty());
+        debug_assert!(call_stack.is_empty());
+    }
+
+    fn symbolize_block<'smt>(
+        &'smt self,
+        scc_id: ExecSccId,
+        block: &ExecBlock<'env>,
+        reach_cond: &SmtExpr<'smt>,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_info: &mut SymSccInfo<'smt>,
+        call_stack: &mut Vec<SymFrame<'smt>>,
+    ) -> bool {
+        let func_env = block.exec_unit;
+        let current_frame = call_stack.last_mut().unwrap();
+        for (pos, instruction) in block.instructions.iter().enumerate() {
+            debug!(
+                "Instruction {}: {}",
+                pos,
+                instruction.display(func_env.get_target())
+            );
+            match instruction {
+                // applicable to spec only
+                Bytecode::SpecBlock(..) => {}
+                Bytecode::Assign(..) => {}
+                Bytecode::Call(..) => {}
+                Bytecode::Ret(..) => {
+                    // this block is a return block
+                    debug_assert_eq!(pos + 1, block.instructions.len());
+                    return true;
+                }
+                Bytecode::Load(..) => {}
+                Bytecode::Branch(..) => {}
+                Bytecode::Jump(..) => {}
+                // abort
+                Bytecode::Abort(..) => {
+                    // TODO: check for reachability
+                }
+                // nop or equivalent
+                Bytecode::Label(..) => {}
+                Bytecode::Nop(..) => {}
+            };
+        }
+
+        // the block is not a return block
+        return false;
     }
 }
 

@@ -47,7 +47,7 @@ pub(crate) struct ExecBlock<'env> {
     /// A unique identifier for the exec block
     block_id: ExecBlockId,
     /// The context (module, function) where this block lives
-    exec_unit: &'env SymFuncInfo<'env>,
+    pub exec_unit: &'env SymFuncInfo<'env>,
     /// The starting offset of the instructions in code context
     ///
     /// NOTE: A None value means that this is an arbitrary block which will host no instructions,
