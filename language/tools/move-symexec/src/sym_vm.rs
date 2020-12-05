@@ -106,6 +106,25 @@ pub(crate) struct SymVM<'env, 'sym> {
     type_graph: &'sym TypeGraph<'env>,
 }
 
+macro_rules! sym_op_unary {
+    ($args:ident, $rets:ident, $cond:ident, $frame:ident, $func:tt) => {
+        debug_assert_eq!($args.len(), 1);
+        debug_assert_eq!($rets.len(), 1);
+        let sym = $frame.copy_local($args[0], $cond)?;
+        $frame.store_local($rets[0], &sym.$func($cond)?, $cond)?;
+    };
+}
+
+macro_rules! sym_op_binary {
+    ($args:ident, $rets:ident, $cond:ident, $frame:ident, $func:tt) => {
+        debug_assert_eq!($args.len(), 2);
+        debug_assert_eq!($rets.len(), 1);
+        let lhs = $frame.copy_local($args[0], $cond)?;
+        let rhs = $frame.copy_local($args[0], $cond)?;
+        $frame.store_local($rets[0], &lhs.$func(&rhs, $cond)?, $cond)?;
+    };
+}
+
 impl<'env, 'sym> SymVM<'env, 'sym> {
     pub fn new(
         oracle: &'env SymOracle<'env>,
@@ -365,10 +384,79 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     match op {
                         // builtins
                         Operation::Destroy => {
-                            for idx in args {
-                                current_frame.destroy_local(*idx, reach_cond)?;
-                            }
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 0);
+                            current_frame.destroy_local(args[0], reach_cond)?;
                         }
+                        // unary
+                        Operation::CastU8 => {
+                            sym_op_unary!(args, rets, reach_cond, current_frame, cast_u8);
+                        }
+                        Operation::CastU64 => {
+                            sym_op_unary!(args, rets, reach_cond, current_frame, cast_u64);
+                        }
+                        Operation::CastU128 => {
+                            sym_op_unary!(args, rets, reach_cond, current_frame, cast_u128);
+                        }
+                        Operation::Not => {
+                            sym_op_unary!(args, rets, reach_cond, current_frame, not);
+                        }
+                        // binary
+                        Operation::Add => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, add);
+                        }
+                        Operation::Sub => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, sub);
+                        }
+                        Operation::Mul => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, mul);
+                        }
+                        Operation::Div => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, div);
+                        }
+                        Operation::Mod => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, rem);
+                        }
+                        Operation::BitOr => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, bit_or);
+                        }
+                        Operation::BitAnd => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, bit_and);
+                        }
+                        Operation::Xor => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, bit_xor);
+                        }
+                        Operation::Shl => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, shl);
+                        }
+                        Operation::Shr => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, shr);
+                        }
+                        Operation::Lt => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, lt);
+                        }
+                        Operation::Gt => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, gt);
+                        }
+                        Operation::Le => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, le);
+                        }
+                        Operation::Ge => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, ge);
+                        }
+                        Operation::Or => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, or);
+                        }
+                        Operation::And => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, and);
+                        }
+                        Operation::Eq => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, eq);
+                        }
+                        Operation::Neq => {
+                            sym_op_binary!(args, rets, reach_cond, current_frame, ne);
+                        }
+                        // others
                         _ => bail!("Operation not supported yet"),
                     }
                 }
