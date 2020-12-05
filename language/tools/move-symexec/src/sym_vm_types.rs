@@ -714,12 +714,15 @@ impl<'smt> SymMemCell<'smt> {
 pub(crate) struct SymFrame<'smt> {
     /// A symbolic version of the struct used in concrete execution
     locals: Vec<SymMemCell<'smt>>,
+    /// Return values
+    returns: Option<Vec<TempIndex>>,
 }
 
 impl<'smt> SymFrame<'smt> {
     pub fn new(ctxt: &'smt SmtCtxt, num_locals: usize) -> Self {
         Self {
             locals: (0..num_locals).map(|_| SymMemCell::new(ctxt)).collect(),
+            returns: None,
         }
     }
 
@@ -770,6 +773,16 @@ impl<'smt> SymFrame<'smt> {
         debug!("> cond: {}", cond);
         // TODO: check if any slots left
         Ok(())
+    }
+
+    pub fn set_returns(&mut self, rets: &[TempIndex]) {
+        // NOTE: check the assumption in stackless CFG that at max one return per function
+        debug_assert!(self.returns.is_none());
+        self.returns = Some(rets.to_vec());
+    }
+
+    pub fn get_returns(&self) -> Option<&[TempIndex]> {
+        self.returns.as_deref()
     }
 }
 

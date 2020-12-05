@@ -315,13 +315,16 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             }
         }
 
-        // pop the base scc
-        let base_scc = scc_stack.pop().unwrap();
-        debug_assert!(base_scc.scc_id.is_none());
-
-        // we should have nothing left in the stack after execution
-        debug_assert!(scc_stack.is_empty());
-        debug_assert!(call_stack.is_empty());
+        // we should have nothing left in the stack after execution, unless the execution runs into
+        // a function that only aborts but never returns
+        if let Some(call_frame) = call_stack.pop() {
+            debug_assert!(call_frame.get_returns().is_none());
+        } else {
+            // pop the base scc
+            let base_scc = scc_stack.pop().unwrap();
+            debug_assert!(base_scc.scc_id.is_none());
+            debug_assert!(scc_stack.is_empty());
+        }
 
         // done
         Ok(())
@@ -369,9 +372,10 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         _ => bail!("Operation not supported yet"),
                     }
                 }
-                Bytecode::Ret(..) => {
+                Bytecode::Ret(_, rets) => {
                     // this block is a return block
                     debug_assert_eq!(pos + 1, block.instructions.len());
+                    current_frame.set_returns(rets);
                     return Ok(true);
                 }
                 Bytecode::Load(_, dst, val) => {
