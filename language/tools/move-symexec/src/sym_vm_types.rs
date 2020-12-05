@@ -114,13 +114,13 @@ impl<'smt> SymValue<'smt> {
 
 macro_rules! make_sym_primitive {
     ($ctxt:ident, $cond:ident, $func:tt, $arg0:ident $(,$args:ident)*) => {
-        SymValue {
+        Ok(SymValue {
             ctxt: $ctxt,
             variants: vec![SymRepr {
                 expr: $ctxt.$func($arg0, $($args,)*),
                 cond: $cond.clone(),
             }],
-        }
+        })
     };
 }
 
@@ -171,11 +171,11 @@ macro_rules! sym_op_binary {
 
 impl<'smt> SymValue<'smt> {
     // create bool
-    pub fn bool_const(ctxt: &'smt SmtCtxt, val: bool, cond: &SmtExpr<'smt>) -> Self {
+    pub fn bool_const(ctxt: &'smt SmtCtxt, val: bool, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bool_const, val)
     }
 
-    pub fn bool_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    pub fn bool_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bool_var, var)
     }
 
@@ -185,35 +185,35 @@ impl<'smt> SymValue<'smt> {
         val: T,
         width: u16,
         cond: &SmtExpr<'smt>,
-    ) -> Self {
+    ) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_const, val, false, width)
     }
 
-    pub fn u8_const(ctxt: &'smt SmtCtxt, val: u8, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u8_const(ctxt: &'smt SmtCtxt, val: u8, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_const_u8, val)
     }
 
-    pub fn u64_const(ctxt: &'smt SmtCtxt, val: u64, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u64_const(ctxt: &'smt SmtCtxt, val: u64, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_const_u64, val)
     }
 
-    pub fn u128_const(ctxt: &'smt SmtCtxt, val: u128, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u128_const(ctxt: &'smt SmtCtxt, val: u128, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_const_u128, val)
     }
 
-    fn uint_var(ctxt: &'smt SmtCtxt, var: &str, width: u16, cond: &SmtExpr<'smt>) -> Self {
+    fn uint_var(ctxt: &'smt SmtCtxt, var: &str, width: u16, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_var, var, false, width)
     }
 
-    pub fn u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_var_u8, var)
     }
 
-    pub fn u64_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u64_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_var_u64, var)
     }
 
-    pub fn u128_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    pub fn u128_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_var_u128, var)
     }
 
@@ -223,7 +223,7 @@ impl<'smt> SymValue<'smt> {
         element_kind: &SmtKind,
         vals: &[&SymValue<'smt>],
         cond: &SmtExpr<'smt>,
-    ) -> Self {
+    ) -> Result<Self> {
         SymValue::op(
             ctxt,
             vals,
@@ -237,21 +237,25 @@ impl<'smt> SymValue<'smt> {
         element_kind: &SmtKind,
         var: &str,
         cond: &SmtExpr<'smt>,
-    ) -> Self {
+    ) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, vector_var, element_kind, var)
     }
 
     // create vector (utilities)
-    pub fn vector_u8_const(ctxt: &'smt SmtCtxt, vals: Vec<u8>, cond: &SmtExpr<'smt>) -> Self {
-        let elements: Vec<SymValue> = vals
+    pub fn vector_u8_const(
+        ctxt: &'smt SmtCtxt,
+        vals: Vec<u8>,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Self> {
+        let elements = vals
             .iter()
             .map(|val| SymValue::u8_const(ctxt, *val, cond))
-            .collect();
+            .collect::<Result<Vec<_>>>()?;
         let element_refs: Vec<&SymValue> = elements.iter().collect();
         SymValue::vector_const(ctxt, &SmtKind::bitvec_u8(), &element_refs, cond)
     }
 
-    fn vector_u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    fn vector_u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         SymValue::vector_var(ctxt, &SmtKind::bitvec_u8(), var, cond)
     }
 
@@ -261,7 +265,7 @@ impl<'smt> SymValue<'smt> {
         struct_kind: &SmtKind,
         fields: &[&SymValue<'smt>],
         cond: &SmtExpr<'smt>,
-    ) -> Self {
+    ) -> Result<Self> {
         SymValue::op(
             ctxt,
             fields,
@@ -275,12 +279,16 @@ impl<'smt> SymValue<'smt> {
         struct_kind: &SmtKind,
         var: &str,
         cond: &SmtExpr<'smt>,
-    ) -> Self {
+    ) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, struct_var, struct_kind, var)
     }
 
     // create address
-    pub fn address_const(ctxt: &'smt SmtCtxt, val: AccountAddress, cond: &SmtExpr<'smt>) -> Self {
+    pub fn address_const(
+        ctxt: &'smt SmtCtxt,
+        val: AccountAddress,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Self> {
         Self::struct_const(
             ctxt,
             &*ADDRESS_SMT_KIND,
@@ -289,47 +297,51 @@ impl<'smt> SymValue<'smt> {
                 addr_to_uint(&val),
                 ADDRESS_STRUCT_VALUE_FIELD_BITVEC_WIDTH,
                 &ctxt.bool_const(true),
-            )],
+            )?],
             cond,
         )
     }
 
-    pub fn address_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Self {
+    pub fn address_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         Self::struct_var(ctxt, &*ADDRESS_SMT_KIND, var, cond)
     }
 
     // create signers
-    pub fn signer_const(ctxt: &'smt SmtCtxt, val: AccountAddress, cond: &SmtExpr<'smt>) -> Self {
+    pub fn signer_const(
+        ctxt: &'smt SmtCtxt,
+        val: AccountAddress,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Self> {
         Self::struct_const(
             ctxt,
             &*SIGNER_SMT_KIND,
-            &[&SymValue::address_const(ctxt, val, &ctxt.bool_const(true))],
+            &[&SymValue::address_const(ctxt, val, &ctxt.bool_const(true))?],
             cond,
         )
     }
 
     // create from argument
-    fn bool_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn bool_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(Bool, ctxt, arg, bool_const, bool_var)
     }
 
-    fn u8_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn u8_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(U8, ctxt, arg, u8_const, u8_var)
     }
 
-    fn u64_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn u64_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(U64, ctxt, arg, u64_const, u64_var)
     }
 
-    fn u128_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn u128_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(U128, ctxt, arg, u128_const, u128_var)
     }
 
-    fn address_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn address_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(Address, ctxt, arg, address_const, address_var)
     }
 
-    fn vector_u8_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Self {
+    fn vector_u8_arg(ctxt: &'smt SmtCtxt, arg: &SymTransactionArgument) -> Result<Self> {
         make_sym_from_arg!(U8Vector, ctxt, arg, vector_u8_const, vector_u8_var)
     }
 
@@ -337,7 +349,7 @@ impl<'smt> SymValue<'smt> {
         ctxt: &'smt SmtCtxt,
         sig: &Type,
         arg: &SymTransactionArgument,
-    ) -> Self {
+    ) -> Result<Self> {
         match sig {
             Type::Primitive(primitive) => match primitive {
                 PrimitiveType::Bool => SymValue::bool_arg(ctxt, arg),
@@ -362,7 +374,7 @@ impl<'smt> SymValue<'smt> {
         operands: &[&SymValue<'smt>],
         func: F,
         base_cond: &SmtExpr<'smt>,
-    ) -> Self
+    ) -> Result<Self>
     where
         F: Fn(&[&SmtExpr<'smt>]) -> SmtExpr<'smt>,
     {
@@ -386,7 +398,7 @@ impl<'smt> SymValue<'smt> {
                 .fold(base_cond.clone(), |acc, variant| acc.and(&variant.cond));
 
             // check feasibility
-            if !ctxt.is_feasible_assume_no_unknown(&[&cond]) {
+            if !ctxt.is_feasible_assume_solvable(&[&cond])? {
                 continue;
             }
 
@@ -395,9 +407,12 @@ impl<'smt> SymValue<'smt> {
             let expr = (func)(&parts);
 
             // check duplicates
-            let dup = variants
-                .iter_mut()
-                .find(|repr| !ctxt.is_feasible_assume_no_unknown(&[&repr.expr.ne(&expr)]));
+            let mut dup = None;
+            for repr in variants.iter_mut() {
+                if !ctxt.is_feasible_assume_solvable(&[&repr.expr.ne(&expr)])? {
+                    dup = Some(repr);
+                }
+            }
 
             if let Some(item) = dup {
                 // join the conditions
@@ -409,93 +424,93 @@ impl<'smt> SymValue<'smt> {
         }
 
         // done
-        Self { ctxt, variants }
+        Ok(Self { ctxt, variants })
     }
 
     // bool operations
-    pub fn not(&self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn not(&self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_unary!(not, self, cond)
     }
 
-    pub fn and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(and, self, rhs, cond)
     }
 
-    pub fn or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(or, self, rhs, cond)
     }
 
     // bitvec operations
-    pub fn add(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn add(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(add, self, rhs, cond)
     }
 
-    pub fn sub(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn sub(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(sub, self, rhs, cond)
     }
 
-    pub fn mul(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn mul(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(mul, self, rhs, cond)
     }
 
-    pub fn div(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn div(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(div, self, rhs, cond)
     }
 
-    pub fn rem(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn rem(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(rem, self, rhs, cond)
     }
 
-    pub fn cast_u8(&self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn cast_u8(&self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_unary!(cast_u8, self, cond)
     }
 
-    pub fn cast_u64(&self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn cast_u64(&self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_unary!(cast_u64, self, cond)
     }
 
-    pub fn cast_u128(&self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn cast_u128(&self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_unary!(cast_u128, self, cond)
     }
 
-    pub fn bit_and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn bit_and(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(bit_and, self, rhs, cond)
     }
 
-    pub fn bit_or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn bit_or(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(bit_or, self, rhs, cond)
     }
 
-    pub fn bit_xor(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn bit_xor(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(bit_xor, self, rhs, cond)
     }
 
-    pub fn shl(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn shl(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(shl, self, rhs, cond)
     }
 
-    pub fn shr(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn shr(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(shr, self, rhs, cond)
     }
 
-    pub fn gt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn gt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(gt, self, rhs, cond)
     }
 
-    pub fn ge(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn ge(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(ge, self, rhs, cond)
     }
 
-    pub fn le(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn le(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(le, self, rhs, cond)
     }
 
-    pub fn lt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn lt(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(lt, self, rhs, cond)
     }
 
     // struct operations
-    pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Vec<Self> {
+    pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Result<Vec<Self>> {
         let ctxt = self.ctxt;
 
         // initialize the unpacked fields
@@ -519,10 +534,12 @@ impl<'smt> SymValue<'smt> {
                 let field_sym = results.get_mut(i).unwrap();
 
                 // check duplicates
-                let dup = field_sym
-                    .variants
-                    .iter_mut()
-                    .find(|repr| !ctxt.is_feasible_assume_no_unknown(&[&repr.expr.ne(&expr)]));
+                let mut dup = None;
+                for repr in field_sym.variants.iter_mut() {
+                    if !ctxt.is_feasible_assume_solvable(&[&repr.expr.ne(&expr)])? {
+                        dup = Some(repr);
+                    }
+                }
 
                 if let Some(item) = dup {
                     // join the conditions
@@ -538,15 +555,15 @@ impl<'smt> SymValue<'smt> {
         }
 
         // done
-        results
+        Ok(results)
     }
 
     // generic operations
-    pub fn eq(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn eq(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(eq, self, rhs, cond)
     }
 
-    pub fn ne(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Self {
+    pub fn ne(&self, rhs: &Self, cond: &SmtExpr<'smt>) -> Result<Self> {
         sym_op_binary!(ne, self, rhs, cond)
     }
 }
@@ -615,7 +632,7 @@ impl<'smt> SymMemCell<'smt> {
         }
     }
 
-    fn store(&mut self, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) {
+    fn store(&mut self, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) -> Result<()> {
         let ctxt = self.ctxt;
 
         // collect newly added slots
@@ -623,7 +640,7 @@ impl<'smt> SymMemCell<'smt> {
         for variant in &sym.variants {
             // filter infeasible read
             let new_slot_cond = variant.cond.and(cond);
-            if !ctxt.is_feasible_assume_no_unknown(&[&new_slot_cond]) {
+            if !ctxt.is_feasible_assume_solvable(&[&new_slot_cond])? {
                 continue;
             }
 
@@ -640,14 +657,24 @@ impl<'smt> SymMemCell<'smt> {
         }
 
         // remove dead records
-        self.slots
-            .retain(|slot| ctxt.is_feasible_assume_no_unknown(&[&slot.cond]));
+        let mut del_slots = vec![];
+        for (i, slot) in self.slots.iter().enumerate() {
+            if !ctxt.is_feasible_assume_solvable(&[&slot.cond])? {
+                del_slots.push(i);
+            }
+        }
+        for (i, slot_index) in del_slots.into_iter().enumerate() {
+            self.slots.remove(slot_index - i);
+        }
 
         // add newly created slots
         self.slots.append(&mut new_slots);
+
+        // done
+        Ok(())
     }
 
-    fn load(&mut self, cond: &SmtExpr<'smt>, extract: bool) -> SymValue<'smt> {
+    fn load(&mut self, cond: &SmtExpr<'smt>, extract: bool) -> Result<SymValue<'smt>> {
         let ctxt = self.ctxt;
         let mut variants = vec![];
 
@@ -657,7 +684,7 @@ impl<'smt> SymMemCell<'smt> {
             let repr_cond = slot.cond.and(cond);
 
             // filter infeasible slots
-            if !ctxt.is_feasible_assume_no_unknown(&[&repr_cond]) {
+            if !ctxt.is_feasible_assume_solvable(&[&repr_cond])? {
                 continue;
             }
 
@@ -676,10 +703,10 @@ impl<'smt> SymMemCell<'smt> {
         }
 
         // done
-        SymValue {
+        Ok(SymValue {
             ctxt: self.ctxt,
             variants,
-        }
+        })
     }
 }
 
@@ -700,42 +727,49 @@ impl<'smt> SymFrame<'smt> {
         self.locals.get_mut(index).unwrap()
     }
 
-    pub fn store_local(&mut self, index: TempIndex, sym: &SymValue<'smt>, cond: &SmtExpr<'smt>) {
+    pub fn store_local(
+        &mut self,
+        index: TempIndex,
+        sym: &SymValue<'smt>,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<()> {
         let cell = self.get_local_mut(index);
-        cell.store(sym, cond);
+        cell.store(sym, cond)?;
         debug!("> [store {}]", index);
         debug!("> sym: {}", sym);
         debug!("> cell: {}", cell);
         debug!("> cond: {}", cond);
+        Ok(())
     }
 
-    pub fn move_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn move_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> Result<SymValue<'smt>> {
         let cell = self.get_local_mut(index);
-        let sym = cell.load(cond, true);
+        let sym = cell.load(cond, true)?;
         debug!("> [move {}]", index);
         debug!("> sym: {}", sym);
         debug!("> cell: {}", cell);
         debug!("> cond: {}", cond);
-        sym
+        Ok(sym)
     }
 
-    pub fn copy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> SymValue<'smt> {
+    pub fn copy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> Result<SymValue<'smt>> {
         let cell = self.get_local_mut(index);
-        let sym = cell.load(cond, false);
+        let sym = cell.load(cond, false)?;
         debug!("> [copy {}]", index);
         debug!("> sym: {}", sym);
         debug!("> cell: {}", cell);
         debug!("> cond: {}", cond);
-        sym
+        Ok(sym)
     }
 
-    pub fn destroy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) {
+    pub fn destroy_local(&mut self, index: TempIndex, cond: &SmtExpr<'smt>) -> Result<()> {
         let cell = self.get_local_mut(index);
-        cell.load(cond, true);
+        cell.load(cond, true)?;
         debug!("> [destroy {}]", index);
         debug!("> cell: {}", cell);
         debug!("> cond: {}", cond);
         // TODO: check if any slots left
+        Ok(())
     }
 }
 

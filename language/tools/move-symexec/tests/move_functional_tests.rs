@@ -199,8 +199,17 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             .collect();
 
         // symbolize it
-        self.controller
-            .symbolize(&signers, &sym_args, &type_tags, None, &[], true, true, true)?;
+        self.controller.symbolize(
+            &signers,
+            &sym_args,
+            &type_tags,
+            None,
+            &[],
+            true,
+            true,
+            true,
+            false, // TODO: enable strict mode when development is done
+        )?;
 
         // now pop the stack to remove the script
         self.controller.pop()

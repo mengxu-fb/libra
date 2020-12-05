@@ -141,6 +141,10 @@ enum OpCommand {
         /// Output the type graph in flattened listing
         #[structopt(long = "output-type-graph-listing")]
         output_type_graph_listing: bool,
+
+        /// Strict mode, any failure in the symbolic VM is not allowed
+        #[structopt(long = "strict")]
+        strict: bool,
     },
 
     /// Push the state stack:
@@ -243,6 +247,7 @@ impl MoveController {
         output_exec_graph: bool,
         output_exec_graph_stats: bool,
         output_type_graph_listing: bool,
+        strict: bool,
     ) -> Result<()> {
         // get the script
         let mut scripts = self.builder.get_compiled_scripts_all();
@@ -298,7 +303,7 @@ impl MoveController {
         }
 
         // symbolize it
-        symbolizer.symbolize(signers, sym_args)
+        symbolizer.symbolize(signers, sym_args, strict)
     }
 
     pub fn push(&mut self) -> Result<()> {
@@ -346,6 +351,7 @@ impl MoveController {
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,
+                strict,
             } => self.symbolize(
                 &signers,
                 &sym_args,
@@ -355,6 +361,7 @@ impl MoveController {
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,
+                strict,
             ),
             OpCommand::Push => self.push(),
             OpCommand::Pop => self.pop(),

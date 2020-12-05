@@ -1,6 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::{bail, Result};
 use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
@@ -163,7 +164,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         &self,
         sigs_opt: Option<&[AccountAddress]>,
         sym_args: &[SymTransactionArgument],
-    ) {
+    ) -> Result<()> {
         // get the script exec unit to kickstart the symbolization
         let script_main = self.oracle.get_script_exec_unit();
         let script_data = script_main.get_target();
@@ -180,7 +181,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     &self.smt_ctxt,
                     *signer,
                     &self.smt_ctxt.bool_const(true),
-                ));
+                )?);
             }
         }
 
@@ -191,7 +192,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 &self.smt_ctxt,
                 &params.get(arg_index_start + i).unwrap().1,
                 arg,
-            ));
+            )?);
         }
         debug_assert_eq!(sym_inputs.len(), script_data.get_parameter_count());
 
@@ -205,7 +206,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     .unwrap(),
                 sym_arg,
                 &self.smt_ctxt.bool_const(true),
-            );
+            )?;
         }
         for (input_index, local_index) in &script_main.func_data.param_proxy_map {
             debug!("Argument {}", input_index);
@@ -213,7 +214,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 *local_index,
                 sym_inputs.get(*input_index).unwrap(),
                 &self.smt_ctxt.bool_const(true),
-            );
+            )?;
         }
         let mut call_stack = vec![init_frame];
 
@@ -282,7 +283,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug!("Reaching condition: {}", reach_cond);
 
                     // if this block is not even reachable, shortcut the execution
-                    if !self.smt_ctxt.is_feasible_assume_no_unknown(&[&reach_cond]) {
+                    if !self.smt_ctxt.is_feasible_assume_solvable(&[&reach_cond])? {
                         for (dst_scc_id, dst_block_id) in outgoing_edges {
                             scc_info.put_edge_cond(
                                 scc_id,
@@ -304,7 +305,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         &outgoing_edges,
                         &mut scc_info,
                         &mut call_stack,
-                    );
+                    )?;
 
                     // pop the call stack if this is a return block
                     if is_return_block {
@@ -321,6 +322,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         // we should have nothing left in the stack after execution
         debug_assert!(scc_stack.is_empty());
         debug_assert!(call_stack.is_empty());
+
+        // done
+        Ok(())
     }
 
     fn symbolize_block<'smt>(
@@ -331,7 +335,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
         scc_info: &mut SymSccInfo<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
-    ) -> bool {
+    ) -> Result<bool> {
         let func_env = block.exec_unit;
         let current_frame = call_stack.last_mut().unwrap();
         for (pos, instruction) in block.instructions.iter().enumerate() {
@@ -345,12 +349,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     match kind {
                         // TODO: borrow analysis treats Move and Store equally, follow suite here
                         AssignKind::Move | AssignKind::Store => {
-                            let sym = current_frame.move_local(*src, reach_cond);
-                            current_frame.store_local(*dst, &sym, reach_cond);
+                            let sym = current_frame.move_local(*src, reach_cond)?;
+                            current_frame.store_local(*dst, &sym, reach_cond)?;
                         }
                         AssignKind::Copy => {
-                            let sym = current_frame.copy_local(*src, reach_cond);
-                            current_frame.store_local(*dst, &sym, reach_cond);
+                            let sym = current_frame.copy_local(*src, reach_cond)?;
+                            current_frame.store_local(*dst, &sym, reach_cond)?;
                         }
                     }
                 }
@@ -359,23 +363,23 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         // builtins
                         Operation::Destroy => {
                             for idx in args {
-                                current_frame.destroy_local(*idx, reach_cond);
+                                current_frame.destroy_local(*idx, reach_cond)?;
                             }
                         }
-                        _ => panic!("Operation not supported yet"),
+                        _ => bail!("Operation not supported yet"),
                     }
                 }
                 Bytecode::Ret(..) => {
                     // this block is a return block
                     debug_assert_eq!(pos + 1, block.instructions.len());
-                    return true;
+                    return Ok(true);
                 }
                 Bytecode::Load(_, dst, val) => {
-                    let sym = self.symbolize_constant(val, reach_cond);
-                    current_frame.store_local(*dst, &sym, reach_cond);
+                    let sym = self.symbolize_constant(val, reach_cond)?;
+                    current_frame.store_local(*dst, &sym, reach_cond)?;
                 }
-                Bytecode::Branch(..) => {}
-                Bytecode::Jump(..) => {}
+                Bytecode::Branch(..) => bail!("Operation not supported yet"),
+                Bytecode::Jump(..) => bail!("Operation not supported yet"),
                 Bytecode::Abort(..) => {
                     // TODO: solve for reachable inputs
                 }
@@ -385,14 +389,14 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // the block is not a return block
-        false
+        Ok(false)
     }
 
     fn symbolize_constant<'smt>(
         &'smt self,
         val: &Constant,
         cond: &SmtExpr<'smt>,
-    ) -> SymValue<'smt> {
+    ) -> Result<SymValue<'smt>> {
         match val {
             Constant::Bool(v) => SymValue::bool_const(&self.smt_ctxt, *v, cond),
             Constant::U8(v) => SymValue::u8_const(&self.smt_ctxt, *v, cond),

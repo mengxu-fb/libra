@@ -81,6 +81,7 @@ impl<'env> MoveSymbolizer<'env> {
         &self,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
+        strict: bool,
     ) -> Result<()> {
         // check that we got the correct number of symbolic arguments
         let val_arg_sigs = self.script.signature_at(self.script.as_inner().parameters);
@@ -97,10 +98,19 @@ impl<'env> MoveSymbolizer<'env> {
 
         // leave the rest to the VM
         let vm = SymVM::new(&self.oracle, &self.exec_graph, &self.type_graph);
-        vm.interpret(if use_signers { Some(signers) } else { None }, sym_args);
+        let result = vm.interpret(if use_signers { Some(signers) } else { None }, sym_args);
 
-        // done
-        Ok(())
+        // fail only when we are in strict mode
+        // TODO: this is a temporary hack. Once the symbolic engine is robust enough, this "strict"
+        // flag should be removed
+        if strict {
+            result
+        } else {
+            if result.is_err() {
+                warn!("Symbolic VM failed with error: {}", result.unwrap_err());
+            }
+            Ok(())
+        }
     }
 
     pub fn save_exec_graph(&self) -> Result<()> {

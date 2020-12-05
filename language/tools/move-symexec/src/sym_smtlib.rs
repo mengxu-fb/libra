@@ -1,6 +1,7 @@
 // Copyright (c) The Libra Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
+use anyhow::{bail, Result};
 use std::{
     cmp::Ordering,
     collections::HashMap,
@@ -321,13 +322,12 @@ impl SmtCtxt {
     }
 
     // TODO: this is not reasonable, but for simplicity...
-    pub fn is_feasible_assume_no_unknown(&self, constraints: &[&SmtExpr]) -> bool {
+    pub fn is_feasible_assume_solvable(&self, constraints: &[&SmtExpr]) -> Result<bool> {
         match self.solve(constraints) {
-            SmtResult::SAT => true,
-            SmtResult::UNSAT => false,
+            SmtResult::SAT => Ok(true),
+            SmtResult::UNSAT => Ok(false),
             SmtResult::UNKNOWN => {
-                // TODO: assume that things are decidable for now
-                panic!("SMT solver returns an unknown result");
+                bail!("SMT solver returns an unknown result");
             }
         }
     }
