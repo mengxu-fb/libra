@@ -247,7 +247,7 @@ impl<'env> ExecGraph<'env> {
     ) -> (ExecBlockId, HashSet<ExecBlockId>) {
         // prepare
         let instructions = exec_unit.get_instructions();
-        let cfg = exec_unit.get_cfg();
+        let cfg = &exec_unit.func_cfg;
 
         // maps instruction offset within one context to exec block id
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();

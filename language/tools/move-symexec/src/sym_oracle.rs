@@ -29,7 +29,7 @@ pub(crate) struct SymFuncInfo<'env> {
     func_id: SymFuncId,
     pub func_env: FunctionEnv<'env>,
     pub func_data: FunctionTargetData,
-    func_cfg: StacklessControlFlowGraph,
+    pub func_cfg: StacklessControlFlowGraph,
     func_target: OnceCell<FunctionTarget<'env>>,
 }
 
@@ -69,10 +69,6 @@ impl<'env> SymFuncInfo<'env> {
 
     pub fn get_instructions(&self) -> &[Bytecode] {
         &self.func_data.code
-    }
-
-    pub fn get_cfg(&self) -> &StacklessControlFlowGraph {
-        &self.func_cfg
     }
 
     pub fn get_target(&'env self) -> &FunctionTarget<'env> {

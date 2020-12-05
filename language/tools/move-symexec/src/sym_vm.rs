@@ -166,6 +166,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
     ) {
         // get the script exec unit to kickstart the symbolization
         let script_main = self.oracle.get_script_exec_unit();
+        let script_data = script_main.get_target();
         let params = script_main.func_env.get_parameters();
 
         // turn signers into values
@@ -192,12 +193,29 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 arg,
             ));
         }
+        debug_assert_eq!(sym_inputs.len(), script_data.get_parameter_count());
 
-        // prepare the first frame, in particular
-        let mut call_stack = vec![SymFrame::new(
-            &self.smt_ctxt,
-            script_main.func_data.local_types.len(),
-        )];
+        // prepare the first frame, in particular, the input arguments
+        let mut init_frame = SymFrame::new(&self.smt_ctxt, script_main.func_data.local_types.len());
+        for (i, sym_arg) in sym_inputs.iter().enumerate() {
+            debug!("Argument {}", i);
+            init_frame.store_local(
+                *script_data
+                    .get_local_index(params.get(i).unwrap().0)
+                    .unwrap(),
+                sym_arg,
+                &self.smt_ctxt.bool_const(true),
+            );
+        }
+        for (input_index, local_index) in &script_main.func_data.param_proxy_map {
+            debug!("Argument {}", input_index);
+            init_frame.store_local(
+                *local_index,
+                sym_inputs.get(*input_index).unwrap(),
+                &self.smt_ctxt.bool_const(true),
+            );
+        }
+        let mut call_stack = vec![init_frame];
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
         // i.e., an scc containing a single block will not be able to form a stack.
