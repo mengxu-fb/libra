@@ -1,0 +1,3 @@
+compile move_src
+execute -v true
+symbolize -v S::v_bool --output-exec-graph

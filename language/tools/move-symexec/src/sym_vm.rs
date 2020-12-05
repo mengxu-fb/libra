@@ -5,7 +5,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
 
-use bytecode::stackless_bytecode::{Bytecode, Constant};
+use bytecode::stackless_bytecode::{AssignKind, Bytecode, Constant};
 use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
 
@@ -323,9 +323,19 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 instruction.display(func_env.get_target())
             );
             match instruction {
-                // applicable to spec only
-                Bytecode::SpecBlock(..) => {}
-                Bytecode::Assign(..) => {}
+                Bytecode::Assign(_, dst, src, kind) => {
+                    match kind {
+                        // TODO: borrow analysis treats Move and Store equally, follow suite here
+                        AssignKind::Move | AssignKind::Store => {
+                            let sym = current_frame.move_local(*src, reach_cond);
+                            current_frame.store_local(*dst, &sym, reach_cond);
+                        }
+                        AssignKind::Copy => {
+                            let sym = current_frame.copy_local(*src, reach_cond);
+                            current_frame.store_local(*dst, &sym, reach_cond);
+                        }
+                    }
+                }
                 Bytecode::Call(..) => {}
                 Bytecode::Ret(..) => {
                     // this block is a return block
@@ -338,13 +348,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 }
                 Bytecode::Branch(..) => {}
                 Bytecode::Jump(..) => {}
-                // abort
                 Bytecode::Abort(..) => {
                     // TODO: check for reachability
                 }
                 // nop or equivalent
-                Bytecode::Label(..) => {}
-                Bytecode::Nop(..) => {}
+                Bytecode::Label(..) | Bytecode::SpecBlock(..) | Bytecode::Nop(..) => {}
             };
         }
 
