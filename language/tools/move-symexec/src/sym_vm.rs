@@ -5,7 +5,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
 
-use bytecode::stackless_bytecode::{AssignKind, Bytecode, Constant};
+use bytecode::stackless_bytecode::{AssignKind, Bytecode, Constant, Operation};
 use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
 
@@ -354,7 +354,17 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         }
                     }
                 }
-                Bytecode::Call(..) => {}
+                Bytecode::Call(_, rets, op, args) => {
+                    match op {
+                        // builtins
+                        Operation::Destroy => {
+                            for idx in args {
+                                current_frame.destroy_local(*idx, reach_cond);
+                            }
+                        }
+                        _ => panic!("Operation not supported yet"),
+                    }
+                }
                 Bytecode::Ret(..) => {
                     // this block is a return block
                     debug_assert_eq!(pos + 1, block.instructions.len());
@@ -367,7 +377,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Branch(..) => {}
                 Bytecode::Jump(..) => {}
                 Bytecode::Abort(..) => {
-                    // TODO: check for reachability
+                    // TODO: solve for reachable inputs
                 }
                 // nop or equivalent
                 Bytecode::Label(..) | Bytecode::SpecBlock(..) | Bytecode::Nop(..) => {}
@@ -375,7 +385,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // the block is not a return block
-        return false;
+        false
     }
 
     fn symbolize_constant<'smt>(
