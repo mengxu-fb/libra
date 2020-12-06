@@ -45,7 +45,7 @@ impl fmt::Display for ExecBlockId {
 /// This is the basic block (i.e., the node) in the eCFG
 pub(crate) struct ExecBlock<'env> {
     /// A unique identifier for the exec block
-    block_id: ExecBlockId,
+    pub block_id: ExecBlockId,
     /// The context (module, function) where this block lives
     pub exec_unit: &'env SymFuncInfo<'env>,
     /// The starting offset of the instructions in code context
@@ -107,7 +107,8 @@ impl<'env> fmt::Display for ExecBlock<'env> {
 }
 
 /// Types of control-flow transitions
-enum ExecFlowType {
+#[derive(Clone)]
+pub(crate) enum ExecFlowType {
     /// Conditional or unconditional (if condition is None) branch
     Branch(Option<bool>),
     /// Function call
@@ -231,6 +232,15 @@ impl<'env> ExecGraph<'env> {
 
     pub fn get_block_by_block_id(&self, block_id: ExecBlockId) -> &ExecBlock<'env> {
         self.get_block_by_node(self.get_node_by_block_id(block_id))
+    }
+
+    fn get_flow_by_block_ids(
+        &self,
+        src_block_id: ExecBlockId,
+        dst_block_id: ExecBlockId,
+    ) -> ExecFlowType {
+        let edge = self.edge_map.get(&(src_block_id, dst_block_id)).unwrap();
+        self.graph.edge_weight(*edge).unwrap().flow_type.clone()
     }
 
     // core
@@ -1174,7 +1184,7 @@ pub(crate) enum ExecWalkerStep {
         scc_id: ExecSccId,
         block_id: ExecBlockId,
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
-        outgoing_edges: Vec<(ExecSccId, ExecBlockId)>,
+        outgoing_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
     },
 }
 
@@ -1249,7 +1259,17 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         .get_incoming_edges_for_block(scc_id, block_id);
                     let outgoing_edges = state
                         .scc_graph
-                        .get_outgoing_edges_for_block(scc_id, block_id);
+                        .get_outgoing_edges_for_block(scc_id, block_id)
+                        .into_iter()
+                        .map(|(dst_scc_id, dst_block_id)| {
+                            (
+                                dst_scc_id,
+                                dst_block_id,
+                                self.exec_graph
+                                    .get_flow_by_block_ids(block_id, dst_block_id),
+                            )
+                        })
+                        .collect();
                     Some(ExecWalkerStep::Block {
                         scc_id,
                         block_id,

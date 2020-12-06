@@ -11,7 +11,9 @@ use move_core_types::account_address::AccountAddress;
 use spec_lang::ty::{PrimitiveType, Type};
 
 use crate::{
-    sym_exec_graph::{ExecBlock, ExecBlockId, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep},
+    sym_exec_graph::{
+        ExecBlock, ExecBlockId, ExecFlowType, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep,
+    },
     sym_oracle::SymOracle,
     sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::{ExecStructInfo, TypeGraph},
@@ -274,9 +276,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         "Outgoing edges: [{}]",
                         outgoing_edges
                             .iter()
-                            .map(|(edge_scc_id, edge_block_id)| format!(
-                                "{}::{}",
-                                edge_scc_id, edge_block_id
+                            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
+                                "{}::{}-({})",
+                                edge_scc_id, edge_block_id, flow_type
                             ))
                             .join("-")
                     );
@@ -303,7 +305,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                     // if this block is not even reachable, shortcut the execution
                     if !self.smt_ctxt.is_feasible_assume_solvable(&[&reach_cond])? {
-                        for (dst_scc_id, dst_block_id) in outgoing_edges {
+                        for (dst_scc_id, dst_block_id, _) in outgoing_edges {
                             scc_info.put_edge_cond(
                                 scc_id,
                                 block_id,
@@ -354,7 +356,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         scc_id: ExecSccId,
         block: &ExecBlock<'env>,
         reach_cond: &SmtExpr<'smt>,
-        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_info: &mut SymSccInfo<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
     ) -> Result<bool> {
@@ -461,8 +463,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     }
                 }
                 Bytecode::Ret(_, rets) => {
-                    // this block is a return block
                     debug_assert_eq!(pos + 1, block.instructions.len());
+                    debug_assert_eq!(outgoing_edges.len(), 0);
+                    // mark that this block is a return block
                     current_frame.set_returns(rets);
                     return Ok(true);
                 }
@@ -470,9 +473,55 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     let sym = self.symbolize_constant(val, reach_cond)?;
                     current_frame.store_local(*dst, &sym, reach_cond)?;
                 }
-                Bytecode::Branch(..) => bail!("Operation not supported yet"),
-                Bytecode::Jump(..) => bail!("Operation not supported yet"),
+                Bytecode::Branch(_, _, _, idx) => {
+                    debug_assert_eq!(pos + 1, block.instructions.len());
+                    debug_assert_eq!(outgoing_edges.len(), 2);
+                    let sym = current_frame.copy_local(*idx, reach_cond)?;
+                    let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
+                    let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
+                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                        match flow_type {
+                            ExecFlowType::Branch(Some(true)) => scc_info.put_edge_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                cond_t.clone(),
+                            ),
+                            ExecFlowType::Branch(Some(false)) => scc_info.put_edge_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                cond_f.clone(),
+                            ),
+                            _ => panic!(
+                                "Invalid flow type for outgoing edges with branch instruction"
+                            ),
+                        }
+                    }
+                }
+                Bytecode::Jump(..) => {
+                    debug_assert_eq!(pos + 1, block.instructions.len());
+                    debug_assert_eq!(outgoing_edges.len(), 1);
+                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                        match flow_type {
+                            ExecFlowType::Branch(None) => scc_info.put_edge_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                reach_cond.clone(),
+                            ),
+                            _ => {
+                                panic!("Invalid flow type for outgoing edges with jump instruction")
+                            }
+                        }
+                    }
+                }
                 Bytecode::Abort(..) => {
+                    debug_assert_eq!(pos + 1, block.instructions.len());
+                    debug_assert_eq!(outgoing_edges.len(), 0);
                     // TODO: solve for reachable inputs
                 }
                 // nop or equivalent
