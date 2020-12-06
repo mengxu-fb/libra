@@ -736,6 +736,35 @@ impl<'smt> SmtExpr<'smt> {
             })
             .collect()
     }
+
+    pub fn get_field(&self, field_num: usize) -> Self {
+        let ctxt = self.ctxt;
+
+        // get struct info
+        let struct_info = if let SmtKind::Struct { struct_name } = &self.kind {
+            ctxt.struct_map.get(struct_name).unwrap()
+        } else {
+            panic!("Only structs may have fields");
+        };
+
+        // get field
+        let struct_ast: [Z3_ast; 1] = [self.ast];
+        let field_ast = unsafe {
+            Z3_mk_app(
+                ctxt.ctxt,
+                *struct_info.field_getters.get(field_num).unwrap(),
+                1,
+                struct_ast.as_ptr(),
+            )
+        };
+
+        // post-processing
+        let kind = struct_info.field_kinds.get(field_num).unwrap().clone();
+        let ast = ctxt.postprocess(field_ast, &kind);
+
+        // done
+        SmtExpr { ast, ctxt, kind }
+    }
 }
 
 // unit testing for the smtlib

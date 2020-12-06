@@ -142,13 +142,13 @@ macro_rules! make_sym_from_arg {
 }
 
 macro_rules! sym_op_unary {
-    ($func:tt, $sym:ident, $cond:ident) => {{
+    ($func:tt, $sym:ident, $cond:ident $(,$args:ident)*) => {{
         SymValue::op(
             $sym.ctxt,
             &[$sym],
             |parts| {
                 debug_assert_eq!(parts.len(), 1);
-                parts[0].$func()
+                parts[0].$func($($args,)*)
             },
             $cond,
         )
@@ -156,13 +156,13 @@ macro_rules! sym_op_unary {
 }
 
 macro_rules! sym_op_binary {
-    ($func:tt, $lhs:ident, $rhs:ident, $cond:ident) => {{
+    ($func:tt, $lhs:ident, $rhs:ident, $cond:ident $(,$args:ident)*) => {{
         SymValue::op(
             $lhs.ctxt,
             &[$lhs, $rhs],
             |parts| {
                 debug_assert_eq!(parts.len(), 2);
-                parts[0].$func(parts[1])
+                parts[0].$func(parts[1], $($args,)*)
             },
             $cond,
         )
@@ -506,6 +506,10 @@ impl<'smt> SymValue<'smt> {
     }
 
     // struct operations
+    pub fn get_field(&self, field_num: usize, cond: &SmtExpr<'smt>) -> Result<Self> {
+        sym_op_unary!(get_field, self, cond, field_num)
+    }
+
     pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Result<Vec<Self>> {
         let ctxt = self.ctxt;
 

@@ -561,6 +561,13 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 current_frame.store_local(*dst, field, reach_cond)?;
                             }
                         }
+                        Operation::GetField(_, _, _, field_num) => {
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 1);
+                            let sym = current_frame.copy_local(args[0], reach_cond)?;
+                            let field_sym = sym.get_field(*field_num, reach_cond)?;
+                            current_frame.store_local(rets[0], &field_sym, reach_cond)?;
+                        }
                         // invoke
                         Operation::Function(module_id, func_id, _) => {
                             let func_info_opt =
