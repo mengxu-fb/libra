@@ -14,7 +14,7 @@ use crate::{
     sym_exec_graph::{
         ExecBlock, ExecBlockId, ExecFlowType, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep,
     },
-    sym_oracle::SymOracle,
+    sym_oracle::{SymFuncInfo, SymOracle},
     sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::{ExecStructInfo, TypeGraph},
     sym_typing::ExecTypeArg,
@@ -94,6 +94,16 @@ impl<'smt> SymSccInfo<'smt> {
         let exists = self.edge_conds.insert(key, condition);
         debug_assert!(exists.is_none());
     }
+}
+
+/// The reason why this exec block is finished
+enum SymBlockTerm<'env, 'smt> {
+    Normal,
+    Ret,
+    Call {
+        func_info: &'env SymFuncInfo<'env>,
+        func_args: Vec<SymValue<'smt>>,
+    },
 }
 
 /// The symbolic interpreter that examines instructions one by one
@@ -181,6 +191,31 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
     }
 
+    fn prepare_frame<'smt>(
+        &'smt self,
+        func_info: &'env SymFuncInfo<'env>,
+        func_args: &[SymValue<'smt>],
+        cond: &SmtExpr<'smt>,
+        frame: &mut SymFrame<'smt>,
+    ) -> Result<()> {
+        let target = func_info.get_target();
+        let params = func_info.func_env.get_parameters();
+        debug_assert_eq!(func_args.len(), target.get_parameter_count());
+
+        // preload args into local slots
+        for (i, arg) in func_args.iter().enumerate() {
+            debug!("Argument {}", i);
+            frame.store_local(
+                *target.get_local_index(params.get(i).unwrap().0).unwrap(),
+                arg,
+                cond,
+            )?;
+        }
+
+        // done
+        Ok(())
+    }
+
     pub fn interpret(
         &self,
         sigs_opt: Option<&[AccountAddress]>,
@@ -188,7 +223,6 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
     ) -> Result<()> {
         // get the script exec unit to kickstart the symbolization
         let script_main = self.oracle.get_script_exec_unit();
-        let script_data = script_main.get_target();
         let params = script_main.func_env.get_parameters();
 
         // turn signers into values
@@ -215,28 +249,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 arg,
             )?);
         }
-        debug_assert_eq!(sym_inputs.len(), script_data.get_parameter_count());
 
         // prepare the first frame, in particular, the input arguments
         let mut init_frame = SymFrame::new(&self.smt_ctxt, script_main.func_data.local_types.len());
-        for (i, sym_arg) in sym_inputs.iter().enumerate() {
-            debug!("Argument {}", i);
-            init_frame.store_local(
-                *script_data
-                    .get_local_index(params.get(i).unwrap().0)
-                    .unwrap(),
-                sym_arg,
-                &self.smt_ctxt.bool_const(true),
-            )?;
-        }
-        for (input_index, local_index) in &script_main.func_data.param_proxy_map {
-            debug!("Argument {}", input_index);
-            init_frame.store_local(
-                *local_index,
-                sym_inputs.get(*input_index).unwrap(),
-                &self.smt_ctxt.bool_const(true),
-            )?;
-        }
+        self.prepare_frame(
+            script_main,
+            &sym_inputs,
+            &self.smt_ctxt.bool_const(true),
+            &mut init_frame,
+        )?;
         let mut call_stack = vec![init_frame];
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
@@ -319,7 +340,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                     // now symbolize the block
                     let block = self.exec_graph.get_block_by_block_id(block_id);
-                    let is_return_block = self.symbolize_block(
+                    let block_term = self.symbolize_block(
                         scc_id,
                         block,
                         &reach_cond,
@@ -329,8 +350,30 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     )?;
 
                     // pop the call stack if this is a return block
-                    if is_return_block {
-                        let mut current_frame = call_stack.pop().unwrap();
+                    match block_term {
+                        SymBlockTerm::Normal => {}
+                        SymBlockTerm::Ret => {
+                            let mut last_frame = call_stack.pop().unwrap();
+                            if let Some(current_frame) = call_stack.last_mut() {
+                                current_frame.receive_returns(&mut last_frame, &reach_cond)?;
+                            }
+                        }
+                        SymBlockTerm::Call {
+                            func_info,
+                            func_args,
+                        } => {
+                            // prepare the next frame, in particular, the function arguments
+                            let mut next_frame = SymFrame::new(
+                                &self.smt_ctxt,
+                                func_info.func_data.local_types.len(),
+                            );
+                            self.prepare_frame(
+                                func_info,
+                                &func_args,
+                                &reach_cond,
+                                &mut next_frame,
+                            )?;
+                        }
                     }
                 }
             }
@@ -339,7 +382,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         // we should have nothing left in the stack after execution, unless the execution runs into
         // a function that only aborts but never returns
         if let Some(call_frame) = call_stack.pop() {
-            debug_assert!(call_frame.get_returns().is_none());
+            debug_assert!(!call_frame.has_returns());
         } else {
             // pop the base scc
             let base_scc = scc_stack.pop().unwrap();
@@ -359,7 +402,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_info: &mut SymSccInfo<'smt>,
         call_stack: &mut Vec<SymFrame<'smt>>,
-    ) -> Result<bool> {
+    ) -> Result<SymBlockTerm<'env, 'smt>> {
         let func_env = block.exec_unit;
         let current_frame = call_stack.last_mut().unwrap();
         for (pos, instruction) in block.instructions.iter().enumerate() {
@@ -458,6 +501,30 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         Operation::Neq => {
                             sym_op_binary!(args, rets, reach_cond, current_frame, ne);
                         }
+                        // invoke
+                        Operation::Function(module_id, func_id, _) => {
+                            let func_info_opt =
+                                self.oracle.get_tracked_function_by_spec(module_id, func_id);
+                            if let Some(func_info) = func_info_opt {
+                                debug_assert_eq!(pos + 1, block.instructions.len());
+                                // mark that this block is a call block
+                                current_frame.set_receive(rets);
+                                return Ok(SymBlockTerm::Call {
+                                    func_info,
+                                    func_args: args
+                                        .iter()
+                                        .map(|arg_index| {
+                                            current_frame.copy_local(*arg_index, reach_cond)
+                                        })
+                                        .collect::<Result<Vec<_>>>()?,
+                                });
+                            } else {
+                                // for system functions, this call must not be the lost instruction
+                                // of this exec block (in stackless control-flow graph)
+                                debug_assert_ne!(pos + 1, block.instructions.len());
+                                bail!("System functions not supported yet");
+                            }
+                        }
                         // others
                         _ => bail!("Operation not supported yet"),
                     }
@@ -467,7 +534,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug_assert_eq!(outgoing_edges.len(), 0);
                     // mark that this block is a return block
                     current_frame.set_returns(rets);
-                    return Ok(true);
+                    return Ok(SymBlockTerm::Ret);
                 }
                 Bytecode::Load(_, dst, val) => {
                     let sym = self.symbolize_constant(val, reach_cond)?;
@@ -530,7 +597,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // the block is not a return block
-        Ok(false)
+        Ok(SymBlockTerm::Normal)
     }
 
     fn symbolize_constant<'smt>(

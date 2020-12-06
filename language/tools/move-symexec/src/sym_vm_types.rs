@@ -714,7 +714,10 @@ impl<'smt> SymMemCell<'smt> {
 pub(crate) struct SymFrame<'smt> {
     /// A symbolic version of the struct used in concrete execution
     locals: Vec<SymMemCell<'smt>>,
-    /// Return values
+    /// Local indexes for receive values. Set when calls into another function
+    /// and cleared when that function returns
+    receive: Option<Vec<TempIndex>>,
+    /// Local indexes for return values. Set when return from this function
     returns: Option<Vec<TempIndex>>,
 }
 
@@ -722,6 +725,7 @@ impl<'smt> SymFrame<'smt> {
     pub fn new(ctxt: &'smt SmtCtxt, num_locals: usize) -> Self {
         Self {
             locals: (0..num_locals).map(|_| SymMemCell::new(ctxt)).collect(),
+            receive: None,
             returns: None,
         }
     }
@@ -781,8 +785,25 @@ impl<'smt> SymFrame<'smt> {
         self.returns = Some(rets.to_vec());
     }
 
-    pub fn get_returns(&self) -> Option<&[TempIndex]> {
-        self.returns.as_deref()
+    pub fn has_returns(&self) -> bool {
+        self.returns.is_some()
+    }
+
+    pub fn set_receive(&mut self, recs: &[TempIndex]) {
+        // NOTE: check that last call (if any) has returned
+        debug_assert!(self.receive.is_none());
+        self.receive = Some(recs.to_vec())
+    }
+
+    pub fn receive_returns(&mut self, frame: &mut Self, cond: &SmtExpr<'smt>) -> Result<()> {
+        let srcs = frame.returns.as_ref().unwrap().clone();
+        let dsts = self.receive.as_ref().unwrap().clone();
+        debug_assert_eq!(srcs.len(), dsts.len());
+        for (src, dst) in srcs.into_iter().zip(dsts.into_iter()) {
+            let sym = frame.copy_local(src, cond)?;
+            self.store_local(dst, &sym, cond)?;
+        }
+        Ok(())
     }
 }
 
