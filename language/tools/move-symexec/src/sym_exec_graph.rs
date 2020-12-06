@@ -140,11 +140,25 @@ impl fmt::Display for ExecFlowType {
 /// This is the control-flow transition (i.e., the edge) in the eCFG
 struct ExecFlow {
     /// The basic block where this flow goes from
-    src_block_id: ExecBlockId,
+    _src_block_id: ExecBlockId,
     /// The basic block where this flow goes into
-    dst_block_id: ExecBlockId,
+    _dst_block_id: ExecBlockId,
     /// The type of this flow
     flow_type: ExecFlowType,
+}
+
+impl ExecFlow {
+    pub fn new(
+        _src_block_id: ExecBlockId,
+        _dst_block_id: ExecBlockId,
+        flow_type: ExecFlowType,
+    ) -> Self {
+        Self {
+            _src_block_id,
+            _dst_block_id,
+            flow_type,
+        }
+    }
 }
 
 impl fmt::Display for ExecFlow {
@@ -208,11 +222,7 @@ impl<'env> ExecGraph<'env> {
         let edge_index = self.graph.add_edge(
             self.get_node_by_block_id(src_block_id),
             self.get_node_by_block_id(dst_block_id),
-            ExecFlow {
-                src_block_id,
-                dst_block_id,
-                flow_type,
-            },
+            ExecFlow::new(src_block_id, dst_block_id, flow_type),
         );
         let exists = self
             .edge_map

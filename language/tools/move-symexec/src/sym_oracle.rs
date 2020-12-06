@@ -143,12 +143,11 @@ impl hash::Hash for SymStructInfo<'_> {
 
 /// Bridges to the move-prover internals
 pub(crate) struct SymOracle<'env> {
-    global_env: &'env GlobalEnv,
     script_env: ModuleEnv<'env>,
     // tracked functions with two ways to look it up
     tracked_functions: HashMap<SymFuncId, SymFuncInfo<'env>>,
     tracked_functions_by_spec: HashMap<ModuleIdBySpec, HashMap<FunId, SymFuncId>>,
-    tracked_functions_by_move: HashMap<ModuleIdByMove, HashMap<Identifier, SymFuncId>>,
+    _tracked_functions_by_move: HashMap<ModuleIdByMove, HashMap<Identifier, SymFuncId>>,
     // defined structs with two ways to look it up
     defined_structs: HashMap<SymStructId, SymStructInfo<'env>>,
     defined_structs_by_spec: HashMap<ModuleIdBySpec, HashMap<StructId, SymStructId>>,
@@ -239,11 +238,10 @@ impl<'env> SymOracle<'env> {
 
         // done
         Self {
-            global_env,
             script_env,
             tracked_functions,
             tracked_functions_by_spec,
-            tracked_functions_by_move,
+            _tracked_functions_by_move: tracked_functions_by_move,
             defined_structs,
             defined_structs_by_spec,
             defined_structs_by_move,
@@ -263,12 +261,12 @@ impl<'env> SymOracle<'env> {
             .map(|sym_id| self.tracked_functions.get(sym_id).unwrap())
     }
 
-    pub fn get_tracked_function_by_move(
+    pub fn _get_tracked_function_by_move(
         &self,
         module_id: &ModuleIdByMove,
         func_id: &IdentStr,
     ) -> Option<&SymFuncInfo<'env>> {
-        self.tracked_functions_by_move
+        self._tracked_functions_by_move
             .get(module_id)
             .map(|funcs| funcs.get(func_id))
             .flatten()

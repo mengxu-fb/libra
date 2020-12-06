@@ -201,10 +201,6 @@ impl<'smt> SymValue<'smt> {
         make_sym_primitive!(ctxt, cond, bitvec_const_u128, val)
     }
 
-    fn uint_var(ctxt: &'smt SmtCtxt, var: &str, width: u16, cond: &SmtExpr<'smt>) -> Result<Self> {
-        make_sym_primitive!(ctxt, cond, bitvec_var, var, false, width)
-    }
-
     pub fn u8_var(ctxt: &'smt SmtCtxt, var: &str, cond: &SmtExpr<'smt>) -> Result<Self> {
         make_sym_primitive!(ctxt, cond, bitvec_var_u8, var)
     }
