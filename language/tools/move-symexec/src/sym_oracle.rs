@@ -5,9 +5,16 @@ use once_cell::sync::OnceCell;
 use std::{cmp, collections::HashMap, hash};
 
 use bytecode::{
+    borrow_analysis::BorrowAnalysisProcessor,
+    clean_and_optimize::CleanAndOptimizeProcessor,
+    eliminate_imm_refs::EliminateImmRefsProcessor,
+    eliminate_mut_refs::EliminateMutRefsProcessor,
     function_target::{FunctionTarget, FunctionTargetData},
+    function_target_pipeline::{FunctionTargetPipeline, FunctionTargetsHolder},
+    livevar_analysis::LiveVarAnalysisProcessor,
+    memory_instrumentation::MemoryInstrumentationProcessor,
+    reaching_def_analysis::ReachingDefProcessor,
     stackless_bytecode::Bytecode,
-    stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
 use move_core_types::{
@@ -34,10 +41,7 @@ pub(crate) struct SymFuncInfo<'env> {
 }
 
 impl<'env> SymFuncInfo<'env> {
-    fn new(func_id: SymFuncId, func_env: FunctionEnv<'env>) -> Self {
-        // generate stackless bytecode
-        let func_data = StacklessBytecodeGenerator::new(&func_env).generate_function();
-
+    fn new(func_id: SymFuncId, func_env: FunctionEnv<'env>, func_data: FunctionTargetData) -> Self {
         // generate control-flow graph
         let func_cfg = StacklessControlFlowGraph::new_forward(&func_data.code);
         debug_assert_eq!(func_cfg.entry_blocks().len(), 1);
@@ -161,6 +165,9 @@ impl<'env> SymOracle<'env> {
         let (tracked_function_envs, script_env) =
             collect_tracked_functions_and_script(global_env, inclusion, Some(exclusion));
 
+        // run prover passes
+        let mut function_targets = run_prover_passes(global_env);
+
         // build per-function record
         let mut counter = 0;
         let mut tracked_functions = HashMap::new();
@@ -175,7 +182,15 @@ impl<'env> SymOracle<'env> {
 
                 module_funcs_by_spec.insert(func_id, sym_id.clone());
                 module_funcs_by_move.insert(func_env.get_identifier(), sym_id.clone());
-                tracked_functions.insert(sym_id, SymFuncInfo::new(sym_id.clone(), func_env));
+
+                let func_data = function_targets
+                    .targets
+                    .remove(&func_env.get_qualified_id())
+                    .unwrap();
+                tracked_functions.insert(
+                    sym_id,
+                    SymFuncInfo::new(sym_id.clone(), func_env, func_data),
+                );
             }
             // checks that each `Idenifier` is unique, should never fail
             debug_assert_eq!(module_funcs_by_spec.len(), module_funcs_by_move.len());
@@ -298,4 +313,31 @@ impl<'env> SymOracle<'env> {
     pub fn num_tracked_functions(&self) -> usize {
         self.tracked_functions.len()
     }
+}
+
+// prover passes
+fn run_prover_passes<'env>(global_env: &'env GlobalEnv) -> FunctionTargetsHolder {
+    // build the targets
+    let mut targets = FunctionTargetsHolder::default();
+    for module_env in global_env.get_modules() {
+        for func_env in module_env.get_functions() {
+            targets.add_target(&func_env)
+        }
+    }
+
+    // build the pipeline
+    let mut pipeline = FunctionTargetPipeline::default();
+    pipeline.add_processor(EliminateImmRefsProcessor::new());
+    pipeline.add_processor(EliminateMutRefsProcessor::new());
+    pipeline.add_processor(ReachingDefProcessor::new());
+    pipeline.add_processor(LiveVarAnalysisProcessor::new());
+    pipeline.add_processor(BorrowAnalysisProcessor::new());
+    pipeline.add_processor(MemoryInstrumentationProcessor::new());
+    pipeline.add_processor(CleanAndOptimizeProcessor::new());
+
+    // run the pipeline
+    pipeline.run(global_env, &mut targets, None);
+
+    // done
+    targets
 }

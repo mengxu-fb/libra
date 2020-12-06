@@ -14,7 +14,7 @@ use std::{collections::BTreeMap, fs};
 /// manipulate them as part of a transformation pipeline.
 #[derive(Debug, Default)]
 pub struct FunctionTargetsHolder {
-    targets: BTreeMap<QualifiedId<FunId>, FunctionTargetData>,
+    pub targets: BTreeMap<QualifiedId<FunId>, FunctionTargetData>,
 }
 
 /// A trait for processing a function target. Takes as parameter a target holder which can be
