@@ -122,7 +122,7 @@ macro_rules! sym_op_binary {
         debug_assert_eq!($args.len(), 2);
         debug_assert_eq!($rets.len(), 1);
         let lhs = $frame.copy_local($args[0], $cond)?;
-        let rhs = $frame.copy_local($args[0], $cond)?;
+        let rhs = $frame.copy_local($args[1], $cond)?;
         $frame.store_local($rets[0], &lhs.$func(&rhs, $cond)?, $cond)?;
     };
 }
