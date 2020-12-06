@@ -8,7 +8,10 @@ use std::collections::HashMap;
 
 use bytecode::stackless_bytecode::{AssignKind, Bytecode, Constant, Operation};
 use move_core_types::account_address::AccountAddress;
-use spec_lang::ty::{PrimitiveType, Type};
+use spec_lang::{
+    env::{ModuleId, StructId},
+    ty::{PrimitiveType, Type},
+};
 
 use crate::{
     sym_exec_graph::{
@@ -214,6 +217,33 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
         // done
         Ok(())
+    }
+
+    fn get_smt_struct_kind(
+        &self,
+        module_id: &ModuleId,
+        struct_id: &StructId,
+        type_actuals: &[Type],
+        exec_type_args: &[ExecTypeArg<'env>],
+    ) -> SmtKind {
+        let struct_info = self
+            .oracle
+            .get_defined_struct_by_spec(module_id, struct_id)
+            .unwrap();
+        let struct_type_args: Vec<_> = type_actuals
+            .iter()
+            .map(|type_arg| {
+                ExecTypeArg::convert_from_type_actual(type_arg, exec_type_args, self.oracle)
+            })
+            .collect();
+
+        SmtKind::Struct {
+            struct_name: self
+                .type_graph
+                .get_struct_name(&struct_info.struct_id, &struct_type_args)
+                .unwrap()
+                .to_owned(),
+        }
     }
 
     pub fn interpret(
@@ -501,6 +531,35 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         }
                         Operation::Neq => {
                             sym_op_binary!(args, rets, reach_cond, current_frame, ne);
+                        }
+                        // struct
+                        Operation::Pack(module_id, struct_id, type_actuals) => {
+                            debug_assert_eq!(rets.len(), 1);
+                            let struct_kind = self.get_smt_struct_kind(
+                                module_id,
+                                struct_id,
+                                type_actuals,
+                                &block.type_args,
+                            );
+                            let struct_fields = args
+                                .iter()
+                                .map(|arg_index| current_frame.copy_local(*arg_index, reach_cond))
+                                .collect::<Result<Vec<_>>>()?;
+                            let sym = SymValue::struct_const(
+                                &self.smt_ctxt,
+                                &struct_kind,
+                                &struct_fields.iter().collect::<Vec<_>>(),
+                                reach_cond,
+                            )?;
+                            current_frame.store_local(rets[0], &sym, reach_cond)?;
+                        }
+                        Operation::Unpack(..) => {
+                            debug_assert_eq!(args.len(), 1);
+                            let sym = current_frame.copy_local(args[0], reach_cond)?;
+                            let struct_fields = sym.unpack(rets.len(), reach_cond)?;
+                            for (dst, field) in rets.iter().zip(struct_fields.iter()) {
+                                current_frame.store_local(*dst, field, reach_cond)?;
+                            }
                         }
                         // invoke
                         Operation::Function(module_id, func_id, _) => {

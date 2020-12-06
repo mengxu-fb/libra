@@ -803,6 +803,8 @@ impl<'smt> SymFrame<'smt> {
             let sym = frame.copy_local(src, cond)?;
             self.store_local(dst, &sym, cond)?;
         }
+        // clear the receive, mark that we are ready for the next call
+        self.receive = None;
         Ok(())
     }
 }
