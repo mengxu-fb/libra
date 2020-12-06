@@ -287,10 +287,35 @@ impl SmtCtxt {
     }
 
     // simplification
-    fn simplify(&self, ast: Z3_ast, _kind: &SmtKind) -> Z3_ast {
+    fn is_infeasible(&self, pred: Z3_ast) -> bool {
+        let asts = vec![pred];
+        let result = unsafe {
+            let solver = Z3_mk_solver(self.ctxt);
+            Z3_solver_check_assumptions(self.ctxt, solver, asts.len() as c_uint, asts.as_ptr())
+        };
+        result == Z3_lbool_Z3_L_FALSE
+    }
+
+    fn is_never_infeasible(&self, pred: Z3_ast) -> bool {
+        self.is_infeasible(unsafe { Z3_mk_not(self.ctxt, pred) })
+    }
+
+    fn simplify(&self, ast: Z3_ast, kind: &SmtKind) -> Z3_ast {
         // TODO: in theory, we could have dedicated simplification procedures depending on the kind
         // of the ast. But for now, let's just use the default simplification procedure in Z3
-        unsafe { Z3_simplify(self.ctxt, ast) }
+        let simplified = unsafe { Z3_simplify(self.ctxt, ast) };
+        match kind {
+            SmtKind::Bool => {
+                if self.is_infeasible(simplified) {
+                    unsafe { Z3_mk_false(self.ctxt) }
+                } else if self.is_never_infeasible(simplified) {
+                    unsafe { Z3_mk_true(self.ctxt) }
+                } else {
+                    simplified
+                }
+            }
+            _ => simplified,
+        }
     }
 
     // post-processing for an ast out of some operation
