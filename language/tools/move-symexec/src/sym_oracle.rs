@@ -179,17 +179,14 @@ impl<'env> SymOracle<'env> {
                 let sym_id = SymFuncId(counter);
                 counter += 1;
 
-                module_funcs_by_spec.insert(func_id, sym_id.clone());
-                module_funcs_by_move.insert(func_env.get_identifier(), sym_id.clone());
+                module_funcs_by_spec.insert(func_id, sym_id);
+                module_funcs_by_move.insert(func_env.get_identifier(), sym_id);
 
                 let func_data = function_targets
                     .targets
                     .remove(&func_env.get_qualified_id())
                     .unwrap();
-                tracked_functions.insert(
-                    sym_id,
-                    SymFuncInfo::new(sym_id.clone(), func_env, func_data),
-                );
+                tracked_functions.insert(sym_id, SymFuncInfo::new(sym_id, func_env, func_data));
             }
             // checks that each `Idenifier` is unique, should never fail
             debug_assert_eq!(module_funcs_by_spec.len(), module_funcs_by_move.len());
@@ -223,9 +220,9 @@ impl<'env> SymOracle<'env> {
                 let sym_id = SymStructId(counter);
                 counter += 1;
 
-                module_structs_by_spec.insert(struct_env.get_id(), sym_id.clone());
-                module_structs_by_move.insert(struct_env.get_identifier(), sym_id.clone());
-                defined_structs.insert(sym_id, SymStructInfo::new(sym_id.clone(), struct_env));
+                module_structs_by_spec.insert(struct_env.get_id(), sym_id);
+                module_structs_by_move.insert(struct_env.get_identifier(), sym_id);
+                defined_structs.insert(sym_id, SymStructInfo::new(sym_id, struct_env));
             }
             // checks that each `Idenifier` is unique, should never fail
             debug_assert_eq!(module_structs_by_spec.len(), module_structs_by_move.len());
@@ -314,7 +311,7 @@ impl<'env> SymOracle<'env> {
 }
 
 // prover passes
-fn run_prover_passes<'env>(global_env: &'env GlobalEnv) -> FunctionTargetsHolder {
+fn run_prover_passes(global_env: &GlobalEnv) -> FunctionTargetsHolder {
     // build the targets
     let mut targets = FunctionTargetsHolder::default();
     for module_env in global_env.get_modules() {
