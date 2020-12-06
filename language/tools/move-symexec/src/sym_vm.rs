@@ -373,6 +373,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 &reach_cond,
                                 &mut next_frame,
                             )?;
+                            call_stack.push(next_frame);
                         }
                     }
                 }
@@ -507,6 +508,24 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 self.oracle.get_tracked_function_by_spec(module_id, func_id);
                             if let Some(func_info) = func_info_opt {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
+                                debug_assert_eq!(outgoing_edges.len(), 1);
+
+                                // derive the reach condition for the next block
+                                for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                                    match flow_type {
+                                        ExecFlowType::Call => scc_info.put_edge_cond(
+                                            scc_id,
+                                            block.block_id,
+                                            *dst_scc_id,
+                                            *dst_block_id,
+                                            reach_cond.clone(),
+                                        ),
+                                        _ => {
+                                            panic!("Invalid flow type for outgoing edges with Call instruction")
+                                        }
+                                    }
+                                }
+
                                 // mark that this block is a call block
                                 current_frame.set_receive(rets);
                                 return Ok(SymBlockTerm::Call {
@@ -531,7 +550,28 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 }
                 Bytecode::Ret(_, rets) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
-                    debug_assert_eq!(outgoing_edges.len(), 0);
+                    if block.exec_unit.is_script_main() {
+                        debug_assert_eq!(outgoing_edges.len(), 0);
+                    } else {
+                        debug_assert_eq!(outgoing_edges.len(), 1);
+                    }
+
+                    // derive the reach condition for the next block
+                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                        match flow_type {
+                            ExecFlowType::Ret => scc_info.put_edge_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                reach_cond.clone(),
+                            ),
+                            _ => {
+                                panic!("Invalid flow type for outgoing edges with Ret instruction")
+                            }
+                        }
+                    }
+
                     // mark that this block is a return block
                     current_frame.set_returns(rets);
                     return Ok(SymBlockTerm::Ret);
@@ -563,7 +603,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 cond_f.clone(),
                             ),
                             _ => panic!(
-                                "Invalid flow type for outgoing edges with branch instruction"
+                                "Invalid flow type for outgoing edges with Branch instruction"
                             ),
                         }
                     }
@@ -581,7 +621,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 reach_cond.clone(),
                             ),
                             _ => {
-                                panic!("Invalid flow type for outgoing edges with jump instruction")
+                                panic!("Invalid flow type for outgoing edges with Jump instruction")
                             }
                         }
                     }

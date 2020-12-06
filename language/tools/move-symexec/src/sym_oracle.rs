@@ -75,6 +75,10 @@ impl<'env> SymFuncInfo<'env> {
         self.func_target
             .get_or_init(|| FunctionTarget::new(&self.func_env, &self.func_data))
     }
+
+    pub fn is_script_main(&self) -> bool {
+        self.func_env.module_env.is_script_module()
+    }
 }
 
 impl cmp::PartialEq for SymFuncInfo<'_> {
