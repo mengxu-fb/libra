@@ -1,0 +1,3 @@
+compile move_src
+execute -v 0u8 -v 1u8
+symbolize -v S::x -v S::y --output-exec-graph --strict

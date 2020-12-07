@@ -472,9 +472,22 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             match instruction {
                 Bytecode::Assign(_, dst, src, kind) => {
                     match kind {
-                        // TODO: borrow analysis treats Move and Store equally, follow suite here
-                        AssignKind::Move | AssignKind::Store => {
+                        AssignKind::Move => {
+                            debug_assert!(!current_frame.is_local_ref(*src));
+                            debug_assert!(!current_frame.is_local_ref(*dst));
                             let sym = current_frame.move_local(*src, reach_cond)?;
+                            current_frame.store_local(*dst, &sym, reach_cond)?;
+                        }
+                        AssignKind::Copy => {
+                            debug_assert!(!current_frame.is_local_ref(*src));
+                            debug_assert!(!current_frame.is_local_ref(*dst));
+                            let sym = current_frame.copy_local(*src, reach_cond)?;
+                            current_frame.store_local(*dst, &sym, reach_cond)?;
+                        }
+                        // TODO: borrow analysis treats Move and Store equally, we did not follow
+                        // suite here, the reason can be found in the assign_refs test case
+                        AssignKind::Store => {
+                            let sym = current_frame.copy_local(*src, reach_cond)?;
                             current_frame.store_local(*dst, &sym, reach_cond)?;
 
                             // check if we need to transfer the ref as well
@@ -485,12 +498,6 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             } else {
                                 debug_assert!(!current_frame.is_local_ref(*dst));
                             }
-                        }
-                        AssignKind::Copy => {
-                            debug_assert!(!current_frame.is_local_ref(*src));
-                            debug_assert!(!current_frame.is_local_ref(*dst));
-                            let sym = current_frame.copy_local(*src, reach_cond)?;
-                            current_frame.store_local(*dst, &sym, reach_cond)?;
                         }
                     }
                 }

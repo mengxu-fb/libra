@@ -957,7 +957,13 @@ impl<'smt> SymFrame<'smt> {
         rty: &SymRefType,
         cond: &SmtExpr<'smt>,
     ) -> Result<()> {
-        self.get_local_ref_mut(index).record(rty, cond)
+        let cell = self.get_local_ref_mut(index);
+        cell.record(rty, cond)?;
+        debug!("> [record {}]", index);
+        debug!("> rty: {}", rty);
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+        Ok(())
     }
 
     pub fn select_local_ref(
@@ -966,7 +972,18 @@ impl<'smt> SymFrame<'smt> {
         target: TempIndex,
         cond: &SmtExpr<'smt>,
     ) -> Result<Vec<(SymRefType, SmtExpr<'smt>)>> {
-        self.get_local_ref(index).select(target, cond)
+        let cell = self.get_local_ref(index);
+        let res = cell.select(target, cond)?;
+        debug!("> [select {}]", index);
+        debug!(
+            "> res: [\n{}\n]",
+            res.iter()
+                .map(|(ref_type, ref_cond)| format!("\t{}: {}", ref_type, ref_cond))
+                .join("\n")
+        );
+        debug!("> cell: {}", cell);
+        debug!("> cond: {}", cond);
+        Ok(res)
     }
 
     pub fn transfer_local_ref(
