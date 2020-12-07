@@ -5,7 +5,7 @@ use anyhow::{bail, Result};
 use itertools::Itertools;
 use log::debug;
 use once_cell::sync::Lazy;
-use std::fmt;
+use std::{collections::BTreeMap, fmt};
 
 use bytecode::stackless_bytecode::TempIndex;
 use move_core_types::{
@@ -719,10 +719,157 @@ impl<'smt> SymMemCell<'smt> {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) enum SymRefType {
+    Local {
+        slot_index: TempIndex,
+    },
+    Field {
+        slot_index: TempIndex,
+        field_num: usize,
+    },
+}
+
+impl fmt::Display for SymRefType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SymRefType::Local { slot_index } => write!(f, "Local({})", slot_index),
+            SymRefType::Field {
+                slot_index,
+                field_num,
+            } => write!(f, "Field({}, {})", slot_index, field_num),
+        }
+    }
+}
+
+/// A symbolic reference slot that tracks not only the referred value, but also
+/// the liveliness condition (i.e., the condition on which the referred value is
+/// valid to guide the slot write-back)
+struct SymRefSlot<'smt> {
+    refv: SymRefType,
+    cond: SmtExpr<'smt>,
+}
+
+impl fmt::Display for SymRefSlot<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} | {}", self.refv, self.cond)
+    }
+}
+
+/// A symbolic version for cells that serve the purpose of reference pointers
+struct SymRefCell<'smt> {
+    /// A reference to the smt context
+    ctxt: &'smt SmtCtxt,
+    /// Possible slots
+    slots: Vec<SymRefSlot<'smt>>,
+}
+
+impl fmt::Display for SymRefCell<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "[")?;
+        for (i, slot) in self.slots.iter().enumerate() {
+            writeln!(f, "\t{}: {}", i, slot)?;
+        }
+        writeln!(f, "]")?;
+        Ok(())
+    }
+}
+
+impl<'smt> SymRefCell<'smt> {
+    fn new(ctxt: &'smt SmtCtxt) -> Self {
+        Self {
+            ctxt,
+            slots: vec![],
+        }
+    }
+
+    fn record(&mut self, rty: &SymRefType, cond: &SmtExpr<'smt>) -> Result<()> {
+        let ctxt = self.ctxt;
+
+        // check overlaps
+        for slot in self.slots.iter_mut() {
+            slot.cond = slot.cond.and(&cond.not());
+        }
+        let new_slot = SymRefSlot {
+            refv: rty.clone(),
+            cond: cond.clone(),
+        };
+
+        // remove dead records
+        let mut del_slots = vec![];
+        for (i, slot) in self.slots.iter().enumerate() {
+            if !ctxt.is_feasible_assume_solvable(&[&slot.cond])? {
+                del_slots.push(i);
+            }
+        }
+        for (i, slot_index) in del_slots.into_iter().enumerate() {
+            self.slots.remove(slot_index - i);
+        }
+
+        // add the newly created slot
+        self.slots.push(new_slot);
+
+        // done
+        Ok(())
+    }
+
+    fn select(
+        &self,
+        index: TempIndex,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Vec<(SymRefType, SmtExpr<'smt>)>> {
+        let ctxt = self.ctxt;
+
+        let mut result = vec![];
+        for slot in &self.slots {
+            // if we are not writing back to the slot, ignore it
+            // TODO: my guess is that all slot_index should be the same as index
+            if !match slot.refv {
+                SymRefType::Local { slot_index } | SymRefType::Field { slot_index, .. } => {
+                    slot_index == index
+                }
+            } {
+                continue;
+            }
+
+            // check feasibility
+            let slot_cond = slot.cond.and(cond);
+            if !ctxt.is_feasible_assume_solvable(&[&slot_cond])? {
+                continue;
+            }
+
+            // add to return list
+            result.push((slot.refv.clone(), slot_cond));
+        }
+
+        Ok(result)
+    }
+
+    fn select_all(&self, cond: &SmtExpr<'smt>) -> Result<Vec<(SymRefType, SmtExpr<'smt>)>> {
+        let ctxt = self.ctxt;
+
+        let mut result = vec![];
+        for slot in &self.slots {
+            // filter out infeasible options
+            let slot_cond = slot.cond.and(cond);
+            if !ctxt.is_feasible_assume_solvable(&[&slot_cond])? {
+                continue;
+            }
+
+            // add to return list
+            result.push((slot.refv.clone(), slot_cond));
+        }
+
+        Ok(result)
+    }
+}
+
 /// A symbolic version maintaining the frame for an exec unit
 pub(crate) struct SymFrame<'smt> {
     /// A symbolic version of the struct used in concrete execution
     locals: Vec<SymMemCell<'smt>>,
+    /// A map of local indexes that are also references
+    local_refs: BTreeMap<TempIndex, SymRefCell<'smt>>,
     /// Local indexes for receive values. Set when calls into another function
     /// and cleared when that function returns
     receive: Option<Vec<TempIndex>>,
@@ -731,9 +878,13 @@ pub(crate) struct SymFrame<'smt> {
 }
 
 impl<'smt> SymFrame<'smt> {
-    pub fn new(ctxt: &'smt SmtCtxt, num_locals: usize) -> Self {
+    pub fn new(ctxt: &'smt SmtCtxt, num_locals: usize, ref_indice: &[TempIndex]) -> Self {
         Self {
             locals: (0..num_locals).map(|_| SymMemCell::new(ctxt)).collect(),
+            local_refs: ref_indice
+                .iter()
+                .map(|index| (*index, SymRefCell::new(ctxt)))
+                .collect(),
             receive: None,
             returns: None,
         }
@@ -741,6 +892,14 @@ impl<'smt> SymFrame<'smt> {
 
     fn get_local_mut(&mut self, index: TempIndex) -> &mut SymMemCell<'smt> {
         self.locals.get_mut(index).unwrap()
+    }
+
+    fn get_local_ref(&self, index: TempIndex) -> &SymRefCell<'smt> {
+        self.local_refs.get(&index).unwrap()
+    }
+
+    fn get_local_ref_mut(&mut self, index: TempIndex) -> &mut SymRefCell<'smt> {
+        self.local_refs.get_mut(&index).unwrap()
     }
 
     pub fn store_local(
@@ -785,6 +944,45 @@ impl<'smt> SymFrame<'smt> {
         debug!("> cell: {}", cell);
         debug!("> cond: {}", cond);
         // TODO: check if any slots left
+        Ok(())
+    }
+
+    pub fn is_local_ref(&self, index: TempIndex) -> bool {
+        self.local_refs.contains_key(&index)
+    }
+
+    pub fn record_local_ref(
+        &mut self,
+        index: TempIndex,
+        rty: &SymRefType,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<()> {
+        self.get_local_ref_mut(index).record(rty, cond)
+    }
+
+    pub fn select_local_ref(
+        &self,
+        index: TempIndex,
+        target: TempIndex,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Vec<(SymRefType, SmtExpr<'smt>)>> {
+        self.get_local_ref(index).select(target, cond)
+    }
+
+    pub fn transfer_local_ref(
+        &mut self,
+        src: TempIndex,
+        dst: TempIndex,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<()> {
+        let src_slot = self.get_local_ref(src);
+        let records = src_slot.select_all(cond)?;
+
+        let dst_slot = self.get_local_ref_mut(dst);
+        for (ref_type, ref_cond) in records.iter() {
+            dst_slot.record(ref_type, ref_cond)?;
+        }
+
         Ok(())
     }
 

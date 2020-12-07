@@ -21,7 +21,9 @@ use crate::{
     sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::{ExecStructInfo, TypeGraph},
     sym_typing::ExecTypeArg,
-    sym_vm_types::{SymFrame, SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND},
+    sym_vm_types::{
+        SymFrame, SymRefType, SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND,
+    },
 };
 
 /// Config: whether to simplify smt expressions upon construction
@@ -121,19 +123,12 @@ pub(crate) struct SymVM<'env, 'sym> {
     type_graph: &'sym TypeGraph<'env>,
 }
 
-macro_rules! sym_op_copy {
-    ($args:ident, $rets:ident, $cond:ident, $frame:ident) => {
-        debug_assert_eq!($args.len(), 1);
-        debug_assert_eq!($rets.len(), 1);
-        let sym = $frame.copy_local($args[0], $cond)?;
-        $frame.store_local($rets[0], &sym, $cond)?;
-    };
-}
-
 macro_rules! sym_op_unary {
     ($args:ident, $rets:ident, $cond:ident, $frame:ident, $func:tt) => {
         debug_assert_eq!($args.len(), 1);
         debug_assert_eq!($rets.len(), 1);
+        debug_assert!(!$frame.is_local_ref($args[0]));
+        debug_assert!(!$frame.is_local_ref($rets[0]));
         let sym = $frame.copy_local($args[0], $cond)?;
         $frame.store_local($rets[0], &sym.$func($cond)?, $cond)?;
     };
@@ -143,6 +138,9 @@ macro_rules! sym_op_binary {
     ($args:ident, $rets:ident, $cond:ident, $frame:ident, $func:tt) => {
         debug_assert_eq!($args.len(), 2);
         debug_assert_eq!($rets.len(), 1);
+        debug_assert!(!$frame.is_local_ref($args[0]));
+        debug_assert!(!$frame.is_local_ref($args[1]));
+        debug_assert!(!$frame.is_local_ref($rets[0]));
         let lhs = $frame.copy_local($args[0], $cond)?;
         let rhs = $frame.copy_local($args[1], $cond)?;
         $frame.store_local($rets[0], &lhs.$func(&rhs, $cond)?, $cond)?;
@@ -208,11 +206,25 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         func_info: &'env SymFuncInfo<'env>,
         func_args: &[SymValue<'smt>],
         cond: &SmtExpr<'smt>,
-        frame: &mut SymFrame<'smt>,
-    ) -> Result<()> {
+    ) -> Result<SymFrame<'smt>> {
+        // get information
         let target = func_info.get_target();
         let params = func_info.func_env.get_parameters();
         debug_assert_eq!(func_args.len(), target.get_parameter_count());
+        let ref_params = params
+            .iter()
+            .filter_map(|param| match param.1 {
+                Type::Reference(..) => Some(*target.get_local_index(param.0).unwrap()),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+
+        // create an empty frame
+        let mut frame = SymFrame::new(
+            &self.smt_ctxt,
+            func_info.func_data.local_types.len(),
+            &ref_params,
+        );
 
         // preload args into local slots
         for (i, arg) in func_args.iter().enumerate() {
@@ -225,7 +237,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // done
-        Ok(())
+        Ok(frame)
     }
 
     fn get_smt_struct_kind(
@@ -290,13 +302,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // prepare the first frame, in particular, the input arguments
-        let mut init_frame = SymFrame::new(&self.smt_ctxt, script_main.func_data.local_types.len());
-        self.prepare_frame(
-            script_main,
-            &sym_inputs,
-            &self.smt_ctxt.bool_const(true),
-            &mut init_frame,
-        )?;
+        let init_frame =
+            self.prepare_frame(script_main, &sym_inputs, &self.smt_ctxt.bool_const(true))?;
         let mut call_stack = vec![init_frame];
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
@@ -402,16 +409,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             func_args,
                         } => {
                             // prepare the next frame, in particular, the function arguments
-                            let mut next_frame = SymFrame::new(
-                                &self.smt_ctxt,
-                                func_info.func_data.local_types.len(),
-                            );
-                            self.prepare_frame(
-                                func_info,
-                                &func_args,
-                                &reach_cond,
-                                &mut next_frame,
-                            )?;
+                            let next_frame =
+                                self.prepare_frame(func_info, &func_args, &reach_cond)?;
                             call_stack.push(next_frame);
                         }
                     }
@@ -455,13 +454,26 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Assign(_, dst, src, kind) => {
                     match kind {
                         // TODO: borrow analysis treats Move and Store equally, follow suite here
-                        AssignKind::Move | AssignKind::Store => {
+                        AssignKind::Move => {
+                            debug_assert!(!current_frame.is_local_ref(*src));
+                            debug_assert!(!current_frame.is_local_ref(*dst));
                             let sym = current_frame.move_local(*src, reach_cond)?;
                             current_frame.store_local(*dst, &sym, reach_cond)?;
                         }
                         AssignKind::Copy => {
+                            debug_assert!(!current_frame.is_local_ref(*src));
+                            debug_assert!(!current_frame.is_local_ref(*dst));
                             let sym = current_frame.copy_local(*src, reach_cond)?;
                             current_frame.store_local(*dst, &sym, reach_cond)?;
+                        }
+                        AssignKind::Store => {
+                            debug_assert!(current_frame.is_local_ref(*src));
+                            debug_assert!(current_frame.is_local_ref(*dst));
+                            // transfer the sym slot
+                            let sym = current_frame.move_local(*src, reach_cond)?;
+                            current_frame.store_local(*dst, &sym, reach_cond)?;
+                            // transfer the ref slot
+                            current_frame.transfer_local_ref(*src, *dst, reach_cond)?;
                         }
                     }
                 }
@@ -471,6 +483,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         Operation::Destroy => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 0);
+                            debug_assert!(!current_frame.is_local_ref(args[0]));
                             current_frame.destroy_local(args[0], reach_cond)?;
                         }
                         // unary
@@ -544,6 +557,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         // struct
                         Operation::Pack(module_id, struct_id, type_actuals) => {
                             debug_assert_eq!(rets.len(), 1);
+                            debug_assert!(!args
+                                .iter()
+                                .any(|index| current_frame.is_local_ref(*index)));
+                            debug_assert!(!current_frame.is_local_ref(rets[0]));
+
+                            // get info
                             let struct_kind = self.get_smt_struct_kind(
                                 module_id,
                                 struct_id,
@@ -554,6 +573,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 .iter()
                                 .map(|arg_index| current_frame.copy_local(*arg_index, reach_cond))
                                 .collect::<Result<Vec<_>>>()?;
+
+                            // build the struct
                             let sym = SymValue::struct_const(
                                 &self.smt_ctxt,
                                 &struct_kind,
@@ -564,7 +585,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         }
                         Operation::Unpack(..) => {
                             debug_assert_eq!(args.len(), 1);
+                            debug_assert!(!current_frame.is_local_ref(args[0]));
+                            debug_assert!(!rets
+                                .iter()
+                                .any(|index| current_frame.is_local_ref(*index)));
+
+                            // get the struct
                             let sym = current_frame.copy_local(args[0], reach_cond)?;
+
+                            // unpack it
                             let struct_fields = sym.unpack(rets.len(), reach_cond)?;
                             for (dst, field) in rets.iter().zip(struct_fields.iter()) {
                                 current_frame.store_local(*dst, field, reach_cond)?;
@@ -573,50 +602,121 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         Operation::GetField(_, _, _, field_num) => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 1);
+                            debug_assert!(!current_frame.is_local_ref(args[0]));
+                            debug_assert!(!current_frame.is_local_ref(rets[0]));
+
+                            // get the struct
                             let sym = current_frame.copy_local(args[0], reach_cond)?;
+
+                            // extract the field
                             let field_sym = sym.get_field(*field_num, reach_cond)?;
                             current_frame.store_local(rets[0], &field_sym, reach_cond)?;
                         }
                         // reference
                         Operation::BorrowLoc => {
-                            sym_op_copy!(args, rets, reach_cond, current_frame);
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 1);
+                            debug_assert!(!current_frame.is_local_ref(args[0]));
+                            debug_assert!(current_frame.is_local_ref(rets[0]));
+
+                            // copy the struct as value
+                            let sym = current_frame.copy_local(args[0], reach_cond)?;
+                            current_frame.store_local(rets[0], &sym, reach_cond)?;
+
+                            // record reference
+                            current_frame.record_local_ref(
+                                rets[0],
+                                &SymRefType::Local {
+                                    slot_index: args[0],
+                                },
+                                reach_cond,
+                            )?;
                         }
                         Operation::BorrowField(_, _, _, field_num) => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 1);
+                            debug_assert!(!current_frame.is_local_ref(args[0]));
+                            debug_assert!(current_frame.is_local_ref(rets[0]));
+
+                            // copy the field as value
                             let sym = current_frame.copy_local(args[0], reach_cond)?;
                             let field_sym = sym.get_field(*field_num, reach_cond)?;
                             current_frame.store_local(rets[0], &field_sym, reach_cond)?;
+
+                            // record reference
+                            current_frame.record_local_ref(
+                                rets[0],
+                                &SymRefType::Field {
+                                    slot_index: args[0],
+                                    field_num: *field_num,
+                                },
+                                reach_cond,
+                            )?;
                         }
                         Operation::ReadRef => {
-                            sym_op_copy!(args, rets, reach_cond, current_frame);
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 1);
+                            debug_assert!(current_frame.is_local_ref(args[0]));
+                            debug_assert!(!current_frame.is_local_ref(rets[0]));
+                            let sym = current_frame.copy_local(args[0], reach_cond)?;
+                            current_frame.store_local(rets[0], &sym, reach_cond)?;
                         }
                         Operation::WriteRef => {
                             debug_assert_eq!(args.len(), 2);
                             debug_assert_eq!(rets.len(), 0);
+                            debug_assert!(current_frame.is_local_ref(args[0]));
+                            debug_assert!(!current_frame.is_local_ref(args[1]));
                             let sym = current_frame.copy_local(args[1], reach_cond)?;
                             current_frame.store_local(args[0], &sym, reach_cond)?;
                         }
                         Operation::WriteBack(borrow_node) => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 0);
+                            debug_assert!(current_frame.is_local_ref(args[0]));
                             match borrow_node {
                                 BorrowNode::GlobalRoot(_) => bail!("Globals not supported yet"),
                                 BorrowNode::Reference(dst) | BorrowNode::LocalRoot(dst) => {
+                                    let guides = current_frame
+                                        .select_local_ref(args[0], *dst, reach_cond)?;
+
                                     let sym = current_frame.copy_local(args[0], reach_cond)?;
-                                    current_frame.store_local(*dst, &sym, reach_cond)?;
+                                    for (ref_type, write_cond) in guides {
+                                        match ref_type {
+                                            SymRefType::Local { slot_index } => current_frame
+                                                .store_local(slot_index, &sym, &write_cond)?,
+                                            SymRefType::Field {
+                                                slot_index,
+                                                field_num,
+                                            } => {
+                                                let struct_old = current_frame
+                                                    .copy_local(slot_index, &write_cond)?;
+                                                let struct_new = struct_old.put_field(
+                                                    &sym,
+                                                    field_num,
+                                                    &write_cond,
+                                                )?;
+                                                current_frame.store_local(
+                                                    slot_index,
+                                                    &struct_new,
+                                                    &write_cond,
+                                                )?;
+                                            }
+                                        }
+                                    }
                                 }
                             }
                         }
                         Operation::PackRef => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 0);
+                            debug_assert!(current_frame.is_local_ref(args[0]));
                             // TODO: I have no idea what PackRef does..., seems that it always
                             // precedes a WriteBack and does not return anything...
                         }
                         Operation::UnpackRef => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 0);
+                            debug_assert!(current_frame.is_local_ref(args[0]));
                             // TODO: I have no idea what UnpackRef does..., seems that it always
                             // follows a Borrow and does not return anything...
                         }
@@ -695,10 +795,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     return Ok(SymBlockTerm::Ret);
                 }
                 Bytecode::Load(_, dst, val) => {
+                    debug_assert!(!current_frame.is_local_ref(*dst));
                     let sym = self.symbolize_constant(val, reach_cond)?;
                     current_frame.store_local(*dst, &sym, reach_cond)?;
                 }
                 Bytecode::Branch(_, _, _, idx) => {
+                    debug_assert!(!current_frame.is_local_ref(*idx));
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(outgoing_edges.len(), 2);
                     let sym = current_frame.copy_local(*idx, reach_cond)?;
