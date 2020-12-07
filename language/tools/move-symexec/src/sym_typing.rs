@@ -130,6 +130,14 @@ impl<'env> ExecTypeArg<'env> {
             | Type::Error => panic!("Found specification types in programs"),
         }
     }
+
+    pub fn is_reference(&self) -> bool {
+        match self {
+            ExecTypeArg::Reference { .. } => true,
+            ExecTypeArg::TypeParameter { actual_type, .. } => actual_type.is_reference(),
+            _ => false,
+        }
+    }
 }
 
 impl fmt::Display for ExecTypeArg<'_> {

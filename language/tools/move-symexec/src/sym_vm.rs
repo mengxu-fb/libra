@@ -205,17 +205,28 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         &'smt self,
         func_info: &'env SymFuncInfo<'env>,
         func_args: &[SymValue<'smt>],
+        func_type_args: &[ExecTypeArg<'env>],
         cond: &SmtExpr<'smt>,
     ) -> Result<SymFrame<'smt>> {
         // get information
         let target = func_info.get_target();
         let params = func_info.func_env.get_parameters();
         debug_assert_eq!(func_args.len(), target.get_parameter_count());
-        let ref_params = params
+
+        // instantiate type actuals and collect references
+        let local_refs = func_info
+            .func_data
+            .local_types
             .iter()
-            .filter_map(|param| match param.1 {
-                Type::Reference(..) => Some(*target.get_local_index(param.0).unwrap()),
-                _ => None,
+            .enumerate()
+            .filter_map(|(local_index, local_type)| {
+                let exec_type_arg =
+                    ExecTypeArg::convert_from_type_actual(local_type, func_type_args, &self.oracle);
+                if exec_type_arg.is_reference() {
+                    Some(local_index)
+                } else {
+                    None
+                }
             })
             .collect::<Vec<_>>();
 
@@ -223,7 +234,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         let mut frame = SymFrame::new(
             &self.smt_ctxt,
             func_info.func_data.local_types.len(),
-            &ref_params,
+            &local_refs,
         );
 
         // preload args into local slots
@@ -302,8 +313,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
 
         // prepare the first frame, in particular, the input arguments
-        let init_frame =
-            self.prepare_frame(script_main, &sym_inputs, &self.smt_ctxt.bool_const(true))?;
+        let init_frame = self.prepare_frame(
+            script_main,
+            &sym_inputs,
+            &self.exec_graph.get_entry_block().type_args,
+            &self.smt_ctxt.bool_const(true),
+        )?;
         let mut call_stack = vec![init_frame];
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
@@ -409,8 +424,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             func_args,
                         } => {
                             // prepare the next frame, in particular, the function arguments
-                            let next_frame =
-                                self.prepare_frame(func_info, &func_args, &reach_cond)?;
+                            let next_frame = self.prepare_frame(
+                                func_info,
+                                &func_args,
+                                &block.type_args,
+                                &reach_cond,
+                            )?;
                             call_stack.push(next_frame);
                         }
                     }
@@ -454,26 +473,24 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Assign(_, dst, src, kind) => {
                     match kind {
                         // TODO: borrow analysis treats Move and Store equally, follow suite here
-                        AssignKind::Move => {
-                            debug_assert!(!current_frame.is_local_ref(*src));
-                            debug_assert!(!current_frame.is_local_ref(*dst));
+                        AssignKind::Move | AssignKind::Store => {
                             let sym = current_frame.move_local(*src, reach_cond)?;
                             current_frame.store_local(*dst, &sym, reach_cond)?;
+
+                            // check if we need to transfer the ref as well
+                            if current_frame.is_local_ref(*src) {
+                                if current_frame.is_local_ref(*dst) {
+                                    current_frame.transfer_local_ref(*src, *dst, reach_cond)?;
+                                }
+                            } else {
+                                debug_assert!(!current_frame.is_local_ref(*dst));
+                            }
                         }
                         AssignKind::Copy => {
                             debug_assert!(!current_frame.is_local_ref(*src));
                             debug_assert!(!current_frame.is_local_ref(*dst));
                             let sym = current_frame.copy_local(*src, reach_cond)?;
                             current_frame.store_local(*dst, &sym, reach_cond)?;
-                        }
-                        AssignKind::Store => {
-                            debug_assert!(current_frame.is_local_ref(*src));
-                            debug_assert!(current_frame.is_local_ref(*dst));
-                            // transfer the sym slot
-                            let sym = current_frame.move_local(*src, reach_cond)?;
-                            current_frame.store_local(*dst, &sym, reach_cond)?;
-                            // transfer the ref slot
-                            current_frame.transfer_local_ref(*src, *dst, reach_cond)?;
                         }
                     }
                 }

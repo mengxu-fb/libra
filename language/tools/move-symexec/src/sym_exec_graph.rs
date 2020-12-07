@@ -244,6 +244,10 @@ impl<'env> ExecGraph<'env> {
         self.get_block_by_node(self.get_node_by_block_id(block_id))
     }
 
+    pub fn get_entry_block(&self) -> &ExecBlock<'env> {
+        self.get_block_by_block_id(self.entry_block_id)
+    }
+
     fn get_flow_by_block_ids(
         &self,
         src_block_id: ExecBlockId,
