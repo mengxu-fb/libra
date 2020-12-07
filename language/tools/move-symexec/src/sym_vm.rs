@@ -37,6 +37,14 @@ struct SymIntraSccFlow {
     dst_block_id: ExecBlockId,
 }
 
+#[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
+struct SymInterSccFlow {
+    src_scc_id: ExecSccId,
+    src_block_id: ExecBlockId,
+    dst_scc_id: ExecSccId,
+    dst_block_id: ExecBlockId,
+}
+
 struct SymSccInfo<'smt> {
     /// The scc_id where all scc_ids in the edge_conds resides in
     scc_id: Option<ExecSccId>,
@@ -44,6 +52,8 @@ struct SymSccInfo<'smt> {
     entry_cond: SmtExpr<'smt>,
     /// Conditions for flows (i.e., edges) within this scc only
     edge_conds: HashMap<SymIntraSccFlow, SmtExpr<'smt>>,
+    /// Conditions for flows (i.e., edges) out of this scc only
+    exit_conds: HashMap<SymInterSccFlow, SmtExpr<'smt>>,
 }
 
 impl<'smt> SymSccInfo<'smt> {
@@ -52,6 +62,7 @@ impl<'smt> SymSccInfo<'smt> {
             scc_id: None,
             entry_cond: ctxt.bool_const(true),
             edge_conds: HashMap::new(),
+            exit_conds: HashMap::new(),
         }
     }
 
@@ -61,10 +72,11 @@ impl<'smt> SymSccInfo<'smt> {
             // TODO: this is a fake condition
             entry_cond: ctxt.bool_const(true),
             edge_conds: HashMap::new(),
+            exit_conds: HashMap::new(),
         }
     }
 
-    /// Get the condition associated with this edge (panic if non-exist)
+    /// Get the condition associated with this intra-scc edge (panic if non-exist)
     fn get_edge_cond(
         &self,
         src_scc_id: ExecSccId,
@@ -81,7 +93,7 @@ impl<'smt> SymSccInfo<'smt> {
         self.edge_conds.get(&key).unwrap()
     }
 
-    /// Put the condition associated with this edge (panic if exists)
+    /// Put the condition associated with this intra-scc edge (panic if exists)
     fn put_edge_cond(
         &mut self,
         src_scc_id: ExecSccId,
@@ -97,6 +109,25 @@ impl<'smt> SymSccInfo<'smt> {
             dst_block_id,
         };
         let exists = self.edge_conds.insert(key, condition);
+        debug_assert!(exists.is_none());
+    }
+
+    /// Put the condition associated with this exit edge (panic if exists)
+    fn put_exit_cond(
+        &mut self,
+        src_scc_id: ExecSccId,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+        condition: SmtExpr<'smt>,
+    ) {
+        let key = SymInterSccFlow {
+            src_scc_id,
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        let exists = self.exit_conds.insert(key, condition);
         debug_assert!(exists.is_none());
     }
 }
@@ -341,6 +372,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     block_id,
                     incoming_edges,
                     outgoing_edges,
+                    scc_exit_edges,
                 } => {
                     // log information
                     debug!("Block: {} (scc: {})", block_id, scc_id);
@@ -357,6 +389,16 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug!(
                         "Outgoing edges: [{}]",
                         outgoing_edges
+                            .iter()
+                            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
+                                "{}::{}-({})",
+                                edge_scc_id, edge_block_id, flow_type
+                            ))
+                            .join("-")
+                    );
+                    debug!(
+                        "Scc-exit edges: [{}]",
+                        scc_exit_edges
                             .iter()
                             .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
                                 "{}::{}-({})",
@@ -407,6 +449,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         block,
                         &reach_cond,
                         &outgoing_edges,
+                        &scc_exit_edges,
                         &mut scc_info,
                         current_frame,
                     )?;
@@ -459,6 +502,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         block: &ExecBlock<'env>,
         reach_cond: &SmtExpr<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+        scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) -> Result<SymBlockTerm<'env, 'smt>> {
@@ -795,6 +839,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     if block.exec_unit.is_script_main() {
                         debug_assert_eq!(outgoing_edges.len(), 0);
+                        debug_assert_eq!(scc_exit_edges.len(), 0);
                     } else {
                         debug_assert_eq!(outgoing_edges.len(), 1);
                     }
@@ -827,10 +872,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Branch(_, _, _, idx) => {
                     debug_assert!(!current_frame.is_local_ref(*idx));
                     debug_assert_eq!(pos + 1, block.instructions.len());
-                    debug_assert_eq!(outgoing_edges.len(), 2);
+                    debug_assert_eq!(outgoing_edges.len() + scc_exit_edges.len(), 2);
                     let sym = current_frame.copy_local(*idx, reach_cond)?;
                     let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
                     let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
+
+                    // add conditions for outgoing edges
                     for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
                         match flow_type {
                             ExecFlowType::Branch(Some(true)) => scc_info.put_edge_cond(
@@ -852,10 +899,34 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             ),
                         }
                     }
+
+                    // add conditions for scc-exiting edges
+                    for (dst_scc_id, dst_block_id, flow_type) in scc_exit_edges {
+                        match flow_type {
+                            ExecFlowType::Branch(Some(true)) => scc_info.put_exit_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                cond_t.clone(),
+                            ),
+                            ExecFlowType::Branch(Some(false)) => scc_info.put_exit_cond(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                cond_f.clone(),
+                            ),
+                            _ => panic!(
+                                "Invalid flow type for scc-exit edges with Branch instruction"
+                            ),
+                        }
+                    }
                 }
                 Bytecode::Jump(..) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(outgoing_edges.len(), 1);
+                    debug_assert_eq!(scc_exit_edges.len(), 0);
                     for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
                         match flow_type {
                             ExecFlowType::Branch(None) => scc_info.put_edge_cond(
@@ -874,6 +945,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Abort(..) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(outgoing_edges.len(), 0);
+                    debug_assert_eq!(scc_exit_edges.len(), 0);
                     // TODO: solve for reachable inputs
                 }
                 // nop or equivalent

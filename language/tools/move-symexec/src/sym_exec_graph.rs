@@ -1199,6 +1199,7 @@ pub(crate) enum ExecWalkerStep {
         block_id: ExecBlockId,
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
         outgoing_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
+        scc_exit_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
     },
 }
 
@@ -1268,9 +1269,12 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                 }
                 CycleOrBlock::Block(scc_id, block_id) => {
                     // we continue to explore within the same scc
+                    let state_scc_id_opt = state.scc_id;
+
                     let incoming_edges = state
                         .scc_graph
                         .get_incoming_edges_for_block(scc_id, block_id);
+
                     let outgoing_edges = state
                         .scc_graph
                         .get_outgoing_edges_for_block(scc_id, block_id)
@@ -1284,11 +1288,33 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                             )
                         })
                         .collect();
+
+                    let scc_exit_edges = match state_scc_id_opt {
+                        None => vec![], // we are at the root scc
+                        Some(state_scc_id) => {
+                            let parent_state = self.iter_stack.iter().rev().nth(1).unwrap();
+                            parent_state
+                                .scc_graph
+                                .get_outgoing_edges_for_block(state_scc_id, block_id)
+                                .into_iter()
+                                .map(|(dst_scc_id, dst_block_id)| {
+                                    (
+                                        dst_scc_id,
+                                        dst_block_id,
+                                        self.exec_graph
+                                            .get_flow_by_block_ids(block_id, dst_block_id),
+                                    )
+                                })
+                                .collect()
+                        }
+                    };
+
                     Some(ExecWalkerStep::Block {
                         scc_id,
                         block_id,
                         incoming_edges,
                         outgoing_edges,
+                        scc_exit_edges,
                     })
                 }
             },
