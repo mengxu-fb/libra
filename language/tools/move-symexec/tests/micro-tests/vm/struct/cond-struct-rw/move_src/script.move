@@ -16,8 +16,8 @@ module M {
         s.v
     }
 
-    public fun baz(s: &mut S, y: u8) {
-        s.v = y;
+    public fun baz(s: &mut S, z: u8) {
+        s.v = z;
     }
 }
 }
@@ -25,12 +25,13 @@ module M {
 script {
     use 0x42::M;
 
-    fun main(x: u8, y: u8) {
+    fun main(x: u8, y: u8, z: u8) {
         let s1 = M::foo1(x);
         let s2 = M::foo2(y);
         let s = if (x == y) { &mut s1 } else { &mut s2 };
         let _ = M::bar(s);
-        M::baz(s, y);
-        let _ = M::bar(s);
+        M::baz(s, z);
+        let _ = M::bar(&s1);
+        let _ = M::bar(&s2);
     }
 }

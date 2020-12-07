@@ -312,7 +312,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             )?);
         }
 
-        // prepare the first frame, in particular, the input arguments
+        // prepare the first frame with the input arguments
         let init_frame = self.prepare_frame(
             script_main,
             &sym_inputs,
@@ -401,13 +401,14 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                     // now symbolize the block
                     let block = self.exec_graph.get_block_by_block_id(block_id);
+                    let current_frame = call_stack.last_mut().unwrap();
                     let block_term = self.symbolize_block(
                         scc_id,
                         block,
                         &reach_cond,
                         &outgoing_edges,
                         &mut scc_info,
-                        &mut call_stack,
+                        current_frame,
                     )?;
 
                     // pop the call stack if this is a return block
@@ -459,10 +460,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         reach_cond: &SmtExpr<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_info: &mut SymSccInfo<'smt>,
-        call_stack: &mut Vec<SymFrame<'smt>>,
+        current_frame: &mut SymFrame<'smt>,
     ) -> Result<SymBlockTerm<'env, 'smt>> {
         let func_env = block.exec_unit;
-        let current_frame = call_stack.last_mut().unwrap();
         for (pos, instruction) in block.instructions.iter().enumerate() {
             debug!(
                 "Instruction {}: {}",
@@ -652,7 +652,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         Operation::BorrowField(_, _, _, field_num) => {
                             debug_assert_eq!(args.len(), 1);
                             debug_assert_eq!(rets.len(), 1);
-                            debug_assert!(!current_frame.is_local_ref(args[0]));
+                            // TODO: field borrowing must come from a reference?
+                            debug_assert!(current_frame.is_local_ref(args[0]));
                             debug_assert!(current_frame.is_local_ref(rets[0]));
 
                             // copy the field as value
