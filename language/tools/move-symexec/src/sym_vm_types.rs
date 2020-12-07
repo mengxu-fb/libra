@@ -510,6 +510,15 @@ impl<'smt> SymValue<'smt> {
         sym_op_unary!(get_field, self, cond, field_num)
     }
 
+    pub fn put_field(
+        &self,
+        field_sym: &Self,
+        field_num: usize,
+        cond: &SmtExpr<'smt>,
+    ) -> Result<Self> {
+        sym_op_binary!(put_field, self, field_sym, cond, field_num)
+    }
+
     pub fn unpack(&self, num_fields: usize, base_cond: &SmtExpr<'smt>) -> Result<Vec<Self>> {
         let ctxt = self.ctxt;
 

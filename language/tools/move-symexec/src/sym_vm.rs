@@ -6,7 +6,7 @@ use itertools::Itertools;
 use log::{debug, warn};
 use std::collections::HashMap;
 
-use bytecode::stackless_bytecode::{AssignKind, Bytecode, Constant, Operation};
+use bytecode::stackless_bytecode::{AssignKind, BorrowNode, Bytecode, Constant, Operation};
 use move_core_types::account_address::AccountAddress;
 use spec_lang::{
     env::{ModuleId, StructId},
@@ -119,6 +119,15 @@ pub(crate) struct SymVM<'env, 'sym> {
     exec_graph: &'sym ExecGraph<'env>,
     /// Maps all struct types to names of the corresponding smt types
     type_graph: &'sym TypeGraph<'env>,
+}
+
+macro_rules! sym_op_copy {
+    ($args:ident, $rets:ident, $cond:ident, $frame:ident) => {
+        debug_assert_eq!($args.len(), 1);
+        debug_assert_eq!($rets.len(), 1);
+        let sym = $frame.copy_local($args[0], $cond)?;
+        $frame.store_local($rets[0], &sym, $cond)?;
+    };
 }
 
 macro_rules! sym_op_unary {
@@ -567,6 +576,49 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             let sym = current_frame.copy_local(args[0], reach_cond)?;
                             let field_sym = sym.get_field(*field_num, reach_cond)?;
                             current_frame.store_local(rets[0], &field_sym, reach_cond)?;
+                        }
+                        // reference
+                        Operation::BorrowLoc => {
+                            sym_op_copy!(args, rets, reach_cond, current_frame);
+                        }
+                        Operation::BorrowField(_, _, _, field_num) => {
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 1);
+                            let sym = current_frame.copy_local(args[0], reach_cond)?;
+                            let field_sym = sym.get_field(*field_num, reach_cond)?;
+                            current_frame.store_local(rets[0], &field_sym, reach_cond)?;
+                        }
+                        Operation::ReadRef => {
+                            sym_op_copy!(args, rets, reach_cond, current_frame);
+                        }
+                        Operation::WriteRef => {
+                            debug_assert_eq!(args.len(), 2);
+                            debug_assert_eq!(rets.len(), 0);
+                            let sym = current_frame.copy_local(args[1], reach_cond)?;
+                            current_frame.store_local(args[0], &sym, reach_cond)?;
+                        }
+                        Operation::WriteBack(borrow_node) => {
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 0);
+                            match borrow_node {
+                                BorrowNode::GlobalRoot(_) => bail!("Globals not supported yet"),
+                                BorrowNode::Reference(dst) | BorrowNode::LocalRoot(dst) => {
+                                    let sym = current_frame.copy_local(args[0], reach_cond)?;
+                                    current_frame.store_local(*dst, &sym, reach_cond)?;
+                                }
+                            }
+                        }
+                        Operation::PackRef => {
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 0);
+                            // TODO: I have no idea what PackRef does..., seems that it always
+                            // precedes a WriteBack and does not return anything...
+                        }
+                        Operation::UnpackRef => {
+                            debug_assert_eq!(args.len(), 1);
+                            debug_assert_eq!(rets.len(), 0);
+                            // TODO: I have no idea what UnpackRef does..., seems that it always
+                            // follows a Borrow and does not return anything...
                         }
                         // invoke
                         Operation::Function(module_id, func_id, _) => {

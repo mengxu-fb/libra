@@ -713,14 +713,14 @@ impl<'smt> SmtExpr<'smt> {
 
         // prepare arguments
         let struct_ast: [Z3_ast; 1] = [self.ast];
-        let asts: Vec<Z3_ast> = struct_info
+        let asts: Vec<_> = struct_info
             .field_getters
             .iter()
             .map(|getter| unsafe { Z3_mk_app(ctxt.ctxt, *getter, 1, struct_ast.as_ptr()) })
             .collect();
 
         // post-processing
-        let asts: Vec<Z3_ast> = asts
+        let asts: Vec<_> = asts
             .into_iter()
             .enumerate()
             .map(|(i, ast)| ctxt.postprocess(ast, struct_info.field_kinds.get(i).unwrap()))
@@ -764,6 +764,18 @@ impl<'smt> SmtExpr<'smt> {
 
         // done
         SmtExpr { ast, ctxt, kind }
+    }
+
+    pub fn put_field(&self, field_sym: &Self, field_num: usize) -> Self {
+        // unpack and replace field
+        let mut asts = self.unpack();
+        let field_ast = asts.get_mut(field_num).unwrap();
+        debug_assert_eq!(field_ast.kind, field_sym.kind);
+        field_ast.ast = field_sym.ast;
+
+        // repack into a new struct
+        self.ctxt
+            .struct_const(&self.kind, &(asts.iter().collect::<Vec<_>>()))
     }
 }
 
