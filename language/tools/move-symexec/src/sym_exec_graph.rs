@@ -794,24 +794,8 @@ pub(crate) struct ExecScc {
     scope_block_ids: HashSet<ExecBlockId>,
     /// The entry block in this scc
     entry_block_id: ExecBlockId,
-    /// Whether this scc is cyclic with a backedge to the entry block
-    is_cyclic_on_entry: bool,
-}
-
-impl ExecScc {
-    pub fn new(
-        scc_id: ExecSccId,
-        scope_block_ids: HashSet<ExecBlockId>,
-        entry_block_id: ExecBlockId,
-        is_cyclic_on_entry: bool,
-    ) -> Self {
-        Self {
-            scc_id,
-            scope_block_ids,
-            entry_block_id,
-            is_cyclic_on_entry,
-        }
-    }
+    /// Whether this scc is cyclic with backedges to the entry block
+    back_edges_from: HashSet<ExecBlockId>,
 }
 
 /// A graph that condenses a `ExecRefGraph` into a scc graph
@@ -931,7 +915,7 @@ impl ExecSccGraph {
 
             // find the entry blocks in this scc
             let mut scc_entry_map: HashMap<ExecBlockId, HashSet<ExecBlockId>> = HashMap::new();
-            let mut scc_intra_edge_dst_block_ids = HashSet::new();
+            let mut scc_intra_edge_dst_block_ids = HashMap::new();
             for node in scc_nodes.iter() {
                 for edge in ref_graph
                     .graph
@@ -941,7 +925,11 @@ impl ExecSccGraph {
                     // ignore edges within this scc, just mark the dst block id so we can tell
                     // whether this scc is cyclic with a back edge to the entry block
                     if scope_block_ids.contains(src_block_id) {
-                        scc_intra_edge_dst_block_ids.insert(dst_block_id);
+                        let non_exists = scc_intra_edge_dst_block_ids
+                            .entry(*dst_block_id)
+                            .or_insert_with(HashSet::new)
+                            .insert(*src_block_id);
+                        debug_assert!(non_exists);
                         continue;
                     }
                     // found an incoming edge into this scc
@@ -987,12 +975,14 @@ impl ExecSccGraph {
                 scc_count += 1;
 
                 // register this scc to graph
-                scc_graph.add_scc(ExecScc::new(
+                scc_graph.add_scc(ExecScc {
                     scc_id,
-                    scope_block_ids.clone(),
-                    scc_entry_block_id,
-                    scc_intra_edge_dst_block_ids.contains(&scc_entry_block_id),
-                ));
+                    scope_block_ids: scope_block_ids.clone(),
+                    entry_block_id: scc_entry_block_id,
+                    back_edges_from: scc_intra_edge_dst_block_ids
+                        .remove(&scc_entry_block_id)
+                        .unwrap_or_else(HashSet::new),
+                });
 
                 // mark that all edges joining into this entry block are associated with this scc id
                 for foreign_block_id in foreign_block_ids {
@@ -1200,6 +1190,7 @@ pub(crate) enum ExecWalkerStep {
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
         outgoing_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
         scc_exit_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
+        is_a_back_edge: Option<(ExecSccId, ExecBlockId, ExecFlowType)>,
     },
 }
 
@@ -1231,13 +1222,13 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
         let exec_graph = self.exec_graph;
         let state = self.iter_stack.last_mut().unwrap();
         let next_op = state.next().map(|scc| {
-            if scc.is_cyclic_on_entry {
+            if scc.back_edges_from.is_empty() {
+                CycleOrBlock::Block(scc.scc_id, scc.entry_block_id)
+            } else {
                 CycleOrBlock::Cycle(ExecWalkerState::new(
                     Some(scc.scc_id),
                     &ExecRefGraph::from_graph_scc(exec_graph, scc),
                 ))
-            } else {
-                CycleOrBlock::Block(scc.scc_id, scc.entry_block_id)
             }
         });
 
@@ -1270,6 +1261,7 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                 CycleOrBlock::Block(scc_id, block_id) => {
                     // we continue to explore within the same scc
                     let state_scc_id_opt = state.scc_id;
+                    let state_scc_entry_scc_id = state.scc_graph.entry_scc_id;
 
                     let incoming_edges = state
                         .scc_graph
@@ -1288,6 +1280,24 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                             )
                         })
                         .collect();
+
+                    let is_a_back_edge = state_scc_id_opt
+                        .as_ref()
+                        .map(|state_scc_id| {
+                            let parent_state = self.iter_stack.iter().rev().nth(1).unwrap();
+                            let state_scc = parent_state.scc_graph.get_scc_by_scc_id(*state_scc_id);
+                            if state_scc.back_edges_from.contains(&block_id) {
+                                Some((
+                                    state_scc_entry_scc_id,
+                                    state_scc.entry_block_id,
+                                    self.exec_graph
+                                        .get_flow_by_block_ids(block_id, state_scc.entry_block_id),
+                                ))
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten();
 
                     let scc_exit_edges = match state_scc_id_opt {
                         None => vec![], // we are at the root scc
@@ -1315,6 +1325,7 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         incoming_edges,
                         outgoing_edges,
                         scc_exit_edges,
+                        is_a_back_edge,
                     })
                 }
             },

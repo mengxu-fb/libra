@@ -373,6 +373,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     incoming_edges,
                     outgoing_edges,
                     scc_exit_edges,
+                    is_a_back_edge,
                 } => {
                     // log information
                     debug!("Block: {} (scc: {})", block_id, scc_id);
@@ -406,6 +407,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             ))
                             .join("-")
                     );
+                    debug!(
+                        "Back edge: {}",
+                        is_a_back_edge.as_ref().map_or(
+                            "X".to_owned(),
+                            |(edge_scc_id, edge_block_id, flow_type)| {
+                                format!("{}::{}-({})", edge_scc_id, edge_block_id, flow_type)
+                            }
+                        )
+                    );
 
                     // derive the reachability condition for this block
                     let mut scc_info = scc_stack.last_mut().unwrap();
@@ -438,6 +448,18 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 self.smt_ctxt.bool_const(false),
                             );
                         }
+
+                        for (dst_scc_id, dst_block_id, _) in scc_exit_edges {
+                            scc_info.put_exit_cond(
+                                scc_id,
+                                block_id,
+                                dst_scc_id,
+                                dst_block_id,
+                                self.smt_ctxt.bool_const(false),
+                            );
+                        }
+
+                        // TODO: how about back edge?
                         continue;
                     }
 
@@ -450,6 +472,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         &reach_cond,
                         &outgoing_edges,
                         &scc_exit_edges,
+                        is_a_back_edge.as_ref(),
                         &mut scc_info,
                         current_frame,
                     )?;
@@ -503,6 +526,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         reach_cond: &SmtExpr<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+        is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) -> Result<SymBlockTerm<'env, 'smt>> {
@@ -544,6 +568,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             }
                         }
                     }
+                }
+                Bytecode::Load(_, dst, val) => {
+                    debug_assert!(!current_frame.is_local_ref(*dst));
+                    let sym = self.symbolize_constant(val, reach_cond)?;
+                    current_frame.store_local(*dst, &sym, reach_cond)?;
                 }
                 Bytecode::Call(_, rets, op, args) => {
                     match op {
@@ -796,6 +825,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             if let Some(func_info) = func_info_opt {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
                                 debug_assert_eq!(outgoing_edges.len(), 1);
+                                debug_assert_eq!(scc_exit_edges.len(), 0);
+                                debug_assert!(is_a_back_edge.is_none());
 
                                 // derive the reach condition for the next block
                                 for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
@@ -839,10 +870,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     if block.exec_unit.is_script_main() {
                         debug_assert_eq!(outgoing_edges.len(), 0);
-                        debug_assert_eq!(scc_exit_edges.len(), 0);
                     } else {
                         debug_assert_eq!(outgoing_edges.len(), 1);
                     }
+                    debug_assert_eq!(scc_exit_edges.len(), 0);
+                    debug_assert!(is_a_back_edge.is_none());
 
                     // derive the reach condition for the next block
                     for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
@@ -864,15 +896,12 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     current_frame.set_returns(rets);
                     return Ok(SymBlockTerm::Ret);
                 }
-                Bytecode::Load(_, dst, val) => {
-                    debug_assert!(!current_frame.is_local_ref(*dst));
-                    let sym = self.symbolize_constant(val, reach_cond)?;
-                    current_frame.store_local(*dst, &sym, reach_cond)?;
-                }
                 Bytecode::Branch(_, _, _, idx) => {
                     debug_assert!(!current_frame.is_local_ref(*idx));
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(outgoing_edges.len() + scc_exit_edges.len(), 2);
+                    debug_assert!(is_a_back_edge.is_none());
+
                     let sym = current_frame.copy_local(*idx, reach_cond)?;
                     let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
                     let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
@@ -925,19 +954,30 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 }
                 Bytecode::Jump(..) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
-                    debug_assert_eq!(outgoing_edges.len(), 1);
                     debug_assert_eq!(scc_exit_edges.len(), 0);
-                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                    if let Some((dst_scc_id, dst_block_id, flow_type)) = is_a_back_edge {
+                        // TODO: found a back edge
                         match flow_type {
-                            ExecFlowType::Branch(None) => scc_info.put_edge_cond(
-                                scc_id,
-                                block.block_id,
-                                *dst_scc_id,
-                                *dst_block_id,
-                                reach_cond.clone(),
-                            ),
+                            ExecFlowType::Branch(None) => {}
                             _ => {
-                                panic!("Invalid flow type for outgoing edges with Jump instruction")
+                                panic!("Invalid flow type for the back edge with Jump instruction")
+                            }
+                        }
+                        panic!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                    } else {
+                        debug_assert_eq!(outgoing_edges.len(), 1);
+                        for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                            match flow_type {
+                                ExecFlowType::Branch(None) => scc_info.put_edge_cond(
+                                    scc_id,
+                                    block.block_id,
+                                    *dst_scc_id,
+                                    *dst_block_id,
+                                    reach_cond.clone(),
+                                ),
+                                _ => {
+                                    panic!("Invalid flow type for outgoing edges with Jump instruction")
+                                }
                             }
                         }
                     }
