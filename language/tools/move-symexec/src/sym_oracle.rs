@@ -2,7 +2,11 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use once_cell::sync::OnceCell;
-use std::{cmp, collections::HashMap, hash};
+use std::{
+    cmp,
+    collections::{BTreeMap, HashMap},
+    hash,
+};
 
 use bytecode::{
     borrow_analysis::BorrowAnalysisProcessor,
@@ -15,6 +19,7 @@ use bytecode::{
     memory_instrumentation::MemoryInstrumentationProcessor,
     reaching_def_analysis::ReachingDefProcessor,
     stackless_bytecode::Bytecode,
+    stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
 use move_core_types::{
@@ -159,13 +164,18 @@ impl<'env> SymOracle<'env> {
         global_env: &'env GlobalEnv,
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: &[FuncIdMatcher],
+        no_pipeline: bool,
     ) -> Self {
         // collect tracked functions
         let (tracked_function_envs, script_env) =
             collect_tracked_functions_and_script(global_env, inclusion, Some(exclusion));
 
         // run prover passes
-        let mut function_targets = run_prover_passes(global_env);
+        let mut function_targets = if no_pipeline {
+            run_stackless_bytecode_generator(global_env)
+        } else {
+            run_prover_passes(global_env)
+        };
 
         // build per-function record
         let mut counter = 0;
@@ -335,4 +345,18 @@ fn run_prover_passes(global_env: &GlobalEnv) -> FunctionTargetsHolder {
 
     // done
     targets
+}
+
+// no prover passes
+fn run_stackless_bytecode_generator(global_env: &GlobalEnv) -> FunctionTargetsHolder {
+    let mut targets = BTreeMap::new();
+    for module_env in global_env.get_modules() {
+        for func_env in module_env.get_functions() {
+            let exists = targets.insert(
+                func_env.get_qualified_id(),
+                StacklessBytecodeGenerator::new(&func_env).generate_function(),
+            );
+        }
+    }
+    FunctionTargetsHolder { targets }
 }

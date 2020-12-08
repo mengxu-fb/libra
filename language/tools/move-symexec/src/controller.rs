@@ -130,6 +130,11 @@ enum OpCommand {
         #[structopt(long = "exclusion", short = "e", parse(try_from_str = FuncIdMatcher::new))]
         exclusion: Vec<FuncIdMatcher>,
 
+        /// Do not run the prover pipeline which transforms and optimizes stackless bytecode
+        /// (currently, the prover passes do not support recursive calls)
+        #[structopt(long = "no-pipeline")]
+        no_pipeline: bool,
+
         /// Output the composed execution graph in dot format
         #[structopt(long = "output-exec-graph")]
         output_exec_graph: bool,
@@ -244,6 +249,7 @@ impl MoveController {
         type_tags: &[TypeTag],
         inclusion: Option<&[FuncIdMatcher]>,
         exclusion: &[FuncIdMatcher],
+        no_pipeline: bool,
         output_exec_graph: bool,
         output_exec_graph_stats: bool,
         output_type_graph_listing: bool,
@@ -277,7 +283,7 @@ impl MoveController {
             run_spec_lang_compiler(sources.paths_to_strings()?, vec![], address.as_deref())?;
 
         // build the oracle
-        let oracle = SymOracle::new(&global_env, inclusion, exclusion);
+        let oracle = SymOracle::new(&global_env, inclusion, exclusion, no_pipeline);
         debug!(
             "{} functions tracked symbolically",
             oracle.num_tracked_functions()
@@ -348,6 +354,7 @@ impl MoveController {
                 type_tags,
                 inclusion,
                 exclusion,
+                no_pipeline,
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,
@@ -358,6 +365,7 @@ impl MoveController {
                 &type_tags,
                 inclusion.as_deref(),
                 &exclusion,
+                no_pipeline,
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,

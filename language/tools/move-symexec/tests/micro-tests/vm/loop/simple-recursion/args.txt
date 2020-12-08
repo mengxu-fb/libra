@@ -1,0 +1,4 @@
+compile move_src
+execute -v 0u8
+execute -v 4u8
+symbolize -v S::x --no-pipeline --output-exec-graph --strict
