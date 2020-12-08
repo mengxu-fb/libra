@@ -205,6 +205,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             &type_tags,
             None,
             &[],
+            false,
             true,
             true,
             true,
