@@ -356,6 +356,7 @@ fn run_stackless_bytecode_generator(global_env: &GlobalEnv) -> FunctionTargetsHo
                 func_env.get_qualified_id(),
                 StacklessBytecodeGenerator::new(&func_env).generate_function(),
             );
+            debug_assert!(exists.is_none());
         }
     }
     FunctionTargetsHolder { targets }

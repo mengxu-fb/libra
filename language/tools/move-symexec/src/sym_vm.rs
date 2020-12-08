@@ -824,37 +824,49 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 self.oracle.get_tracked_function_by_spec(module_id, func_id);
                             if let Some(func_info) = func_info_opt {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
-                                debug_assert_eq!(outgoing_edges.len(), 1);
                                 debug_assert_eq!(scc_exit_edges.len(), 0);
-                                debug_assert!(is_a_back_edge.is_none());
 
-                                // derive the reach condition for the next block
-                                for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                                if let Some((dst_scc_id, dst_block_id, flow_type)) = is_a_back_edge
+                                {
+                                    // TODO: found a back edge
                                     match flow_type {
-                                        ExecFlowType::Call => scc_info.put_edge_cond(
-                                            scc_id,
-                                            block.block_id,
-                                            *dst_scc_id,
-                                            *dst_block_id,
-                                            reach_cond.clone(),
-                                        ),
+                                        ExecFlowType::CallRecursive => {}
                                         _ => {
-                                            panic!("Invalid flow type for outgoing edges with Call instruction")
+                                            panic!("Invalid flow type for the back edge with Call instruction")
                                         }
                                     }
-                                }
+                                    panic!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                                } else {
+                                    debug_assert_eq!(outgoing_edges.len(), 1);
 
-                                // mark that this block is a call block
-                                current_frame.set_receive(rets);
-                                return Ok(SymBlockTerm::Call {
-                                    func_info,
-                                    func_args: args
-                                        .iter()
-                                        .map(|arg_index| {
-                                            current_frame.copy_local(*arg_index, reach_cond)
-                                        })
-                                        .collect::<Result<Vec<_>>>()?,
-                                });
+                                    // derive the reach condition for the next block
+                                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                                        match flow_type {
+                                            ExecFlowType::Call => scc_info.put_edge_cond(
+                                                scc_id,
+                                                block.block_id,
+                                                *dst_scc_id,
+                                                *dst_block_id,
+                                                reach_cond.clone(),
+                                            ),
+                                            _ => {
+                                                panic!("Invalid flow type for outgoing edges with Call instruction")
+                                            }
+                                        }
+                                    }
+
+                                    // mark that this block is a call block
+                                    current_frame.set_receive(rets);
+                                    return Ok(SymBlockTerm::Call {
+                                        func_info,
+                                        func_args: args
+                                            .iter()
+                                            .map(|arg_index| {
+                                                current_frame.copy_local(*arg_index, reach_cond)
+                                            })
+                                            .collect::<Result<Vec<_>>>()?,
+                                    });
+                                }
                             } else {
                                 // for system functions, this call must not be the lost instruction
                                 // of this exec block (in stackless control-flow graph)
