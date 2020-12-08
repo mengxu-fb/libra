@@ -114,7 +114,7 @@ pub(crate) enum ExecFlowType {
     /// Function call
     Call,
     /// Function return
-    Ret,
+    Ret(ExecBlockId),
     /// Recursive call
     CallRecursive,
     /// Recursive return
@@ -130,9 +130,9 @@ impl fmt::Display for ExecFlowType {
                 cond.map_or_else(|| String::from("None"), |v| v.to_string())
             ),
             ExecFlowType::Call => write!(f, "Call"),
-            ExecFlowType::Ret => write!(f, "Ret"),
+            ExecFlowType::Ret(block_id) => write!(f, "Ret({})", block_id),
             ExecFlowType::CallRecursive => write!(f, "CallRecursive"),
-            ExecFlowType::RetRecursive(block_id) => write!(f, "RetRecursive({})", block_id.0),
+            ExecFlowType::RetRecursive(block_id) => write!(f, "RetRecursive({})", block_id),
         }
     }
 }
@@ -277,9 +277,11 @@ impl<'env> ExecGraph<'env> {
         let mut inst_map: HashMap<CodeOffset, ExecBlockId> = HashMap::new();
 
         // maps a call instruction to a tuple
-        // (return_into_exec_block_id, Set<return_from_exec_block_id>)
-        let mut call_inst_map: HashMap<CodeOffset, (ExecBlockId, HashSet<ExecBlockId>)> =
-            HashMap::new();
+        // (call_from_exec_block_id, return_into_exec_block_id, Set<return_from_exec_block_id>)
+        let mut call_inst_map: HashMap<
+            CodeOffset,
+            (ExecBlockId, ExecBlockId, HashSet<ExecBlockId>),
+        > = HashMap::new();
 
         // locate the entry block of this function CFG
         let mut entry_point = None;
@@ -424,8 +426,10 @@ impl<'env> ExecGraph<'env> {
                         };
 
                         // add the new block id to the map that tracks calls specifically
-                        let exists =
-                            call_inst_map.insert(offset, (call_site_ret_block_id, ret_block_ids));
+                        let exists = call_inst_map.insert(
+                            offset,
+                            (call_site_block_id, call_site_ret_block_id, ret_block_ids),
+                        );
                         debug_assert!(exists.is_none());
                     }
                 }
@@ -484,9 +488,9 @@ impl<'env> ExecGraph<'env> {
         }
 
         // add returning edges from internal calls
-        for (ret_into_id, ret_from_ids) in call_inst_map.values() {
+        for (call_from_id, ret_into_id, ret_from_ids) in call_inst_map.values() {
             for ret_from_id in ret_from_ids {
-                self.add_flow(*ret_from_id, *ret_into_id, ExecFlowType::Ret);
+                self.add_flow(*ret_from_id, *ret_into_id, ExecFlowType::Ret(*call_from_id));
             }
         }
 

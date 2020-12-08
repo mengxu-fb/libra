@@ -5,7 +5,10 @@ use anyhow::{bail, Result};
 use itertools::Itertools;
 use log::debug;
 use once_cell::sync::Lazy;
-use std::{collections::BTreeMap, fmt};
+use std::{
+    collections::{BTreeMap, HashMap},
+    fmt,
+};
 
 use bytecode::stackless_bytecode::TempIndex;
 use move_core_types::{
@@ -14,7 +17,10 @@ use move_core_types::{
 };
 use spec_lang::ty::{PrimitiveType, Type};
 
-use crate::sym_smtlib::{SmtCtxt, SmtExpr, SmtKind};
+use crate::{
+    sym_exec_graph::ExecBlockId,
+    sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
+};
 
 // Move first class citizen: Address
 const ADDRESS_STRUCT_NAME: &str = "-Address-";
@@ -870,11 +876,8 @@ pub(crate) struct SymFrame<'smt> {
     locals: Vec<SymMemCell<'smt>>,
     /// A map of local indexes that are also references
     local_refs: BTreeMap<TempIndex, SymRefCell<'smt>>,
-    /// Local indexes for receive values. Set when calls into another function
-    /// and cleared when that function returns
-    receive: Option<Vec<TempIndex>>,
-    /// Local indexes for return values. Set when return from this function
-    returns: Option<Vec<TempIndex>>,
+    /// Local indexes for return values from called functions.
+    receive: HashMap<ExecBlockId, Vec<TempIndex>>,
 }
 
 impl<'smt> SymFrame<'smt> {
@@ -885,8 +888,7 @@ impl<'smt> SymFrame<'smt> {
                 .iter()
                 .map(|index| (*index, SymRefCell::new(ctxt)))
                 .collect(),
-            receive: None,
-            returns: None,
+            receive: HashMap::new(),
         }
     }
 
@@ -1003,32 +1005,22 @@ impl<'smt> SymFrame<'smt> {
         Ok(())
     }
 
-    pub fn set_returns(&mut self, rets: &[TempIndex]) {
-        // NOTE: check the assumption in stackless CFG that at max one return per function
-        debug_assert!(self.returns.is_none());
-        self.returns = Some(rets.to_vec());
+    pub fn set_receive(&mut self, block_id: ExecBlockId, rec_slots: &[TempIndex]) {
+        let exists = self.receive.insert(block_id, rec_slots.to_vec());
+        debug_assert!(exists.is_none());
     }
 
-    pub fn has_returns(&self) -> bool {
-        self.returns.is_some()
-    }
-
-    pub fn set_receive(&mut self, recs: &[TempIndex]) {
-        // NOTE: check that last call (if any) has returned
-        debug_assert!(self.receive.is_none());
-        self.receive = Some(recs.to_vec())
-    }
-
-    pub fn receive_returns(&mut self, frame: &mut Self, cond: &SmtExpr<'smt>) -> Result<()> {
-        let srcs = frame.returns.as_ref().unwrap().clone();
-        let dsts = self.receive.as_ref().unwrap().clone();
-        debug_assert_eq!(srcs.len(), dsts.len());
-        for (src, dst) in srcs.into_iter().zip(dsts.into_iter()) {
-            let sym = frame.copy_local(src, cond)?;
+    pub fn receive_returns(
+        &mut self,
+        block_id: ExecBlockId,
+        rets: &[SymValue<'smt>],
+        cond: &SmtExpr<'smt>,
+    ) -> Result<()> {
+        let dsts = self.receive.remove(&block_id).unwrap();
+        debug_assert_eq!(dsts.len(), rets.len());
+        for (sym, dst) in rets.iter().zip(dsts.into_iter()) {
             self.store_local(dst, &sym, cond)?;
         }
-        // clear the receive, mark that we are ready for the next call
-        self.receive = None;
         Ok(())
     }
 }

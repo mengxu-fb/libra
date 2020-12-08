@@ -4,7 +4,7 @@
 use anyhow::{bail, Result};
 use itertools::Itertools;
 use log::{debug, warn};
-use std::collections::HashMap;
+use std::{collections::HashMap, fmt};
 
 use bytecode::stackless_bytecode::{AssignKind, BorrowNode, Bytecode, Constant, Operation};
 use move_core_types::account_address::AccountAddress;
@@ -29,6 +29,40 @@ use crate::{
 /// Config: whether to simplify smt expressions upon construction
 const CONF_SMT_AUTO_SIMPLIFY: bool = true;
 
+/// An id that uniquely identifies a frame in the VM
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+struct SymFrameId(usize);
+
+impl fmt::Display for SymFrameId {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
+/// Holds the states for the VM during the interpretation
+struct SymVMState<'smt> {
+    /// A collection of all frames created
+    frames: HashMap<SymFrameId, SymFrame<'smt>>,
+}
+
+impl<'smt> SymVMState<'smt> {
+    fn new() -> Self {
+        SymVMState {
+            frames: HashMap::new(),
+        }
+    }
+
+    fn add_frame<'env>(&mut self, frame: SymFrame<'smt>) -> SymFrameId {
+        let frame_id = SymFrameId(self.frames.len());
+        self.frames.insert(frame_id, frame);
+        frame_id
+    }
+
+    fn get_frame_mut(&mut self, frame_id: SymFrameId) -> &mut SymFrame<'smt> {
+        self.frames.get_mut(&frame_id).unwrap()
+    }
+}
+
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 struct SymIntraSccFlow {
     src_scc_id: ExecSccId,
@@ -45,62 +79,74 @@ struct SymInterSccFlow {
     dst_block_id: ExecBlockId,
 }
 
+#[derive(Clone)]
+struct SymFlowInfo<'smt> {
+    cond: SmtExpr<'smt>,
+    frame_stack: Vec<SymFrameId>,
+}
+
 struct SymSccInfo<'smt> {
     /// The scc_id where all scc_ids in the edge_conds resides in
     scc_id: Option<ExecSccId>,
-    /// Entry condition
-    entry_cond: SmtExpr<'smt>,
-    /// Conditions for flows (i.e., edges) within this scc only
-    edge_conds: HashMap<SymIntraSccFlow, SmtExpr<'smt>>,
-    /// Conditions for flows (i.e., edges) out of this scc only
-    exit_conds: HashMap<SymInterSccFlow, SmtExpr<'smt>>,
+    /// Entry information
+    entry_info: SymFlowInfo<'smt>,
+    /// Information for flows (i.e., edges) within this scc only
+    edge_info: HashMap<SymIntraSccFlow, Option<SymFlowInfo<'smt>>>,
+    /// Information for flows (i.e., edges) out of this scc only
+    exit_info: HashMap<SymInterSccFlow, Option<SymFlowInfo<'smt>>>,
 }
 
 impl<'smt> SymSccInfo<'smt> {
-    fn for_base(ctxt: &'smt SmtCtxt) -> Self {
+    fn for_base(ctxt: &'smt SmtCtxt, init_frame_id: SymFrameId) -> Self {
         Self {
             scc_id: None,
-            entry_cond: ctxt.bool_const(true),
-            edge_conds: HashMap::new(),
-            exit_conds: HashMap::new(),
+            entry_info: SymFlowInfo {
+                cond: ctxt.bool_const(true),
+                frame_stack: vec![init_frame_id],
+            },
+            edge_info: HashMap::new(),
+            exit_info: HashMap::new(),
         }
     }
 
     fn for_cycle(ctxt: &'smt SmtCtxt, scc_id: ExecSccId) -> Self {
         Self {
             scc_id: Some(scc_id),
-            // TODO: this is a fake condition
-            entry_cond: ctxt.bool_const(true),
-            edge_conds: HashMap::new(),
-            exit_conds: HashMap::new(),
+            // TODO: this is a fake information
+            entry_info: SymFlowInfo {
+                cond: ctxt.bool_const(true),
+                frame_stack: vec![],
+            },
+            edge_info: HashMap::new(),
+            exit_info: HashMap::new(),
         }
     }
 
-    /// Get the condition associated with this intra-scc edge (panic if non-exist)
-    fn get_edge_cond(
+    /// Get the information associated with this intra-scc edge (panic if non-exist)
+    fn get_edge_info(
         &self,
         src_scc_id: ExecSccId,
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
-    ) -> &SmtExpr<'smt> {
+    ) -> Option<&SymFlowInfo<'smt>> {
         let key = SymIntraSccFlow {
             src_scc_id,
             src_block_id,
             dst_scc_id,
             dst_block_id,
         };
-        self.edge_conds.get(&key).unwrap()
+        self.edge_info.get(&key).unwrap().as_ref()
     }
 
-    /// Put the condition associated with this intra-scc edge (panic if exists)
-    fn put_edge_cond(
+    /// Put the information associated with this intra-scc edge (panic if exists)
+    fn put_edge_info(
         &mut self,
         src_scc_id: ExecSccId,
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
-        condition: SmtExpr<'smt>,
+        info: Option<SymFlowInfo<'smt>>,
     ) {
         let key = SymIntraSccFlow {
             src_scc_id,
@@ -108,18 +154,18 @@ impl<'smt> SymSccInfo<'smt> {
             dst_scc_id,
             dst_block_id,
         };
-        let exists = self.edge_conds.insert(key, condition);
+        let exists = self.edge_info.insert(key, info);
         debug_assert!(exists.is_none());
     }
 
-    /// Put the condition associated with this exit edge (panic if exists)
-    fn put_exit_cond(
+    /// Put the information associated with this exit edge (panic if exists)
+    fn put_exit_info(
         &mut self,
         src_scc_id: ExecSccId,
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
-        condition: SmtExpr<'smt>,
+        info: Option<SymFlowInfo<'smt>>,
     ) {
         let key = SymInterSccFlow {
             src_scc_id,
@@ -127,19 +173,80 @@ impl<'smt> SymSccInfo<'smt> {
             dst_scc_id,
             dst_block_id,
         };
-        let exists = self.exit_conds.insert(key, condition);
+        let exists = self.exit_info.insert(key, info);
         debug_assert!(exists.is_none());
+    }
+
+    fn derive_reach_info(
+        &self,
+        smt_ctxt: &'smt SmtCtxt,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+        incoming_edges: &[(ExecSccId, ExecBlockId)],
+    ) -> Option<SymFlowInfo<'smt>> {
+        if incoming_edges.is_empty() {
+            // this is the entry block of this scc, so just take the scc entry info
+            Some(self.entry_info.clone())
+        } else {
+            let mut derived_cond = smt_ctxt.bool_const(false);
+            let mut derived_stack: Option<Vec<_>> = None;
+            for (src_scc_id, src_block_id) in incoming_edges.iter() {
+                if let Some(edge_info) =
+                    self.get_edge_info(*src_scc_id, *src_block_id, scc_id, block_id)
+                {
+                    // no matter how this block is reached, the frame stack is the same
+                    if let Some(stack) = derived_stack.as_ref() {
+                        debug_assert_eq!(stack, &edge_info.frame_stack);
+                    } else {
+                        derived_stack = Some(edge_info.frame_stack.clone());
+                    }
+
+                    // unify the reaching conditions
+                    derived_cond = derived_cond.or(&edge_info.cond);
+                }
+            }
+
+            // re-construct the flow info
+            derived_stack.map(|frame_stack| SymFlowInfo {
+                cond: derived_cond,
+                frame_stack,
+            })
+        }
+    }
+
+    fn mark_block_unreachable(
+        &mut self,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+        outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+        scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+        _is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
+    ) {
+        for (dst_scc_id, dst_block_id, _) in outgoing_edges {
+            self.put_edge_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
+        }
+
+        for (dst_scc_id, dst_block_id, _) in scc_exit_edges {
+            self.put_exit_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
+        }
+
+        // TODO: what about the back edge?
     }
 }
 
 /// The reason why this exec block is finished
-enum SymBlockTerm<'env, 'smt> {
+enum SymBlockTerm<'smt> {
     Normal,
-    Ret,
+    Ret {
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+        call_from_block_id: ExecBlockId,
+        return_values: Vec<SymValue<'smt>>,
+    },
     Call {
-        func_info: &'env SymFuncInfo<'env>,
-        func_args: Vec<SymValue<'smt>>,
-        func_type_actuals: Vec<Type>,
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+        frame: SymFrame<'smt>,
     },
 }
 
@@ -233,7 +340,34 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         }
     }
 
-    fn prepare_frame<'smt>(
+    fn get_smt_struct_kind(
+        &self,
+        module_id: &ModuleId,
+        struct_id: &StructId,
+        type_actuals: &[Type],
+        exec_type_args: &[ExecTypeArg<'env>],
+    ) -> SmtKind {
+        let struct_info = self
+            .oracle
+            .get_defined_struct_by_spec(module_id, struct_id)
+            .unwrap();
+        let struct_type_args: Vec<_> = type_actuals
+            .iter()
+            .map(|type_arg| {
+                ExecTypeArg::convert_from_type_actual(type_arg, exec_type_args, self.oracle)
+            })
+            .collect();
+
+        SmtKind::Struct {
+            struct_name: self
+                .type_graph
+                .get_struct_name(&struct_info.struct_id, &struct_type_args)
+                .unwrap()
+                .to_owned(),
+        }
+    }
+
+    fn create_frame<'smt>(
         &'smt self,
         func_info: &'env SymFuncInfo<'env>,
         func_args: &[SymValue<'smt>],
@@ -283,33 +417,6 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         Ok(frame)
     }
 
-    fn get_smt_struct_kind(
-        &self,
-        module_id: &ModuleId,
-        struct_id: &StructId,
-        type_actuals: &[Type],
-        exec_type_args: &[ExecTypeArg<'env>],
-    ) -> SmtKind {
-        let struct_info = self
-            .oracle
-            .get_defined_struct_by_spec(module_id, struct_id)
-            .unwrap();
-        let struct_type_args: Vec<_> = type_actuals
-            .iter()
-            .map(|type_arg| {
-                ExecTypeArg::convert_from_type_actual(type_arg, exec_type_args, self.oracle)
-            })
-            .collect();
-
-        SmtKind::Struct {
-            struct_name: self
-                .type_graph
-                .get_struct_name(&struct_info.struct_id, &struct_type_args)
-                .unwrap()
-                .to_owned(),
-        }
-    }
-
     pub fn interpret(
         &self,
         sigs_opt: Option<&[AccountAddress]>,
@@ -344,18 +451,21 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             )?);
         }
 
+        // create the state
+        let mut vm_state = SymVMState::new();
+
         // prepare the first frame with the input arguments
-        let init_frame = self.prepare_frame(
+        let init_frame = self.create_frame(
             script_main,
             &sym_inputs,
             &self.exec_graph.get_entry_block().type_args,
             &self.smt_ctxt.bool_const(true),
         )?;
-        let mut call_stack = vec![init_frame];
+        let init_frame_id = vm_state.add_frame(init_frame);
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
         // i.e., an scc containing a single block will not be able to form a stack.
-        let mut scc_stack = vec![SymSccInfo::for_base(&self.smt_ctxt)];
+        let mut scc_stack = vec![SymSccInfo::for_base(&self.smt_ctxt, init_frame_id)];
 
         // symbolically walk the exec graph
         let mut walker = ExecWalker::new(self.exec_graph);
@@ -377,100 +487,71 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     is_a_back_edge,
                 } => {
                     // log information
-                    debug!("Block: {} (scc: {})", block_id, scc_id);
-                    debug!(
-                        "Incoming edges: [{}]",
-                        incoming_edges
-                            .iter()
-                            .map(|(edge_scc_id, edge_block_id)| format!(
-                                "{}::{}",
-                                edge_scc_id, edge_block_id
-                            ))
-                            .join("-")
-                    );
-                    debug!(
-                        "Outgoing edges: [{}]",
-                        outgoing_edges
-                            .iter()
-                            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
-                                "{}::{}-({})",
-                                edge_scc_id, edge_block_id, flow_type
-                            ))
-                            .join("-")
-                    );
-                    debug!(
-                        "Scc-exit edges: [{}]",
-                        scc_exit_edges
-                            .iter()
-                            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
-                                "{}::{}-({})",
-                                edge_scc_id, edge_block_id, flow_type
-                            ))
-                            .join("-")
-                    );
-                    debug!(
-                        "Back edge: {}",
-                        is_a_back_edge.as_ref().map_or(
-                            "X".to_owned(),
-                            |(edge_scc_id, edge_block_id, flow_type)| {
-                                format!("{}::{}-({})", edge_scc_id, edge_block_id, flow_type)
-                            }
-                        )
+                    log_block_info(
+                        scc_id,
+                        block_id,
+                        &incoming_edges,
+                        &outgoing_edges,
+                        &scc_exit_edges,
+                        is_a_back_edge.as_ref(),
                     );
 
-                    // derive the reachability condition for this block
+                    // derive the reachability information for this block
                     let mut scc_info = scc_stack.last_mut().unwrap();
-                    let reach_cond = if incoming_edges.is_empty() {
-                        // this is the entry block of this scc, so just take the entry condition
-                        scc_info.entry_cond.clone()
-                    } else {
-                        incoming_edges.iter().fold(
-                            self.smt_ctxt.bool_const(false),
-                            |cond, (src_scc_id, src_block_id)| {
-                                cond.or(scc_info.get_edge_cond(
-                                    *src_scc_id,
-                                    *src_block_id,
-                                    scc_id,
-                                    block_id,
-                                ))
-                            },
-                        )
-                    };
-                    debug!("Reaching condition: {}", reach_cond);
+                    let reach_info_opt = scc_info.derive_reach_info(
+                        &self.smt_ctxt,
+                        scc_id,
+                        block_id,
+                        &incoming_edges,
+                    );
 
-                    // if this block is not even reachable, shortcut the execution
-                    if !self.smt_ctxt.is_feasible_assume_solvable(&[&reach_cond])? {
-                        for (dst_scc_id, dst_block_id, _) in outgoing_edges {
-                            scc_info.put_edge_cond(
-                                scc_id,
-                                block_id,
-                                dst_scc_id,
-                                dst_block_id,
-                                self.smt_ctxt.bool_const(false),
-                            );
-                        }
+                    // if this block is obviously unreachable, shortcut the execution
+                    if reach_info_opt.is_none() {
+                        debug!("[x] Block is unreachable");
+                        scc_info.mark_block_unreachable(
+                            scc_id,
+                            block_id,
+                            &outgoing_edges,
+                            &scc_exit_edges,
+                            is_a_back_edge.as_ref(),
+                        );
+                        continue;
+                    }
 
-                        for (dst_scc_id, dst_block_id, _) in scc_exit_edges {
-                            scc_info.put_exit_cond(
-                                scc_id,
-                                block_id,
-                                dst_scc_id,
-                                dst_block_id,
-                                self.smt_ctxt.bool_const(false),
-                            );
-                        }
+                    let reach_info = reach_info_opt.unwrap();
+                    debug!("Reaching condition: {}", reach_info.cond);
+                    debug!(
+                        "Reaching stack: [{}]",
+                        reach_info
+                            .frame_stack
+                            .iter()
+                            .map(|frame_id| frame_id.to_string())
+                            .join(", ")
+                    );
 
-                        // TODO: how about back edge?
+                    // if this block is not reachable by condition, shortcut the execution
+                    if !self
+                        .smt_ctxt
+                        .is_feasible_assume_solvable(&[&reach_info.cond])?
+                    {
+                        scc_info.mark_block_unreachable(
+                            scc_id,
+                            block_id,
+                            &outgoing_edges,
+                            &scc_exit_edges,
+                            is_a_back_edge.as_ref(),
+                        );
                         continue;
                     }
 
                     // now symbolize the block
                     let block = self.exec_graph.get_block_by_block_id(block_id);
-                    let current_frame = call_stack.last_mut().unwrap();
+                    let current_frame =
+                        vm_state.get_frame_mut(*reach_info.frame_stack.last().unwrap());
                     let block_term = self.symbolize_block(
                         scc_id,
                         block,
-                        &reach_cond,
+                        &reach_info,
                         &outgoing_edges,
                         &scc_exit_edges,
                         is_a_back_edge.as_ref(),
@@ -481,53 +562,68 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     // pop the call stack if this is a return block
                     match block_term {
                         SymBlockTerm::Normal => {}
-                        SymBlockTerm::Ret => {
-                            let mut last_frame = call_stack.pop().unwrap();
-                            if let Some(current_frame) = call_stack.last_mut() {
-                                current_frame.receive_returns(&mut last_frame, &reach_cond)?;
-                            }
+                        SymBlockTerm::Ret {
+                            scc_id: dst_scc_id,
+                            block_id: dst_block_id,
+                            call_from_block_id,
+                            return_values,
+                        } => {
+                            // we guarantee that only function returns show here, script return is
+                            // treated as normal. Hence, it must be safe to pop the stack
+                            let mut next_frame_stack = reach_info.frame_stack.clone();
+                            next_frame_stack.pop().unwrap();
+
+                            // transfer the return value to the parent frame
+                            let parent_frame =
+                                vm_state.get_frame_mut(*next_frame_stack.last_mut().unwrap());
+                            parent_frame.receive_returns(
+                                call_from_block_id,
+                                &return_values,
+                                &reach_info.cond,
+                            )?;
+
+                            // tell the dst block that the old frame is gone
+                            scc_info.put_edge_info(
+                                scc_id,
+                                block_id,
+                                dst_scc_id,
+                                dst_block_id,
+                                Some(SymFlowInfo {
+                                    cond: reach_info.cond,
+                                    frame_stack: next_frame_stack,
+                                }),
+                            );
                         }
                         SymBlockTerm::Call {
-                            func_info,
-                            func_args,
-                            func_type_actuals,
+                            scc_id: dst_scc_id,
+                            block_id: dst_block_id,
+                            frame,
                         } => {
-                            // convert type actuals to type args
-                            let func_type_args: Vec<_> = func_type_actuals
-                                .iter()
-                                .map(|actual| {
-                                    ExecTypeArg::convert_from_type_actual(
-                                        actual,
-                                        &block.type_args,
-                                        self.oracle,
-                                    )
-                                })
-                                .collect();
+                            let next_frame_id = vm_state.add_frame(frame);
+                            let mut next_frame_stack = reach_info.frame_stack.clone();
+                            next_frame_stack.push(next_frame_id);
 
-                            // prepare the next frame, in particular, the function arguments
-                            let next_frame = self.prepare_frame(
-                                func_info,
-                                &func_args,
-                                &func_type_args,
-                                &reach_cond,
-                            )?;
-                            call_stack.push(next_frame);
+                            // tell the dst block that they have a new frame to use
+                            scc_info.put_edge_info(
+                                scc_id,
+                                block_id,
+                                dst_scc_id,
+                                dst_block_id,
+                                Some(SymFlowInfo {
+                                    cond: reach_info.cond,
+                                    frame_stack: next_frame_stack,
+                                }),
+                            );
                         }
                     }
                 }
             }
         }
 
-        // we should have nothing left in the stack after execution, unless the execution runs into
-        // a function that only aborts but never returns
-        if let Some(call_frame) = call_stack.pop() {
-            debug_assert!(!call_frame.has_returns());
-        } else {
-            // pop the base scc
-            let base_scc = scc_stack.pop().unwrap();
-            debug_assert!(base_scc.scc_id.is_none());
-            debug_assert!(scc_stack.is_empty());
-        }
+        // we should have nothing left in the stack after execution, except the root scc
+        let base_scc = scc_stack.pop().unwrap();
+        debug_assert!(base_scc.scc_id.is_none());
+        debug_assert!(scc_stack.is_empty());
 
         // done
         Ok(())
@@ -537,14 +633,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         &'smt self,
         scc_id: ExecSccId,
         block: &ExecBlock<'env>,
-        reach_cond: &SmtExpr<'smt>,
+        reach_info: &SymFlowInfo<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
         is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
-    ) -> Result<SymBlockTerm<'env, 'smt>> {
+    ) -> Result<SymBlockTerm<'smt>> {
         let func_env = block.exec_unit;
+        let reach_cond = &reach_info.cond;
         for (pos, instruction) in block.instructions.iter().enumerate() {
             debug!(
                 "Instruction {}: {}",
@@ -836,6 +933,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         Operation::Function(module_id, func_id, type_actuals) => {
                             let func_info_opt =
                                 self.oracle.get_tracked_function_by_spec(module_id, func_id);
+
+                            // check whether we have the function inlined in the eCFG
                             if let Some(func_info) = func_info_opt {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
                                 debug_assert_eq!(scc_exit_edges.len(), 0);
@@ -852,34 +951,44 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                     bail!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
                                 } else {
                                     debug_assert_eq!(outgoing_edges.len(), 1);
+                                    let (dst_scc_id, dst_block_id, flow_type) =
+                                        outgoing_edges.first().unwrap();
+                                    debug_assert!(matches!(flow_type, ExecFlowType::Call));
 
-                                    // derive the reach condition for the next block
-                                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
-                                        match flow_type {
-                                            ExecFlowType::Call => scc_info.put_edge_cond(
-                                                scc_id,
-                                                block.block_id,
-                                                *dst_scc_id,
-                                                *dst_block_id,
-                                                reach_cond.clone(),
-                                            ),
-                                            _ => {
-                                                panic!("Invalid flow type for outgoing edges with Call instruction")
-                                            }
-                                        }
-                                    }
+                                    // register the return slots
+                                    current_frame.set_receive(block.block_id, rets);
+
+                                    // create the frame for this call
+                                    let func_sym_args = args
+                                        .iter()
+                                        .map(|arg_index| {
+                                            current_frame.copy_local(*arg_index, reach_cond)
+                                        })
+                                        .collect::<Result<Vec<_>>>()?;
+
+                                    let func_type_args: Vec<_> = type_actuals
+                                        .iter()
+                                        .map(|actual| {
+                                            ExecTypeArg::convert_from_type_actual(
+                                                actual,
+                                                &block.type_args,
+                                                self.oracle,
+                                            )
+                                        })
+                                        .collect();
+
+                                    let frame = self.create_frame(
+                                        func_info,
+                                        &func_sym_args,
+                                        &func_type_args,
+                                        reach_cond,
+                                    )?;
 
                                     // mark that this block is a call block
-                                    current_frame.set_receive(rets);
                                     return Ok(SymBlockTerm::Call {
-                                        func_info,
-                                        func_args: args
-                                            .iter()
-                                            .map(|arg_index| {
-                                                current_frame.copy_local(*arg_index, reach_cond)
-                                            })
-                                            .collect::<Result<Vec<_>>>()?,
-                                        func_type_actuals: type_actuals.clone(),
+                                        scc_id: *dst_scc_id,
+                                        block_id: *dst_block_id,
+                                        frame,
                                     });
                                 }
                             } else {
@@ -895,33 +1004,37 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 }
                 Bytecode::Ret(_, rets) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
-                    if block.exec_unit.is_script_main() {
-                        debug_assert_eq!(outgoing_edges.len(), 0);
-                    } else {
-                        debug_assert_eq!(outgoing_edges.len(), 1);
-                    }
                     debug_assert_eq!(scc_exit_edges.len(), 0);
                     debug_assert!(is_a_back_edge.is_none());
+                    if block.exec_unit.is_script_main() {
+                        debug_assert_eq!(outgoing_edges.len(), 0);
 
-                    // derive the reach condition for the next block
-                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
-                        match flow_type {
-                            ExecFlowType::Ret => scc_info.put_edge_cond(
-                                scc_id,
-                                block.block_id,
-                                *dst_scc_id,
-                                *dst_block_id,
-                                reach_cond.clone(),
-                            ),
-                            _ => {
-                                panic!("Invalid flow type for outgoing edges with Ret instruction")
-                            }
-                        }
+                        // extra assertion since this is the script return
+                        debug_assert_eq!(rets.len(), 0);
+                        debug_assert_eq!(reach_info.frame_stack.len(), 1);
+                        return Ok(SymBlockTerm::Normal);
                     }
 
+                    debug_assert_eq!(outgoing_edges.len(), 1);
+                    let (dst_scc_id, dst_block_id, flow_type) = outgoing_edges.first().unwrap();
+                    let call_from_block_id = match flow_type {
+                        ExecFlowType::Ret(block_id) => *block_id,
+                        _ => panic!("Invalid flow type for return instructions"),
+                    };
+
+                    // collect return values
+                    let sym_rets = rets
+                        .iter()
+                        .map(|ret_index| current_frame.copy_local(*ret_index, reach_cond))
+                        .collect::<Result<Vec<_>>>()?;
+
                     // mark that this block is a return block
-                    current_frame.set_returns(rets);
-                    return Ok(SymBlockTerm::Ret);
+                    return Ok(SymBlockTerm::Ret {
+                        scc_id: *dst_scc_id,
+                        block_id: *dst_block_id,
+                        call_from_block_id,
+                        return_values: sym_rets,
+                    });
                 }
                 Bytecode::Branch(_, _, _, idx) => {
                     debug_assert!(!current_frame.is_local_ref(*idx));
@@ -936,19 +1049,25 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     // add conditions for outgoing edges
                     for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
                         match flow_type {
-                            ExecFlowType::Branch(Some(true)) => scc_info.put_edge_cond(
+                            ExecFlowType::Branch(Some(true)) => scc_info.put_edge_info(
                                 scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
-                                cond_t.clone(),
+                                Some(SymFlowInfo {
+                                    cond: cond_t.clone(),
+                                    frame_stack: reach_info.frame_stack.clone(),
+                                }),
                             ),
-                            ExecFlowType::Branch(Some(false)) => scc_info.put_edge_cond(
+                            ExecFlowType::Branch(Some(false)) => scc_info.put_edge_info(
                                 scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
-                                cond_f.clone(),
+                                Some(SymFlowInfo {
+                                    cond: cond_f.clone(),
+                                    frame_stack: reach_info.frame_stack.clone(),
+                                }),
                             ),
                             _ => panic!(
                                 "Invalid flow type for outgoing edges with Branch instruction"
@@ -959,19 +1078,25 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     // add conditions for scc-exiting edges
                     for (dst_scc_id, dst_block_id, flow_type) in scc_exit_edges {
                         match flow_type {
-                            ExecFlowType::Branch(Some(true)) => scc_info.put_exit_cond(
+                            ExecFlowType::Branch(Some(true)) => scc_info.put_exit_info(
                                 scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
-                                cond_t.clone(),
+                                Some(SymFlowInfo {
+                                    cond: cond_f.clone(),
+                                    frame_stack: reach_info.frame_stack.clone(),
+                                }),
                             ),
-                            ExecFlowType::Branch(Some(false)) => scc_info.put_exit_cond(
+                            ExecFlowType::Branch(Some(false)) => scc_info.put_exit_info(
                                 scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
-                                cond_f.clone(),
+                                Some(SymFlowInfo {
+                                    cond: cond_f.clone(),
+                                    frame_stack: reach_info.frame_stack.clone(),
+                                }),
                             ),
                             _ => panic!(
                                 "Invalid flow type for scc-exit edges with Branch instruction"
@@ -995,12 +1120,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         debug_assert_eq!(outgoing_edges.len(), 1);
                         for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
                             match flow_type {
-                                ExecFlowType::Branch(None) => scc_info.put_edge_cond(
+                                ExecFlowType::Branch(None) => scc_info.put_edge_info(
                                     scc_id,
                                     block.block_id,
                                     *dst_scc_id,
                                     *dst_block_id,
-                                    reach_cond.clone(),
+                                    Some(SymFlowInfo {
+                                        cond: reach_cond.clone(),
+                                        frame_stack: reach_info.frame_stack.clone(),
+                                    }),
                                 ),
                                 _ => {
                                     panic!("Invalid flow type for outgoing edges with Jump instruction")
@@ -1045,6 +1173,51 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 }
 
 // utilities
+fn log_block_info(
+    scc_id: ExecSccId,
+    block_id: ExecBlockId,
+    incoming_edges: &[(ExecSccId, ExecBlockId)],
+    outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+    scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
+    is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
+) {
+    // log information
+    debug!("Block: {} (scc: {})", block_id, scc_id);
+    debug!(
+        "Incoming edges: [{}]",
+        incoming_edges
+            .iter()
+            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .join("-")
+    );
+    debug!(
+        "Outgoing edges: [{}]",
+        outgoing_edges
+            .iter()
+            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
+                "{}::{}-({})",
+                edge_scc_id, edge_block_id, flow_type
+            ))
+            .join("-")
+    );
+    debug!(
+        "Scc-exit edges: [{}]",
+        scc_exit_edges
+            .iter()
+            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
+                "{}::{}-({})",
+                edge_scc_id, edge_block_id, flow_type
+            ))
+            .join("-")
+    );
+    debug!(
+        "Back edge: {}",
+        is_a_back_edge.map_or("X".to_owned(), |(edge_scc_id, edge_block_id, flow_type)| {
+            format!("{}::{}-({})", edge_scc_id, edge_block_id, flow_type)
+        })
+    );
+}
+
 fn type_arg_to_smt_kind(type_arg: &ExecTypeArg, type_graph: &TypeGraph) -> SmtKind {
     match type_arg {
         ExecTypeArg::Bool => SmtKind::Bool,
