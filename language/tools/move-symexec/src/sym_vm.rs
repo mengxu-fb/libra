@@ -139,6 +139,7 @@ enum SymBlockTerm<'env, 'smt> {
     Call {
         func_info: &'env SymFuncInfo<'env>,
         func_args: Vec<SymValue<'smt>>,
+        func_type_actuals: Vec<Type>,
     },
 }
 
@@ -244,7 +245,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         let params = func_info.func_env.get_parameters();
         debug_assert_eq!(func_args.len(), target.get_parameter_count());
 
-        // instantiate type actuals and collect references
+        // instantiate local type actuals and collect references
         let local_refs = func_info
             .func_data
             .local_types
@@ -252,7 +253,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             .enumerate()
             .filter_map(|(local_index, local_type)| {
                 let exec_type_arg =
-                    ExecTypeArg::convert_from_type_actual(local_type, func_type_args, &self.oracle);
+                    ExecTypeArg::convert_from_type_actual(local_type, func_type_args, self.oracle);
                 if exec_type_arg.is_reference() {
                     Some(local_index)
                 } else {
@@ -489,12 +490,25 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         SymBlockTerm::Call {
                             func_info,
                             func_args,
+                            func_type_actuals,
                         } => {
+                            // convert type actuals to type args
+                            let func_type_args: Vec<_> = func_type_actuals
+                                .iter()
+                                .map(|actual| {
+                                    ExecTypeArg::convert_from_type_actual(
+                                        actual,
+                                        &block.type_args,
+                                        self.oracle,
+                                    )
+                                })
+                                .collect();
+
                             // prepare the next frame, in particular, the function arguments
                             let next_frame = self.prepare_frame(
                                 func_info,
                                 &func_args,
-                                &block.type_args,
+                                &func_type_args,
                                 &reach_cond,
                             )?;
                             call_stack.push(next_frame);
@@ -819,7 +833,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             // follows a Borrow and does not return anything...
                         }
                         // invoke
-                        Operation::Function(module_id, func_id, _) => {
+                        Operation::Function(module_id, func_id, type_actuals) => {
                             let func_info_opt =
                                 self.oracle.get_tracked_function_by_spec(module_id, func_id);
                             if let Some(func_info) = func_info_opt {
@@ -865,6 +879,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                                 current_frame.copy_local(*arg_index, reach_cond)
                                             })
                                             .collect::<Result<Vec<_>>>()?,
+                                        func_type_actuals: type_actuals.clone(),
                                     });
                                 }
                             } else {
