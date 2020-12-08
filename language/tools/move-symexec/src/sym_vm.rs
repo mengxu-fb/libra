@@ -835,7 +835,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                             panic!("Invalid flow type for the back edge with Call instruction")
                                         }
                                     }
-                                    panic!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                                    bail!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
                                 } else {
                                     debug_assert_eq!(outgoing_edges.len(), 1);
 
@@ -975,7 +975,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 panic!("Invalid flow type for the back edge with Jump instruction")
                             }
                         }
-                        panic!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                        bail!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
                     } else {
                         debug_assert_eq!(outgoing_edges.len(), 1);
                         for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
