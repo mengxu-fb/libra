@@ -248,7 +248,7 @@ impl<'env> ExecGraph<'env> {
         self.get_block_by_block_id(self.entry_block_id)
     }
 
-    fn get_flow_by_block_ids(
+    pub fn get_flow_by_block_ids(
         &self,
         src_block_id: ExecBlockId,
         dst_block_id: ExecBlockId,
@@ -791,6 +791,7 @@ impl fmt::Display for ExecSccId {
 
 /// An scc is a self-contained set of blocks (can be either a single block or a loop) in the shadow
 /// graph of the eCFG, (i.e., in the `ExecRefGraph`)
+#[derive(Clone)]
 pub(crate) struct ExecScc {
     /// A unique identifier for the scc
     scc_id: ExecSccId,
@@ -1149,23 +1150,35 @@ impl ExecSccGraph {
 
 /// Stores the internal states of the `ExecWalker`
 struct ExecWalkerState {
-    /// The id of scc we are currently exploring, w.r.t. the parent scc.
-    /// If the scc_id is None, the walker is in the initial exec_graph
-    scc_id: Option<ExecSccId>,
+    /// The scc we are currently exploring, w.r.t. the parent scc.
+    /// If the scc is None, the walker is in the initial exec_graph. In other words, this scc can
+    /// only be either the root exec graph as a whole or a cycle, or a cycle in a cycle, etc
+    scc: Option<ExecScc>,
     /// The (sub) scc graph for this scc.
-    /// Hence, this scc can only be either the root exec graph or a cycle
-    scc_graph: ExecSccGraph,
+    sub_scc_graph: ExecSccGraph,
     /// A topological iterator for the (sub) scc_graph
     node_iterator: vec::IntoIter<NodeIndex>,
 }
 
 impl ExecWalkerState {
-    pub fn new(scc_id: Option<ExecSccId>, ref_graph: &ExecRefGraph) -> Self {
-        let scc_graph = ExecSccGraph::new(&ref_graph);
-        let node_iterator = toposort(&scc_graph.graph, None).unwrap().into_iter();
+    fn from_base(exec_graph: &ExecGraph) -> Self {
+        let ref_graph = ExecRefGraph::from_graph(exec_graph);
+        let sub_scc_graph = ExecSccGraph::new(&ref_graph);
+        let node_iterator = toposort(&sub_scc_graph.graph, None).unwrap().into_iter();
         Self {
-            scc_id,
-            scc_graph,
+            scc: None,
+            sub_scc_graph,
+            node_iterator,
+        }
+    }
+
+    fn from_scc(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {
+        let ref_graph = ExecRefGraph::from_graph_scc(exec_graph, scc);
+        let sub_scc_graph = ExecSccGraph::new(&ref_graph);
+        let node_iterator = toposort(&sub_scc_graph.graph, None).unwrap().into_iter();
+        Self {
+            scc: Some(scc.clone()),
+            sub_scc_graph,
             node_iterator,
         }
     }
@@ -1173,7 +1186,7 @@ impl ExecWalkerState {
     pub fn next(&mut self) -> Option<&ExecScc> {
         self.node_iterator
             .next()
-            .map(move |node| self.scc_graph.get_scc_by_node(node))
+            .map(move |node| self.sub_scc_graph.get_scc_by_node(node))
     }
 }
 
@@ -1184,7 +1197,10 @@ enum CycleOrBlock {
 
 pub(crate) enum ExecWalkerStep {
     /// Entering a new scc
-    CycleEntry { scc_id: ExecSccId },
+    CycleEntry {
+        scc_id: ExecSccId,
+        block_id: ExecBlockId,
+    },
     /// Exiting the current scc, we have explored all blocks in it
     CycleExit { scc_id: ExecSccId },
     /// Moving into the next block within the current scc
@@ -1192,9 +1208,9 @@ pub(crate) enum ExecWalkerStep {
         scc_id: ExecSccId,
         block_id: ExecBlockId,
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
-        outgoing_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
-        scc_exit_edges: Vec<(ExecSccId, ExecBlockId, ExecFlowType)>,
-        is_a_back_edge: Option<(ExecSccId, ExecBlockId, ExecFlowType)>,
+        outgoing_edges: Vec<(ExecSccId, ExecBlockId)>,
+        scc_exit_edges: Vec<(ExecSccId, ExecBlockId)>,
+        is_a_back_edge: Option<(ExecSccId, ExecBlockId)>,
     },
 }
 
@@ -1209,10 +1225,7 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
     pub fn new(exec_graph: &'cfg ExecGraph<'env>) -> Self {
         Self {
             exec_graph,
-            iter_stack: vec![ExecWalkerState::new(
-                None,
-                &ExecRefGraph::from_graph(exec_graph),
-            )],
+            iter_stack: vec![ExecWalkerState::from_base(exec_graph)],
         }
     }
 
@@ -1229,26 +1242,23 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
             if scc.back_edges_from.is_empty() {
                 CycleOrBlock::Block(scc.scc_id, scc.entry_block_id)
             } else {
-                CycleOrBlock::Cycle(ExecWalkerState::new(
-                    Some(scc.scc_id),
-                    &ExecRefGraph::from_graph_scc(exec_graph, scc),
-                ))
+                CycleOrBlock::Cycle(ExecWalkerState::from_scc(exec_graph, scc))
             }
         });
 
         match next_op {
             None => {
                 // internal scc yields nothing, pop the stack
-                match self.iter_stack.pop().unwrap().scc_id {
+                match self.iter_stack.pop().unwrap().scc {
                     None => {
                         // check that no more sccs in the stack if internal scc has None as scc_id
                         debug_assert!(self.iter_stack.is_empty());
                         self.next() // NOTE: essentially returns None
                     }
-                    Some(exiting_scc_id) => {
+                    Some(exiting_scc) => {
                         debug_assert!(!self.iter_stack.is_empty());
                         Some(ExecWalkerStep::CycleExit {
-                            scc_id: exiting_scc_id,
+                            scc_id: exiting_scc.scc_id,
                         })
                     }
                 }
@@ -1256,70 +1266,46 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
             Some(cycle_or_block) => match cycle_or_block {
                 CycleOrBlock::Cycle(state) => {
                     // we are about to descend into a new scc
-                    let entering_scc_id = state.scc_id.unwrap();
+                    let next_scc = state.scc.as_ref().unwrap();
+                    let entering_scc_id = next_scc.scc_id;
+                    let entering_block_id = next_scc.entry_block_id;
+
                     self.iter_stack.push(state);
                     Some(ExecWalkerStep::CycleEntry {
                         scc_id: entering_scc_id,
+                        block_id: entering_block_id,
                     })
                 }
                 CycleOrBlock::Block(scc_id, block_id) => {
                     // we continue to explore within the same scc
-                    let state_scc_id_opt = state.scc_id;
-                    let state_scc_entry_scc_id = state.scc_graph.entry_scc_id;
-
                     let incoming_edges = state
-                        .scc_graph
+                        .sub_scc_graph
                         .get_incoming_edges_for_block(scc_id, block_id);
 
                     let outgoing_edges = state
-                        .scc_graph
-                        .get_outgoing_edges_for_block(scc_id, block_id)
-                        .into_iter()
-                        .map(|(dst_scc_id, dst_block_id)| {
-                            (
-                                dst_scc_id,
-                                dst_block_id,
-                                self.exec_graph
-                                    .get_flow_by_block_ids(block_id, dst_block_id),
-                            )
-                        })
-                        .collect();
+                        .sub_scc_graph
+                        .get_outgoing_edges_for_block(scc_id, block_id);
 
-                    let is_a_back_edge = state_scc_id_opt
+                    let is_a_back_edge = state
+                        .scc
                         .as_ref()
-                        .map(|state_scc_id| {
-                            let parent_state = self.iter_stack.iter().rev().nth(1).unwrap();
-                            let state_scc = parent_state.scc_graph.get_scc_by_scc_id(*state_scc_id);
+                        .map(|state_scc| {
                             if state_scc.back_edges_from.contains(&block_id) {
-                                Some((
-                                    state_scc_entry_scc_id,
-                                    state_scc.entry_block_id,
-                                    self.exec_graph
-                                        .get_flow_by_block_ids(block_id, state_scc.entry_block_id),
-                                ))
+                                Some((state.sub_scc_graph.entry_scc_id, state_scc.entry_block_id))
                             } else {
                                 None
                             }
                         })
                         .flatten();
 
-                    let scc_exit_edges = match state_scc_id_opt {
+                    let scc_exit_edges = match state.scc.as_ref() {
                         None => vec![], // we are at the root scc
-                        Some(state_scc_id) => {
+                        Some(state_scc) => {
+                            let state_scc_id = state_scc.scc_id;
                             let parent_state = self.iter_stack.iter().rev().nth(1).unwrap();
                             parent_state
-                                .scc_graph
+                                .sub_scc_graph
                                 .get_outgoing_edges_for_block(state_scc_id, block_id)
-                                .into_iter()
-                                .map(|(dst_scc_id, dst_block_id)| {
-                                    (
-                                        dst_scc_id,
-                                        dst_block_id,
-                                        self.exec_graph
-                                            .get_flow_by_block_ids(block_id, dst_block_id),
-                                    )
-                                })
-                                .collect()
                         }
                     };
 

@@ -48,7 +48,7 @@ impl<'env> TypeGraph<'env> {
         let mut walker = ExecWalker::new(exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
-                ExecWalkerStep::CycleEntry { scc_id } => scc_stack.push(Some(scc_id)),
+                ExecWalkerStep::CycleEntry { scc_id, .. } => scc_stack.push(Some(scc_id)),
                 ExecWalkerStep::CycleExit { scc_id } => {
                     let cur_scc_id = scc_stack.pop().unwrap();
                     debug_assert_eq!(cur_scc_id.unwrap(), scc_id);

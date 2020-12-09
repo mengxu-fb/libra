@@ -218,15 +218,15 @@ impl<'smt> SymSccInfo<'smt> {
         &mut self,
         scc_id: ExecSccId,
         block_id: ExecBlockId,
-        outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-        scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-        _is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+        _is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
     ) {
-        for (dst_scc_id, dst_block_id, _) in outgoing_edges {
+        for (dst_scc_id, dst_block_id) in outgoing_edges {
             self.put_edge_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
         }
 
-        for (dst_scc_id, dst_block_id, _) in scc_exit_edges {
+        for (dst_scc_id, dst_block_id) in scc_exit_edges {
             self.put_exit_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
         }
 
@@ -471,7 +471,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         let mut walker = ExecWalker::new(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
-                ExecWalkerStep::CycleEntry { scc_id } => {
+                ExecWalkerStep::CycleEntry { scc_id, block_id } => {
                     scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
@@ -634,9 +634,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         scc_id: ExecSccId,
         block: &ExecBlock<'env>,
         reach_info: &SymFlowInfo<'smt>,
-        outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-        scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-        is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
+        outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+        is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) -> Result<SymBlockTerm<'smt>> {
@@ -939,20 +939,32 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
                                 debug_assert_eq!(scc_exit_edges.len(), 0);
 
-                                if let Some((dst_scc_id, dst_block_id, flow_type)) = is_a_back_edge
-                                {
+                                if let Some((dst_scc_id, dst_block_id)) = is_a_back_edge {
+                                    debug_assert_eq!(outgoing_edges.len(), 0);
+
+                                    // check flow type
+                                    let flow_type = self
+                                        .exec_graph
+                                        .get_flow_by_block_ids(block.block_id, *dst_block_id);
+                                    debug_assert!(matches!(flow_type, ExecFlowType::CallRecursive));
+
                                     // TODO: found a back edge
-                                    match flow_type {
-                                        ExecFlowType::CallRecursive => {}
-                                        _ => {
-                                            panic!("Invalid flow type for the back edge with Call instruction")
-                                        }
-                                    }
-                                    bail!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                                    bail!(
+                                        "Found a back edge {}::{} -> {}::{}",
+                                        scc_id,
+                                        block.block_id,
+                                        dst_scc_id,
+                                        dst_block_id
+                                    );
                                 } else {
                                     debug_assert_eq!(outgoing_edges.len(), 1);
-                                    let (dst_scc_id, dst_block_id, flow_type) =
+
+                                    // check flow type
+                                    let (dst_scc_id, dst_block_id) =
                                         outgoing_edges.first().unwrap();
+                                    let flow_type = self
+                                        .exec_graph
+                                        .get_flow_by_block_ids(block.block_id, *dst_block_id);
                                     debug_assert!(matches!(flow_type, ExecFlowType::Call));
 
                                     // register the return slots
@@ -1014,11 +1026,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         debug_assert_eq!(reach_info.frame_stack.len(), 1);
                         return Ok(SymBlockTerm::Normal);
                     }
-
                     debug_assert_eq!(outgoing_edges.len(), 1);
-                    let (dst_scc_id, dst_block_id, flow_type) = outgoing_edges.first().unwrap();
+
+                    // check flow type
+                    let (dst_scc_id, dst_block_id) = outgoing_edges.first().unwrap();
+                    let flow_type = self
+                        .exec_graph
+                        .get_flow_by_block_ids(block.block_id, *dst_block_id);
                     let call_from_block_id = match flow_type {
-                        ExecFlowType::Ret(block_id) => *block_id,
+                        ExecFlowType::Ret(block_id) => block_id,
                         _ => panic!("Invalid flow type for return instructions"),
                     };
 
@@ -1047,7 +1063,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     let cond_f = sym.flatten_as_predicate(false).and(reach_cond);
 
                     // add conditions for outgoing edges
-                    for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
+                    for (dst_scc_id, dst_block_id) in outgoing_edges {
+                        let flow_type = self
+                            .exec_graph
+                            .get_flow_by_block_ids(block.block_id, *dst_block_id);
+
                         match flow_type {
                             ExecFlowType::Branch(Some(true)) => scc_info.put_edge_info(
                                 scc_id,
@@ -1076,7 +1096,11 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     }
 
                     // add conditions for scc-exiting edges
-                    for (dst_scc_id, dst_block_id, flow_type) in scc_exit_edges {
+                    for (dst_scc_id, dst_block_id) in scc_exit_edges {
+                        let flow_type = self
+                            .exec_graph
+                            .get_flow_by_block_ids(block.block_id, *dst_block_id);
+
                         match flow_type {
                             ExecFlowType::Branch(Some(true)) => scc_info.put_exit_info(
                                 scc_id,
@@ -1107,33 +1131,40 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Jump(..) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(scc_exit_edges.len(), 0);
-                    if let Some((dst_scc_id, dst_block_id, flow_type)) = is_a_back_edge {
+                    if let Some((dst_scc_id, dst_block_id)) = is_a_back_edge {
+                        // check flow type
+                        let flow_type = self
+                            .exec_graph
+                            .get_flow_by_block_ids(block.block_id, *dst_block_id);
+                        debug_assert!(matches!(flow_type, ExecFlowType::Branch(None)));
+
                         // TODO: found a back edge
-                        match flow_type {
-                            ExecFlowType::Branch(None) => {}
-                            _ => {
-                                panic!("Invalid flow type for the back edge with Jump instruction")
-                            }
-                        }
-                        bail!("Found a back edge -> {}::{}", dst_scc_id, dst_block_id);
+                        bail!(
+                            "Found a back edge {}::{} -> {}::{}",
+                            scc_id,
+                            block.block_id,
+                            dst_scc_id,
+                            dst_block_id
+                        );
                     } else {
                         debug_assert_eq!(outgoing_edges.len(), 1);
-                        for (dst_scc_id, dst_block_id, flow_type) in outgoing_edges {
-                            match flow_type {
-                                ExecFlowType::Branch(None) => scc_info.put_edge_info(
-                                    scc_id,
-                                    block.block_id,
-                                    *dst_scc_id,
-                                    *dst_block_id,
-                                    Some(SymFlowInfo {
-                                        cond: reach_cond.clone(),
-                                        frame_stack: reach_info.frame_stack.clone(),
-                                    }),
-                                ),
-                                _ => {
-                                    panic!("Invalid flow type for outgoing edges with Jump instruction")
-                                }
-                            }
+                        for (dst_scc_id, dst_block_id) in outgoing_edges {
+                            // check flow type
+                            let flow_type = self
+                                .exec_graph
+                                .get_flow_by_block_ids(block.block_id, *dst_block_id);
+                            debug_assert!(matches!(flow_type, ExecFlowType::Branch(None)));
+
+                            scc_info.put_edge_info(
+                                scc_id,
+                                block.block_id,
+                                *dst_scc_id,
+                                *dst_block_id,
+                                Some(SymFlowInfo {
+                                    cond: reach_cond.clone(),
+                                    frame_stack: reach_info.frame_stack.clone(),
+                                }),
+                            );
                         }
                     }
                 }
@@ -1177,9 +1208,9 @@ fn log_block_info(
     scc_id: ExecSccId,
     block_id: ExecBlockId,
     incoming_edges: &[(ExecSccId, ExecBlockId)],
-    outgoing_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-    scc_exit_edges: &[(ExecSccId, ExecBlockId, ExecFlowType)],
-    is_a_back_edge: Option<&(ExecSccId, ExecBlockId, ExecFlowType)>,
+    outgoing_edges: &[(ExecSccId, ExecBlockId)],
+    scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+    is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
 ) {
     // log information
     debug!("Block: {} (scc: {})", block_id, scc_id);
@@ -1194,26 +1225,20 @@ fn log_block_info(
         "Outgoing edges: [{}]",
         outgoing_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
-                "{}::{}-({})",
-                edge_scc_id, edge_block_id, flow_type
-            ))
+            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
             .join("-")
     );
     debug!(
         "Scc-exit edges: [{}]",
         scc_exit_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id, flow_type)| format!(
-                "{}::{}-({})",
-                edge_scc_id, edge_block_id, flow_type
-            ))
+            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
             .join("-")
     );
     debug!(
         "Back edge: {}",
-        is_a_back_edge.map_or("X".to_owned(), |(edge_scc_id, edge_block_id, flow_type)| {
-            format!("{}::{}-({})", edge_scc_id, edge_block_id, flow_type)
+        is_a_back_edge.map_or("X".to_owned(), |(edge_scc_id, edge_block_id)| {
+            format!("{}::{}", edge_scc_id, edge_block_id)
         })
     );
 }
