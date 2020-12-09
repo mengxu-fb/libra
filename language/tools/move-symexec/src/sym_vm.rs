@@ -52,7 +52,7 @@ impl<'smt> SymVMState<'smt> {
         }
     }
 
-    fn add_frame<'env>(&mut self, frame: SymFrame<'smt>) -> SymFrameId {
+    fn add_frame(&mut self, frame: SymFrame<'smt>) -> SymFrameId {
         let frame_id = SymFrameId(self.frames.len());
         self.frames.insert(frame_id, frame);
         frame_id
@@ -73,6 +73,8 @@ struct SymIntraSccFlow {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 struct SymInterSccFlow {
+    exit_scc_level: usize,
+    src_scc_id: ExecSccId,
     src_block_id: ExecBlockId,
     dst_scc_id: ExecSccId,
     dst_block_id: ExecBlockId,
@@ -160,30 +162,19 @@ impl<'smt> SymSccInfo<'smt> {
         debug_assert!(exists.is_none());
     }
 
-    /// Get the information associated with this inter-scc edge (panic if non-exist)
-    fn get_exit_info(
-        &self,
-        src_block_id: ExecBlockId,
-        dst_scc_id: ExecSccId,
-        dst_block_id: ExecBlockId,
-    ) -> Option<&SymFlowInfo<'smt>> {
-        let key = SymInterSccFlow {
-            src_block_id,
-            dst_scc_id,
-            dst_block_id,
-        };
-        self.exit_info.get(&key).unwrap().as_ref()
-    }
-
     /// Put the information associated with this exit edge (panic if exists)
     fn put_exit_info(
         &mut self,
+        exit_scc_level: usize,
+        src_scc_id: ExecSccId,
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
         info: Option<SymFlowInfo<'smt>>,
     ) {
         let key = SymInterSccFlow {
+            exit_scc_level,
+            src_scc_id,
             src_block_id,
             dst_scc_id,
             dst_block_id,
@@ -234,15 +225,22 @@ impl<'smt> SymSccInfo<'smt> {
         scc_id: ExecSccId,
         block_id: ExecBlockId,
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
-        scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+        scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
         _is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
     ) {
         for (dst_scc_id, dst_block_id) in outgoing_edges {
             self.put_edge_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
         }
 
-        for (dst_scc_id, dst_block_id) in scc_exit_edges {
-            self.put_exit_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
+        for ((dst_scc_id, dst_block_id), (exit_scc_level, src_scc_id)) in scc_exit_edges {
+            self.put_exit_info(
+                *exit_scc_level,
+                *src_scc_id,
+                block_id,
+                *dst_scc_id,
+                *dst_block_id,
+                None,
+            );
         }
 
         // TODO: what about the back edge?
@@ -491,22 +489,71 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     block_id,
                     incoming_edges,
                 } => {
-                    // scan over prior sccs for reachability conditions
+                    // look for reachability info from parent scc
+                    let parent_scc_info = scc_stack.last().unwrap();
+                    let reach_info_opt = parent_scc_info.derive_reach_info(
+                        &self.smt_ctxt,
+                        scc_id,
+                        block_id,
+                        &incoming_edges,
+                    );
 
-                    // add the new scc info to stack
+                    // if this scc is obviously unreachable, shortcut the execution
+                    if reach_info_opt.is_none() {
+                        debug!("[x] Scc is unreachable");
+                        // TODO: mark unreachable
+                        continue;
+                    }
+
+                    let reach_info = reach_info_opt.unwrap();
+                    debug!("Reaching condition: {}", reach_info.cond);
+                    debug!(
+                        "Reaching stack: [{}]",
+                        reach_info
+                            .frame_stack
+                            .iter()
+                            .map(|frame_id| frame_id.to_string())
+                            .join(", ")
+                    );
+
+                    // if this scc is not reachable by condition, shortcut the execution
+                    if !self
+                        .smt_ctxt
+                        .is_feasible_assume_solvable(&[&reach_info.cond])?
+                    {
+                        // TODO: mark unreachable
+                        continue;
+                    }
+
+                    // add the new scc info to stack and be ready to descend into this scc
                     scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
-                    let exiting_scc_id = scc_stack.pop().unwrap().scc_id.unwrap();
-                    debug_assert_eq!(scc_id, exiting_scc_id);
+                    let exiting_scc_info = scc_stack.pop().unwrap();
+                    debug_assert_eq!(exiting_scc_info.scc_id.unwrap(), scc_id);
+
+                    // transfer its exit info to all of its parent sccs
+                    let scc_stack_len = scc_stack.len();
+                    for (flow_key, flow_val) in exiting_scc_info.exit_info {
+                        let parent_scc = scc_stack
+                            .get_mut(scc_stack_len - 1 - flow_key.exit_scc_level)
+                            .unwrap();
+                        parent_scc.put_edge_info(
+                            flow_key.src_scc_id,
+                            flow_key.src_block_id,
+                            flow_key.dst_scc_id,
+                            flow_key.dst_block_id,
+                            flow_val,
+                        );
+                    }
                 }
                 ExecWalkerStep::Block {
                     scc_id,
                     block_id,
                     incoming_edges,
                     outgoing_edges,
-                    scc_exit_edges,
                     is_a_back_edge,
+                    scc_exit_edges,
                 } => {
                     // log information
                     log_block_info(
@@ -657,7 +704,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         block: &ExecBlock<'env>,
         reach_info: &SymFlowInfo<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
-        scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+        scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
         is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
@@ -1118,13 +1165,17 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     }
 
                     // add conditions for scc-exiting edges
-                    for (dst_scc_id, dst_block_id) in scc_exit_edges {
+                    for ((dst_scc_id, dst_block_id), (exit_scc_level, exit_scc_id)) in
+                        scc_exit_edges
+                    {
                         let flow_type = self
                             .exec_graph
                             .get_flow_by_block_ids(block.block_id, *dst_block_id);
 
                         match flow_type {
                             ExecFlowType::Branch(Some(true)) => scc_info.put_exit_info(
+                                *exit_scc_level,
+                                *exit_scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
@@ -1134,6 +1185,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 }),
                             ),
                             ExecFlowType::Branch(Some(false)) => scc_info.put_exit_info(
+                                *exit_scc_level,
+                                *exit_scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
@@ -1229,7 +1282,7 @@ fn log_block_info(
     block_id: ExecBlockId,
     incoming_edges: &[(ExecSccId, ExecBlockId)],
     outgoing_edges: &[(ExecSccId, ExecBlockId)],
-    scc_exit_edges: &[(ExecSccId, ExecBlockId)],
+    scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
     is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
 ) {
     // log information
@@ -1252,7 +1305,12 @@ fn log_block_info(
         "Scc-exit edges: [{}]",
         scc_exit_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .map(
+                |((edge_scc_id, edge_block_id), (exited_scc_level, exited_scc_id))| format!(
+                    "{}::{}-({}::{})",
+                    edge_scc_id, edge_block_id, exited_scc_level, exited_scc_id
+                )
+            )
             .join("-")
     );
     debug!(

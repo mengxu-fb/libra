@@ -1198,20 +1198,29 @@ enum CycleOrBlock {
 pub(crate) enum ExecWalkerStep {
     /// Entering a new scc
     CycleEntry {
+        /// The id of the scc that we are about to descend to
         scc_id: ExecSccId,
+        /// The id of the scc entry block
         block_id: ExecBlockId,
+        /// Incoming edges into this scc (which is also to the scc entry block)
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
     },
     /// Exiting the current scc, we have explored all blocks in it
     CycleExit { scc_id: ExecSccId },
     /// Moving into the next block within the current scc
     Block {
+        /// The id of the scc that has this block (this scc has only this block, in fact)
         scc_id: ExecSccId,
+        /// The block id
         block_id: ExecBlockId,
+        /// Incoming edges into this block, within the enclosing scc
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
+        /// Outgoing edges from this block, within the enclosing scc
         outgoing_edges: Vec<(ExecSccId, ExecBlockId)>,
-        scc_exit_edges: Vec<(ExecSccId, ExecBlockId)>,
+        /// Marks whether this block has a back edge to the entry of the enclosing scc
         is_a_back_edge: Option<(ExecSccId, ExecBlockId)>,
+        /// Tracks which scc the edge exits (may or may not be the current exploring scc)
+        scc_exit_edges: HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
     },
 }
 
@@ -1311,24 +1320,32 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         })
                         .flatten();
 
-                    let scc_exit_edges = match state.scc.as_ref() {
-                        None => vec![], // we are at the root scc
-                        Some(state_scc) => {
-                            let state_scc_id = state_scc.scc_id;
-                            let parent_state = self.iter_stack.iter().rev().nth(1).unwrap();
-                            parent_state
+                    let mut scc_exit_edges = HashMap::new();
+                    if let Some(state_scc) = state.scc.as_ref() {
+                        let mut cursor_scc_id = state_scc.scc_id;
+                        for (i, parent_state) in self.iter_stack.iter().rev().skip(1).enumerate() {
+                            for pair in parent_state
                                 .sub_scc_graph
-                                .get_outgoing_edges_for_block(state_scc_id, block_id)
+                                .get_outgoing_edges_for_block(cursor_scc_id, block_id)
+                            {
+                                let exists = scc_exit_edges.insert(pair, (i, cursor_scc_id));
+                                debug_assert!(exists.is_none());
+                            }
+
+                            // move the cursor to the parent level
+                            if let Some(parent_state_scc) = parent_state.scc.as_ref() {
+                                cursor_scc_id = parent_state_scc.scc_id;
+                            }
                         }
-                    };
+                    }
 
                     Some(ExecWalkerStep::Block {
                         scc_id,
                         block_id,
                         incoming_edges,
                         outgoing_edges,
-                        scc_exit_edges,
                         is_a_back_edge,
+                        scc_exit_edges,
                     })
                 }
             },
