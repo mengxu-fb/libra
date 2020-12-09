@@ -1272,7 +1272,10 @@ fn log_scc_info(scc_id: ExecSccId, incoming_edges: &[(ExecSccId, ExecBlockId)]) 
         "Incoming edges: [{}]",
         incoming_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .map(|(edge_scc_id, edge_block_id)| format!(
+                "block {} (scc {})",
+                edge_block_id, edge_scc_id
+            ))
             .join("-")
     );
 }
@@ -1291,14 +1294,20 @@ fn log_block_info(
         "Incoming edges: [{}]",
         incoming_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .map(|(edge_scc_id, edge_block_id)| format!(
+                "block {} (scc {})",
+                edge_block_id, edge_scc_id
+            ))
             .join("-")
     );
     debug!(
         "Outgoing edges: [{}]",
         outgoing_edges
             .iter()
-            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .map(|(edge_scc_id, edge_block_id)| format!(
+                "block {} (scc {})",
+                edge_block_id, edge_scc_id
+            ))
             .join("-")
     );
     debug!(
@@ -1307,8 +1316,8 @@ fn log_block_info(
             .iter()
             .map(
                 |((edge_scc_id, edge_block_id), (exited_scc_level, exited_scc_id))| format!(
-                    "{}::{}-({}::{})",
-                    edge_scc_id, edge_block_id, exited_scc_level, exited_scc_id
+                    "block {} (scc {}) -> level {} scc({})",
+                    edge_block_id, edge_scc_id, exited_scc_level, exited_scc_id
                 )
             )
             .join("-")
@@ -1316,7 +1325,7 @@ fn log_block_info(
     debug!(
         "Back edge: {}",
         is_a_back_edge.map_or("X".to_owned(), |(edge_scc_id, edge_block_id)| {
-            format!("{}::{}", edge_scc_id, edge_block_id)
+            format!("block {} (scc {})", edge_block_id, edge_scc_id)
         })
     );
 }
