@@ -73,11 +73,13 @@ struct SymIntraSccFlow {
 
 #[derive(Clone, Debug, Eq, Hash, PartialEq, Ord, PartialOrd)]
 struct SymInterSccFlow {
-    src_scc_id: ExecSccId,
     src_block_id: ExecBlockId,
     dst_scc_id: ExecSccId,
     dst_block_id: ExecBlockId,
 }
+
+// NOTE: one difference between intra- and inter- scc flow is that the inter version does not need
+// to track the src_scc_id as it is always this scc_id
 
 #[derive(Clone)]
 struct SymFlowInfo<'smt> {
@@ -158,17 +160,30 @@ impl<'smt> SymSccInfo<'smt> {
         debug_assert!(exists.is_none());
     }
 
+    /// Get the information associated with this inter-scc edge (panic if non-exist)
+    fn get_exit_info(
+        &self,
+        src_block_id: ExecBlockId,
+        dst_scc_id: ExecSccId,
+        dst_block_id: ExecBlockId,
+    ) -> Option<&SymFlowInfo<'smt>> {
+        let key = SymInterSccFlow {
+            src_block_id,
+            dst_scc_id,
+            dst_block_id,
+        };
+        self.exit_info.get(&key).unwrap().as_ref()
+    }
+
     /// Put the information associated with this exit edge (panic if exists)
     fn put_exit_info(
         &mut self,
-        src_scc_id: ExecSccId,
         src_block_id: ExecBlockId,
         dst_scc_id: ExecSccId,
         dst_block_id: ExecBlockId,
         info: Option<SymFlowInfo<'smt>>,
     ) {
         let key = SymInterSccFlow {
-            src_scc_id,
             src_block_id,
             dst_scc_id,
             dst_block_id,
@@ -471,7 +486,14 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         let mut walker = ExecWalker::new(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
-                ExecWalkerStep::CycleEntry { scc_id, block_id } => {
+                ExecWalkerStep::CycleEntry {
+                    scc_id,
+                    block_id,
+                    incoming_edges,
+                } => {
+                    // scan over prior sccs for reachability conditions
+
+                    // add the new scc info to stack
                     scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
@@ -1103,7 +1125,6 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                         match flow_type {
                             ExecFlowType::Branch(Some(true)) => scc_info.put_exit_info(
-                                scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,
@@ -1113,7 +1134,6 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 }),
                             ),
                             ExecFlowType::Branch(Some(false)) => scc_info.put_exit_info(
-                                scc_id,
                                 block.block_id,
                                 *dst_scc_id,
                                 *dst_block_id,

@@ -1200,6 +1200,7 @@ pub(crate) enum ExecWalkerStep {
     CycleEntry {
         scc_id: ExecSccId,
         block_id: ExecBlockId,
+        incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
     },
     /// Exiting the current scc, we have explored all blocks in it
     CycleExit { scc_id: ExecSccId },
@@ -1270,10 +1271,22 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                     let entering_scc_id = next_scc.scc_id;
                     let entering_block_id = next_scc.entry_block_id;
 
+                    // get incoming edges for the next scc
+                    let incoming_edges = self
+                        .iter_stack
+                        .last()
+                        .unwrap()
+                        .sub_scc_graph
+                        .get_incoming_edges_for_block(entering_scc_id, entering_block_id);
+
+                    // collect all information needed before moving the state
                     self.iter_stack.push(state);
+
+                    // done
                     Some(ExecWalkerStep::CycleEntry {
                         scc_id: entering_scc_id,
                         block_id: entering_block_id,
+                        incoming_edges,
                     })
                 }
                 CycleOrBlock::Block(scc_id, block_id) => {
