@@ -1241,6 +1241,32 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             };
         }
 
+        // an edge case in our eCFG construction when an arbitrary entry block is created
+        if block.code_offset.is_none() {
+            // serving the purpose of eCFG overall entry block. As checked in exec graph, this is
+            // the only case when code_offset is set to None
+            debug_assert_eq!(outgoing_edges.len(), 1);
+            debug_assert_eq!(scc_exit_edges.len(), 0);
+            for (dst_scc_id, dst_block_id) in outgoing_edges {
+                // check flow type
+                let flow_type = self
+                    .exec_graph
+                    .get_flow_by_block_ids(block.block_id, *dst_block_id);
+                debug_assert!(matches!(flow_type, ExecFlowType::Branch(None)));
+
+                scc_info.put_edge_info(
+                    scc_id,
+                    block.block_id,
+                    *dst_scc_id,
+                    *dst_block_id,
+                    Some(SymFlowInfo {
+                        cond: reach_cond.clone(),
+                        frame_stack: reach_info.frame_stack.clone(),
+                    }),
+                );
+            }
+        }
+
         // the block is not a return block
         Ok(SymBlockTerm::Normal)
     }

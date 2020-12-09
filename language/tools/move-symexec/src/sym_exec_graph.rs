@@ -52,7 +52,7 @@ pub(crate) struct ExecBlock<'env> {
     ///
     /// NOTE: A None value means that this is an arbitrary block which will host no instructions,
     /// vice versa, all arbitrary blocks will have None as code_offset
-    code_offset: Option<CodeOffset>,
+    pub code_offset: Option<CodeOffset>,
     /// The type argument for the function in the code context
     pub type_args: Vec<ExecTypeArg<'env>>,
     /// The instructions within this basic block. It is OK to be empty.
