@@ -93,7 +93,7 @@ struct SymSccInfo<'smt> {
     /// The scc_id where all scc_ids in the edge_conds resides in
     scc_id: Option<ExecSccId>,
     /// Entry information
-    entry_info: SymFlowInfo<'smt>,
+    entry_info: Option<SymFlowInfo<'smt>>,
     /// Information for flows (i.e., edges) within this scc only
     edge_info: HashMap<SymIntraSccFlow, Option<SymFlowInfo<'smt>>>,
     /// Information for flows (i.e., edges) out of this scc only
@@ -101,26 +101,10 @@ struct SymSccInfo<'smt> {
 }
 
 impl<'smt> SymSccInfo<'smt> {
-    fn for_base(ctxt: &'smt SmtCtxt, init_frame_id: SymFrameId) -> Self {
+    fn new(scc_id: Option<ExecSccId>, entry_info: Option<SymFlowInfo<'smt>>) -> Self {
         Self {
-            scc_id: None,
-            entry_info: SymFlowInfo {
-                cond: ctxt.bool_const(true),
-                frame_stack: vec![init_frame_id],
-            },
-            edge_info: HashMap::new(),
-            exit_info: HashMap::new(),
-        }
-    }
-
-    fn for_cycle(ctxt: &'smt SmtCtxt, scc_id: ExecSccId) -> Self {
-        Self {
-            scc_id: Some(scc_id),
-            // TODO: this is a fake information
-            entry_info: SymFlowInfo {
-                cond: ctxt.bool_const(true),
-                frame_stack: vec![],
-            },
+            scc_id,
+            entry_info,
             edge_info: HashMap::new(),
             exit_info: HashMap::new(),
         }
@@ -192,7 +176,7 @@ impl<'smt> SymSccInfo<'smt> {
     ) -> Option<SymFlowInfo<'smt>> {
         if incoming_edges.is_empty() {
             // this is the entry block of this scc, so just take the scc entry info
-            Some(self.entry_info.clone())
+            self.entry_info.clone()
         } else {
             let mut derived_cond = smt_ctxt.bool_const(false);
             let mut derived_stack: Option<Vec<_>> = None;
@@ -478,7 +462,13 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
         // tracks the sccs that contain cycles only (except the base), and this is by definition,
         // i.e., an scc containing a single block will not be able to form a stack.
-        let mut scc_stack = vec![SymSccInfo::for_base(&self.smt_ctxt, init_frame_id)];
+        let mut scc_stack = vec![SymSccInfo::new(
+            None,
+            Some(SymFlowInfo {
+                cond: self.smt_ctxt.bool_const(true),
+                frame_stack: vec![init_frame_id],
+            }),
+        )];
 
         // symbolically walk the exec graph
         let mut walker = ExecWalker::new(self.exec_graph);
@@ -489,44 +479,43 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     block_id,
                     incoming_edges,
                 } => {
+                    // log information
+                    log_scc_info(scc_id, &incoming_edges);
+
                     // look for reachability info from parent scc
                     let parent_scc_info = scc_stack.last().unwrap();
-                    let reach_info_opt = parent_scc_info.derive_reach_info(
+                    let mut reach_info_opt = parent_scc_info.derive_reach_info(
                         &self.smt_ctxt,
                         scc_id,
                         block_id,
                         &incoming_edges,
                     );
 
-                    // if this scc is obviously unreachable, shortcut the execution
-                    if reach_info_opt.is_none() {
+                    // log reach info
+                    if let Some(reach_info) = reach_info_opt.as_ref() {
+                        debug!("Reaching condition: {}", reach_info.cond);
+                        debug!(
+                            "Reaching stack: [{}]",
+                            reach_info
+                                .frame_stack
+                                .iter()
+                                .map(|frame_id| frame_id.to_string())
+                                .join(", ")
+                        );
+
+                        // mark it as None too if this scc is not reachable by condition
+                        if !self
+                            .smt_ctxt
+                            .is_feasible_assume_solvable(&[&reach_info.cond])?
+                        {
+                            reach_info_opt = None;
+                        }
+                    } else {
                         debug!("[x] Scc is unreachable");
-                        // TODO: mark unreachable
-                        continue;
-                    }
-
-                    let reach_info = reach_info_opt.unwrap();
-                    debug!("Reaching condition: {}", reach_info.cond);
-                    debug!(
-                        "Reaching stack: [{}]",
-                        reach_info
-                            .frame_stack
-                            .iter()
-                            .map(|frame_id| frame_id.to_string())
-                            .join(", ")
-                    );
-
-                    // if this scc is not reachable by condition, shortcut the execution
-                    if !self
-                        .smt_ctxt
-                        .is_feasible_assume_solvable(&[&reach_info.cond])?
-                    {
-                        // TODO: mark unreachable
-                        continue;
                     }
 
                     // add the new scc info to stack and be ready to descend into this scc
-                    scc_stack.push(SymSccInfo::for_cycle(&self.smt_ctxt, scc_id));
+                    scc_stack.push(SymSccInfo::new(Some(scc_id), reach_info_opt));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
                     let exiting_scc_info = scc_stack.pop().unwrap();
@@ -1277,6 +1266,17 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 }
 
 // utilities
+fn log_scc_info(scc_id: ExecSccId, incoming_edges: &[(ExecSccId, ExecBlockId)]) {
+    debug!("Scc: {}", scc_id);
+    debug!(
+        "Incoming edges: [{}]",
+        incoming_edges
+            .iter()
+            .map(|(edge_scc_id, edge_block_id)| format!("{}::{}", edge_scc_id, edge_block_id))
+            .join("-")
+    );
+}
+
 fn log_block_info(
     scc_id: ExecSccId,
     block_id: ExecBlockId,
