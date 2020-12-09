@@ -209,8 +209,8 @@ impl<'smt> SymSccInfo<'smt> {
         scc_id: ExecSccId,
         block_id: ExecBlockId,
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        _scc_back_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
         scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
-        _is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
     ) {
         for (dst_scc_id, dst_block_id) in outgoing_edges {
             self.put_edge_info(scc_id, block_id, *dst_scc_id, *dst_block_id, None);
@@ -227,7 +227,7 @@ impl<'smt> SymSccInfo<'smt> {
             );
         }
 
-        // TODO: what about the back edge?
+        // TODO: what about the back edges?
     }
 }
 
@@ -541,7 +541,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     block_id,
                     incoming_edges,
                     outgoing_edges,
-                    is_a_back_edge,
+                    scc_back_edges,
                     scc_exit_edges,
                 } => {
                     // log information
@@ -550,8 +550,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         block_id,
                         &incoming_edges,
                         &outgoing_edges,
+                        &scc_back_edges,
                         &scc_exit_edges,
-                        is_a_back_edge.as_ref(),
                     );
 
                     // derive the reachability information for this block
@@ -570,8 +570,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             scc_id,
                             block_id,
                             &outgoing_edges,
+                            &scc_back_edges,
                             &scc_exit_edges,
-                            is_a_back_edge.as_ref(),
                         );
                         continue;
                     }
@@ -596,8 +596,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                             scc_id,
                             block_id,
                             &outgoing_edges,
+                            &scc_back_edges,
                             &scc_exit_edges,
-                            is_a_back_edge.as_ref(),
                         );
                         continue;
                     }
@@ -611,8 +611,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         block,
                         &reach_info,
                         &outgoing_edges,
+                        &scc_back_edges,
                         &scc_exit_edges,
-                        is_a_back_edge.as_ref(),
                         &mut scc_info,
                         current_frame,
                     )?;
@@ -693,8 +693,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         block: &ExecBlock<'env>,
         reach_info: &SymFlowInfo<'smt>,
         outgoing_edges: &[(ExecSccId, ExecBlockId)],
+        scc_back_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
         scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
-        is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
         scc_info: &mut SymSccInfo<'smt>,
         current_frame: &mut SymFrame<'smt>,
     ) -> Result<SymBlockTerm<'smt>> {
@@ -997,8 +997,13 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                                 debug_assert_eq!(pos + 1, block.instructions.len());
                                 debug_assert_eq!(scc_exit_edges.len(), 0);
 
-                                if let Some((dst_scc_id, dst_block_id)) = is_a_back_edge {
+                                if let Some((
+                                    (dst_scc_id, dst_block_id),
+                                    (backed_scc_level, backed_scc_id),
+                                )) = scc_back_edges.iter().next()
+                                {
                                     debug_assert_eq!(outgoing_edges.len(), 0);
+                                    debug_assert_eq!(scc_back_edges.len(), 1);
 
                                     // check flow type
                                     let flow_type = self
@@ -1008,11 +1013,14 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                                     // TODO: found a back edge
                                     bail!(
-                                        "Found a back edge {}::{} -> {}::{}",
-                                        scc_id,
+                                        "Found a back edge block {} (scc {}) -> block {} (scc {}) \
+                                        in scc {} at level {}",
                                         block.block_id,
+                                        scc_id,
+                                        dst_block_id,
                                         dst_scc_id,
-                                        dst_block_id
+                                        backed_scc_id,
+                                        backed_scc_level
                                     );
                                 } else {
                                     debug_assert_eq!(outgoing_edges.len(), 1);
@@ -1074,8 +1082,8 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 }
                 Bytecode::Ret(_, rets) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
+                    debug_assert_eq!(scc_back_edges.len(), 0);
                     debug_assert_eq!(scc_exit_edges.len(), 0);
-                    debug_assert!(is_a_back_edge.is_none());
                     if block.exec_unit.is_script_main() {
                         debug_assert_eq!(outgoing_edges.len(), 0);
 
@@ -1114,7 +1122,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     debug_assert!(!current_frame.is_local_ref(*idx));
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(outgoing_edges.len() + scc_exit_edges.len(), 2);
-                    debug_assert!(is_a_back_edge.is_none());
+                    debug_assert_eq!(scc_back_edges.len(), 0);
 
                     let sym = current_frame.copy_local(*idx, reach_cond)?;
                     let cond_t = sym.flatten_as_predicate(true).and(reach_cond);
@@ -1193,7 +1201,13 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                 Bytecode::Jump(..) => {
                     debug_assert_eq!(pos + 1, block.instructions.len());
                     debug_assert_eq!(scc_exit_edges.len(), 0);
-                    if let Some((dst_scc_id, dst_block_id)) = is_a_back_edge {
+
+                    if let Some(((dst_scc_id, dst_block_id), (backed_scc_level, backed_scc_id))) =
+                        scc_back_edges.iter().next()
+                    {
+                        debug_assert_eq!(outgoing_edges.len(), 0);
+                        debug_assert_eq!(scc_back_edges.len(), 1);
+
                         // check flow type
                         let flow_type = self
                             .exec_graph
@@ -1202,11 +1216,14 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
                         // TODO: found a back edge
                         bail!(
-                            "Found a back edge {}::{} -> {}::{}",
-                            scc_id,
+                            "Found a back edge block {} (scc {}) -> block {} (scc {}) \
+                            in scc {} at level {}",
                             block.block_id,
+                            scc_id,
+                            dst_block_id,
                             dst_scc_id,
-                            dst_block_id
+                            backed_scc_id,
+                            backed_scc_level
                         );
                     } else {
                         debug_assert_eq!(outgoing_edges.len(), 1);
@@ -1246,6 +1263,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
             // serving the purpose of eCFG overall entry block. As checked in exec graph, this is
             // the only case when code_offset is set to None
             debug_assert_eq!(outgoing_edges.len(), 1);
+            debug_assert_eq!(scc_back_edges.len(), 0);
             debug_assert_eq!(scc_exit_edges.len(), 0);
             for (dst_scc_id, dst_block_id) in outgoing_edges {
                 // check flow type
@@ -1311,8 +1329,8 @@ fn log_block_info(
     block_id: ExecBlockId,
     incoming_edges: &[(ExecSccId, ExecBlockId)],
     outgoing_edges: &[(ExecSccId, ExecBlockId)],
+    scc_back_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
     scc_exit_edges: &HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
-    is_a_back_edge: Option<&(ExecSccId, ExecBlockId)>,
 ) {
     // log information
     debug!("Block: {} (scc: {})", block_id, scc_id);
@@ -1337,6 +1355,18 @@ fn log_block_info(
             .join("-")
     );
     debug!(
+        "Scc-back edges: [{}]",
+        scc_back_edges
+            .iter()
+            .map(
+                |((edge_scc_id, edge_block_id), (backed_scc_level, backed_scc_id))| format!(
+                    "block {} (scc {}) -> level {} scc({})",
+                    edge_block_id, edge_scc_id, backed_scc_level, backed_scc_id
+                )
+            )
+            .join("-")
+    );
+    debug!(
         "Scc-exit edges: [{}]",
         scc_exit_edges
             .iter()
@@ -1347,12 +1377,6 @@ fn log_block_info(
                 )
             )
             .join("-")
-    );
-    debug!(
-        "Back edge: {}",
-        is_a_back_edge.map_or("X".to_owned(), |(edge_scc_id, edge_block_id)| {
-            format!("block {} (scc {})", edge_block_id, edge_scc_id)
-        })
     );
 }
 

@@ -1217,8 +1217,8 @@ pub(crate) enum ExecWalkerStep {
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
         /// Outgoing edges from this block, within the enclosing scc
         outgoing_edges: Vec<(ExecSccId, ExecBlockId)>,
-        /// Marks whether this block has a back edge to the entry of the enclosing scc
-        is_a_back_edge: Option<(ExecSccId, ExecBlockId)>,
+        /// Marks whether this block has back edges to the entry of any of its enclosing sccs
+        scc_back_edges: HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
         /// Tracks which scc the edge exits (may or may not be the current exploring scc)
         scc_exit_edges: HashMap<(ExecSccId, ExecBlockId), (usize, ExecSccId)>,
     },
@@ -1308,20 +1308,17 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         .sub_scc_graph
                         .get_outgoing_edges_for_block(scc_id, block_id);
 
-                    let is_a_back_edge = state
-                        .scc
-                        .as_ref()
-                        .map(|state_scc| {
-                            if state_scc.back_edges_from.contains(&block_id) {
-                                Some((state.sub_scc_graph.entry_scc_id, state_scc.entry_block_id))
-                            } else {
-                                None
-                            }
-                        })
-                        .flatten();
-
+                    let mut scc_back_edges = HashMap::new();
                     let mut scc_exit_edges = HashMap::new();
                     if let Some(state_scc) = state.scc.as_ref() {
+                        if state_scc.back_edges_from.contains(&block_id) {
+                            let exists = scc_back_edges.insert(
+                                (state.sub_scc_graph.entry_scc_id, state_scc.entry_block_id),
+                                (0, state_scc.scc_id),
+                            );
+                            debug_assert!(exists.is_none());
+                        }
+
                         let mut cursor_scc_id = state_scc.scc_id;
                         for (i, parent_state) in self.iter_stack.iter().rev().skip(1).enumerate() {
                             for pair in parent_state
@@ -1332,8 +1329,19 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                                 debug_assert!(exists.is_none());
                             }
 
-                            // move the cursor to the parent level
                             if let Some(parent_state_scc) = parent_state.scc.as_ref() {
+                                if parent_state_scc.back_edges_from.contains(&block_id) {
+                                    let exists = scc_back_edges.insert(
+                                        (
+                                            parent_state.sub_scc_graph.entry_scc_id,
+                                            parent_state_scc.entry_block_id,
+                                        ),
+                                        (i + 1, parent_state_scc.scc_id),
+                                    );
+                                    debug_assert!(exists.is_none());
+                                }
+
+                                // move the cursor to the parent level
                                 cursor_scc_id = parent_state_scc.scc_id;
                             }
                         }
@@ -1344,7 +1352,7 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         block_id,
                         incoming_edges,
                         outgoing_edges,
-                        is_a_back_edge,
+                        scc_back_edges,
                         scc_exit_edges,
                     })
                 }
