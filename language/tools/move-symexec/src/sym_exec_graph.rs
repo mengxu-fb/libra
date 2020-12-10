@@ -1282,8 +1282,8 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                 CycleOrBlock::Cycle(state) => {
                     // we are about to descend into a new scc
                     let next_scc = state.scc.clone().unwrap();
-                    self.iter_stack.push(state);
 
+                    // must happen before pushing the new state to iter_stack
                     let incoming_edges = self
                         .iter_stack
                         .last()
@@ -1291,6 +1291,7 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
                         .sub_scc_graph
                         .get_incoming_edges_for_block(next_scc.scc_id, next_scc.entry_block_id);
 
+                    self.iter_stack.push(state);
                     Some(ExecWalkerStep::CycleEntry {
                         scc: next_scc,
                         incoming_edges,
