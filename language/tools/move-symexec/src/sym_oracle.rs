@@ -18,7 +18,7 @@ use bytecode::{
     livevar_analysis::LiveVarAnalysisProcessor,
     memory_instrumentation::MemoryInstrumentationProcessor,
     reaching_def_analysis::ReachingDefProcessor,
-    stackless_bytecode::Bytecode,
+    stackless_bytecode::{BorrowNode, Bytecode, Operation, TempIndex},
     stackless_bytecode_generator::StacklessBytecodeGenerator,
     stackless_control_flow_graph::StacklessControlFlowGraph,
 };
@@ -360,4 +360,37 @@ fn run_stackless_bytecode_generator(global_env: &GlobalEnv) -> FunctionTargetsHo
         }
     }
     FunctionTargetsHolder { targets }
+}
+
+// utilities
+pub fn get_instruction_defs_and_uses(instruction: &Bytecode) -> (Vec<TempIndex>, Vec<TempIndex>) {
+    match instruction {
+        Bytecode::Assign(_, dst, src, _) => (vec![*dst], vec![*src]),
+        Bytecode::Load(_, dst, _) => (vec![*dst], vec![]),
+        Bytecode::Branch(_, _, _, src) => (vec![], vec![*src]),
+        Bytecode::Call(_, dsts, op, srcs) => match op {
+            Operation::WriteRef => {
+                debug_assert_eq!(srcs.len(), 2);
+                debug_assert!(dsts.is_empty());
+                (vec![srcs[0]], vec![srcs[1]])
+            }
+            Operation::WriteBack(node) => {
+                debug_assert!(dsts.is_empty());
+                let uses = srcs.clone();
+                match node {
+                    BorrowNode::GlobalRoot(..) => (vec![], uses),
+                    BorrowNode::LocalRoot(index) | BorrowNode::Reference(index) => {
+                        (vec![*index], uses)
+                    }
+                }
+            }
+            Operation::Splice(..) => panic!("Unhandled splice case"),
+            _ => (dsts.clone(), srcs.clone()),
+        },
+        Bytecode::Ret(_, srcs) => (vec![], srcs.clone()),
+        Bytecode::Abort(_, src) => (vec![], vec![*src]),
+        Bytecode::Jump(..) | Bytecode::Label(..) | Bytecode::SpecBlock(..) | Bytecode::Nop(..) => {
+            (vec![], vec![])
+        }
+    }
 }

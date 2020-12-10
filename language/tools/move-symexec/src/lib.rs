@@ -25,6 +25,8 @@ pub mod sym_smtlib;
 
 pub mod sym_vm_types;
 
+pub mod sym_vm_scc;
+
 pub mod sym_vm;
 
 pub mod symbolizer;

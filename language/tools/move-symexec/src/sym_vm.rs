@@ -22,6 +22,7 @@ use crate::{
     sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
     sym_type_graph::{ExecStructInfo, TypeGraph},
     sym_typing::ExecTypeArg,
+    sym_vm_scc::SymSccAnalysis,
     sym_vm_types::{
         SymFrame, SymRefType, SymTransactionArgument, SymValue, ADDRESS_SMT_KIND, SIGNER_SMT_KIND,
     },
@@ -513,6 +514,9 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     } else {
                         debug!("[x] Scc is unreachable");
                     }
+
+                    // run scc analysis
+                    SymSccAnalysis::new(self.exec_graph, &scc);
 
                     // add the new scc info to stack and be ready to descend into this scc
                     scc_stack.push(SymSccInfo::new(Some(scc.scc_id), reach_info_opt));

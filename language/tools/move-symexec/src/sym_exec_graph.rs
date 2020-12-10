@@ -1223,7 +1223,7 @@ pub(crate) enum ExecWalkerStep {
 }
 
 /// An iterator that visits each scc in the graph in a topological order
-/// If this scc has a cycle, decend into this scc and iterate the scc
+/// If this scc has a cycle, descend into this scc and iterate the scc
 pub(crate) struct ExecWalker<'cfg, 'env> {
     exec_graph: &'cfg ExecGraph<'env>,
     iter_stack: Vec<ExecWalkerState>,
@@ -1234,6 +1234,13 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
         Self {
             exec_graph,
             iter_stack: vec![ExecWalkerState::from_base(exec_graph)],
+        }
+    }
+
+    pub fn new_from_scc(exec_graph: &'cfg ExecGraph<'env>, scc: &ExecScc) -> Self {
+        Self {
+            exec_graph,
+            iter_stack: vec![ExecWalkerState::from_scc(exec_graph, scc)],
         }
     }
 
