@@ -794,13 +794,13 @@ impl fmt::Display for ExecSccId {
 #[derive(Clone)]
 pub(crate) struct ExecScc {
     /// A unique identifier for the scc
-    scc_id: ExecSccId,
+    pub scc_id: ExecSccId,
     /// A set of block ids defining the scope of this scc
-    scope_block_ids: HashSet<ExecBlockId>,
+    pub scope_block_ids: HashSet<ExecBlockId>,
     /// The entry block in this scc
-    entry_block_id: ExecBlockId,
+    pub entry_block_id: ExecBlockId,
     /// Whether this scc is cyclic with backedges to the entry block
-    back_edges_from: HashSet<ExecBlockId>,
+    pub back_edges_from: HashSet<ExecBlockId>,
 }
 
 /// A graph that condenses a `ExecRefGraph` into a scc graph
@@ -1198,10 +1198,8 @@ enum CycleOrBlock {
 pub(crate) enum ExecWalkerStep {
     /// Entering a new scc
     CycleEntry {
-        /// The id of the scc that we are about to descend to
-        scc_id: ExecSccId,
-        /// The id of the scc entry block
-        block_id: ExecBlockId,
+        /// The scc that we are about to descend to
+        scc: ExecScc,
         /// Incoming edges into this scc (which is also to the scc entry block)
         incoming_edges: Vec<(ExecSccId, ExecBlockId)>,
     },
@@ -1276,25 +1274,18 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
             Some(cycle_or_block) => match cycle_or_block {
                 CycleOrBlock::Cycle(state) => {
                     // we are about to descend into a new scc
-                    let next_scc = state.scc.as_ref().unwrap();
-                    let entering_scc_id = next_scc.scc_id;
-                    let entering_block_id = next_scc.entry_block_id;
+                    let next_scc = state.scc.clone().unwrap();
+                    self.iter_stack.push(state);
 
-                    // get incoming edges for the next scc
                     let incoming_edges = self
                         .iter_stack
                         .last()
                         .unwrap()
                         .sub_scc_graph
-                        .get_incoming_edges_for_block(entering_scc_id, entering_block_id);
+                        .get_incoming_edges_for_block(next_scc.scc_id, next_scc.entry_block_id);
 
-                    // collect all information needed before moving the state
-                    self.iter_stack.push(state);
-
-                    // done
                     Some(ExecWalkerStep::CycleEntry {
-                        scc_id: entering_scc_id,
-                        block_id: entering_block_id,
+                        scc: next_scc,
                         incoming_edges,
                     })
                 }

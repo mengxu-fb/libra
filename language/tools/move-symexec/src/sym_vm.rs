@@ -15,7 +15,8 @@ use spec_lang::{
 
 use crate::{
     sym_exec_graph::{
-        ExecBlock, ExecBlockId, ExecFlowType, ExecGraph, ExecSccId, ExecWalker, ExecWalkerStep,
+        ExecBlock, ExecBlockId, ExecFlowType, ExecGraph, ExecScc, ExecSccId, ExecWalker,
+        ExecWalkerStep,
     },
     sym_oracle::{SymFuncInfo, SymOracle},
     sym_smtlib::{SmtCtxt, SmtExpr, SmtKind},
@@ -475,19 +476,18 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::CycleEntry {
-                    scc_id,
-                    block_id,
+                    scc,
                     incoming_edges,
                 } => {
                     // log information
-                    log_scc_info(scc_id, &incoming_edges);
+                    log_scc_info(&scc, &incoming_edges);
 
                     // look for reachability info from parent scc
                     let parent_scc_info = scc_stack.last().unwrap();
                     let mut reach_info_opt = parent_scc_info.derive_reach_info(
                         &self.smt_ctxt,
-                        scc_id,
-                        block_id,
+                        scc.scc_id,
+                        scc.entry_block_id,
                         &incoming_edges,
                     );
 
@@ -515,7 +515,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                     }
 
                     // add the new scc info to stack and be ready to descend into this scc
-                    scc_stack.push(SymSccInfo::new(Some(scc_id), reach_info_opt));
+                    scc_stack.push(SymSccInfo::new(Some(scc.scc_id), reach_info_opt));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
                     let exiting_scc_info = scc_stack.pop().unwrap();
@@ -1310,8 +1310,16 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 }
 
 // utilities
-fn log_scc_info(scc_id: ExecSccId, incoming_edges: &[(ExecSccId, ExecBlockId)]) {
-    debug!("Scc: {}", scc_id);
+fn log_scc_info(scc: &ExecScc, incoming_edges: &[(ExecSccId, ExecBlockId)]) {
+    debug!(
+        "Scc: {}, entry block: {}, scope: [{}]",
+        scc.scc_id,
+        scc.entry_block_id,
+        scc.scope_block_ids
+            .iter()
+            .map(|block_id| block_id.to_string())
+            .join(", ")
+    );
     debug!(
         "Incoming edges: [{}]",
         incoming_edges
