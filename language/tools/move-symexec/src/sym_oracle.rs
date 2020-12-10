@@ -34,11 +34,11 @@ use crate::sym_filter::{collect_tracked_functions_and_script, FuncIdMatcher};
 
 /// Lookup id for a `SymFuncInfo` in a `SymOracle`
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
-struct SymFuncId(usize);
+pub(crate) struct SymFuncId(usize);
 
 /// Bridges and extends the `FunctionEnv` in move-prover
 pub(crate) struct SymFuncInfo<'env> {
-    func_id: SymFuncId,
+    pub func_id: SymFuncId,
     pub func_env: FunctionEnv<'env>,
     pub func_data: FunctionTargetData,
     pub func_cfg: StacklessControlFlowGraph,

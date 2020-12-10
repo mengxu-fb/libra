@@ -1230,7 +1230,7 @@ pub(crate) struct ExecWalker<'cfg, 'env> {
 }
 
 impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
-    pub fn new(exec_graph: &'cfg ExecGraph<'env>) -> Self {
+    pub fn new_from_base(exec_graph: &'cfg ExecGraph<'env>) -> Self {
         Self {
             exec_graph,
             iter_stack: vec![ExecWalkerState::from_base(exec_graph)],
@@ -1265,17 +1265,10 @@ impl<'cfg, 'env> ExecWalker<'cfg, 'env> {
             None => {
                 // internal scc yields nothing, pop the stack
                 match self.iter_stack.pop().unwrap().scc {
-                    None => {
-                        // check that no more sccs in the stack if internal scc has None as scc_id
-                        debug_assert!(self.iter_stack.is_empty());
-                        self.next() // NOTE: essentially returns None
-                    }
-                    Some(exiting_scc) => {
-                        debug_assert!(!self.iter_stack.is_empty());
-                        Some(ExecWalkerStep::CycleExit {
-                            scc_id: exiting_scc.scc_id,
-                        })
-                    }
+                    None => self.next(), // NOTE: essentially returns None
+                    Some(exiting_scc) => Some(ExecWalkerStep::CycleExit {
+                        scc_id: exiting_scc.scc_id,
+                    }),
                 }
             }
             Some(cycle_or_block) => match cycle_or_block {

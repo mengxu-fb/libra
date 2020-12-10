@@ -45,7 +45,7 @@ impl<'env> TypeGraph<'env> {
         let mut scc_stack = vec![None];
 
         // find all places that may use a struct type
-        let mut walker = ExecWalker::new(exec_graph);
+        let mut walker = ExecWalker::new_from_base(exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::CycleEntry { scc, .. } => scc_stack.push(Some(scc.scc_id)),

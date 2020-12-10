@@ -473,7 +473,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
         )];
 
         // symbolically walk the exec graph
-        let mut walker = ExecWalker::new(self.exec_graph);
+        let mut walker = ExecWalker::new_from_base(self.exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::CycleEntry {
