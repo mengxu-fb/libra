@@ -1,2 +1,2 @@
 compile move_src
-symbolize -v S::x -v S::y --output-exec-graph --output-exec-graph-stats
+symbolize -v S::x -v S::y --no-pipeline --output-exec-graph --output-exec-graph-stats
