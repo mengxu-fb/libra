@@ -812,6 +812,44 @@ pub(crate) struct ExecScc {
     pub back_edges_from: HashSet<ExecBlockId>,
 }
 
+/// Marks the type of this scc
+#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
+pub(crate) enum ExecSccType {
+    Loop,
+    RecursiveCall,
+    RecursiveRet(ExecBlockId),
+}
+
+impl ExecScc {
+    pub fn get_type(&self, exec_graph: &ExecGraph) -> ExecSccType {
+        let mut scc_type = None;
+
+        for back_from_block_id in self.back_edges_from.iter() {
+            let flow_type =
+                exec_graph.get_flow_by_block_ids(*back_from_block_id, self.entry_block_id);
+            match flow_type {
+                ExecFlowType::Branch(None) => {
+                    if let Some(existing) = scc_type.as_ref() {
+                        debug_assert_eq!(*existing, ExecSccType::Loop);
+                    } else {
+                        scc_type = Some(ExecSccType::Loop);
+                    }
+                }
+                ExecFlowType::CallRecursive => {
+                    if let Some(existing) = scc_type.as_ref() {
+                        debug_assert_eq!(*existing, ExecSccType::RecursiveCall);
+                    } else {
+                        scc_type = Some(ExecSccType::RecursiveCall)
+                    }
+                }
+                _ => panic!("Invalid flow type for back edges"),
+            }
+        }
+
+        scc_type.unwrap()
+    }
+}
+
 /// A graph that condenses a `ExecRefGraph` into a scc graph
 pub(crate) struct ExecSccGraph {
     /// The graph structure
