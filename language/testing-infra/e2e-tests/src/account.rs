@@ -4,8 +4,8 @@
 //! Test infrastructure for modeling Diem accounts.
 
 use crate::{gas_costs, keygen::KeyGen};
-use anyhow::{Error, Result};
-use diem_crypto::ed25519::*;
+use anyhow::{bail, Error, Result};
+use diem_crypto::{ed25519::*, hash::HashValue};
 use diem_types::{
     access_path::AccessPath,
     account_address::AccountAddress,
@@ -28,7 +28,14 @@ use move_core_types::{
     value::{MoveStructLayout, MoveTypeLayout},
 };
 use move_vm_types::values::{Struct, Value};
-use std::{collections::BTreeMap, str::FromStr};
+use std::{
+    collections::BTreeMap,
+    env,
+    fs::{self, File, OpenOptions},
+    io::Write,
+    path::Path,
+    str::FromStr,
+};
 use vm_genesis::GENESIS_KEYPAIR;
 
 // TTL is 86400s. Initial time was set to 0.
@@ -280,7 +287,47 @@ impl TransactionBuilder {
         )
     }
 
+    // TODO: this is hacky and for move-symexec only, don't land!
+    fn dump_txn<P: AsRef<Path>>(&self, output_dir: P) -> Result<()> {
+        fn create_unique_file_in_dir(dir: &Path) -> Result<File> {
+            for i in 0..(1 << 16) {
+                let file_path = dir.join(i.to_string());
+                let result = OpenOptions::new()
+                    .write(true)
+                    .create_new(true)
+                    .open(file_path);
+                if let Ok(fp) = result {
+                    return Ok(fp);
+                }
+            }
+            bail!("Failed to create a unique file");
+        }
+
+        match self.program.as_ref().unwrap() {
+            TransactionPayload::Script(s) => {
+                let hval = HashValue::sha3_256_of(s.code());
+                let dir_path = output_dir.as_ref().join("script").join(hval.to_hex());
+                fs::create_dir_all(&dir_path)?;
+                let mut file_ptr = create_unique_file_in_dir(&dir_path)?;
+                file_ptr.write_all(&serde_json::to_vec(s)?)?;
+            }
+            TransactionPayload::Module(m) => {
+                let hval = HashValue::sha3_256_of(m.code());
+                let dir_path = output_dir.as_ref().join("module").join(hval.to_hex());
+                fs::create_dir_all(&dir_path)?;
+            }
+            TransactionPayload::WriteSet(_) => {}
+        }
+        Ok(())
+    }
+
     pub fn sign(self) -> SignedTransaction {
+        // TODO: this is hacky and for move-symexec only, don't land!
+        if let Some(output_dir) = env::var_os("OUTPUT_TXN") {
+            self.dump_txn(output_dir)
+                .expect("failed to output transaction details");
+        }
+
         RawTransaction::new(
             *self.sender.address(),
             self.sequence_number.expect("sequence number not set"),
