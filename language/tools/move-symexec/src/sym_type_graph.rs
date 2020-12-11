@@ -41,18 +41,11 @@ impl<'env> TypeGraph<'env> {
         let mut involved_structs = HashMap::new();
         let mut analyzed_structs = HashMap::new();
 
-        // holds the block access path
-        let mut scc_stack = vec![None];
-
         // find all places that may use a struct type
         let mut walker = ExecWalker::new_from_base(exec_graph);
         while let Some(walker_step) = walker.next() {
             match walker_step {
-                ExecWalkerStep::CycleEntry { scc, .. } => scc_stack.push(Some(scc.scc_id)),
-                ExecWalkerStep::CycleExit { scc_id } => {
-                    let cur_scc_id = scc_stack.pop().unwrap();
-                    debug_assert_eq!(cur_scc_id.unwrap(), scc_id);
-                }
+                ExecWalkerStep::CycleEntry { .. } | ExecWalkerStep::CycleExit { .. } => {}
                 ExecWalkerStep::Block { block_id, .. } => {
                     // go over the instructions
                     let block = exec_graph.get_block_by_block_id(block_id);
@@ -153,11 +146,6 @@ impl<'env> TypeGraph<'env> {
                 }
             }
         }
-
-        // stack integrity
-        let base_scc = scc_stack.pop().unwrap();
-        debug_assert!(base_scc.is_none());
-        debug_assert!(scc_stack.is_empty());
 
         // start building the graph
         let mut graph = Graph::new();

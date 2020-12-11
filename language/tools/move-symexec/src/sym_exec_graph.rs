@@ -817,7 +817,7 @@ pub(crate) struct ExecScc {
 pub(crate) enum ExecSccType {
     Loop,
     RecursiveCall,
-    RecursiveRet(ExecBlockId),
+    // TODO: RecursiveRet(ExecBlockId),
 }
 
 impl ExecScc {

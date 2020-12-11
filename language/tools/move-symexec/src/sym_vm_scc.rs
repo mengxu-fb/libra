@@ -11,7 +11,7 @@ use crate::{
 };
 
 pub(crate) struct SymSccAnalysis {
-    phi_nodes: BTreeSet<TempIndex>,
+    _phi_nodes: BTreeSet<TempIndex>,
 }
 
 impl SymSccAnalysis {
@@ -124,7 +124,7 @@ impl SymSccAnalysis {
 
     pub fn new(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {
         Self {
-            phi_nodes: SymSccAnalysis::find_phi_nodes(exec_graph, scc),
+            _phi_nodes: SymSccAnalysis::find_phi_nodes(exec_graph, scc),
         }
     }
 }

@@ -209,6 +209,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             true,
             true,
             true,
+            true,  // TODO: disable no-run when development is done
             false, // TODO: enable strict mode when development is done
         )?;
 

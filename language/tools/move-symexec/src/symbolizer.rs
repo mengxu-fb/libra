@@ -13,7 +13,7 @@ use vm::{
 };
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph},
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecSccGraph, ExecWalker, ExecWalkerStep},
     sym_oracle::SymOracle,
     sym_type_graph::TypeGraph,
     sym_typing::ExecTypeArg,
@@ -64,6 +64,9 @@ impl<'env> MoveSymbolizer<'env> {
         // build exec graph
         let exec_graph = ExecGraph::new(&type_args, oracle);
 
+        // pre-walk the graph
+        MoveSymbolizer::pre_walk_exec_graph(&exec_graph);
+
         // build type graph
         let type_graph = TypeGraph::new(&exec_graph, oracle);
 
@@ -77,10 +80,37 @@ impl<'env> MoveSymbolizer<'env> {
         })
     }
 
+    fn pre_walk_exec_graph(exec_graph: &ExecGraph) {
+        // holds the block access path (in terms of sccs)
+        let mut scc_stack = vec![None];
+
+        let mut walker = ExecWalker::new_from_base(exec_graph);
+        while let Some(walker_step) = walker.next() {
+            match walker_step {
+                ExecWalkerStep::CycleEntry { scc, .. } => {
+                    // NOTE: we piggy back on this chance to check that scc types can be derived
+                    // TODO: maybe add the induction variable deriving here?
+                    scc.get_type(exec_graph);
+                    scc_stack.push(Some(scc.scc_id));
+                }
+                ExecWalkerStep::CycleExit { scc_id } => {
+                    debug_assert_eq!(scc_stack.pop().unwrap().unwrap(), scc_id);
+                }
+                ExecWalkerStep::Block { .. } => {}
+            }
+        }
+
+        // stack integrity
+        let base_scc = scc_stack.pop().unwrap();
+        debug_assert!(base_scc.is_none());
+        debug_assert!(scc_stack.is_empty());
+    }
+
     pub fn symbolize(
         &self,
         signers: &[AccountAddress],
         sym_args: &[SymTransactionArgument],
+        no_run: bool,
         strict: bool,
     ) -> Result<()> {
         // check that we got the correct number of symbolic arguments
@@ -96,8 +126,16 @@ impl<'env> MoveSymbolizer<'env> {
             bail!("The number of symbols does not match the number of value arguments");
         }
 
-        // leave the rest to the VM
+        // prepare the vm
         let vm = SymVM::new(&self.oracle, &self.exec_graph, &self.type_graph);
+
+        // TODO: this is a temporary hack. Once the symbolic engine is robust enough, this "no-run"
+        // flag should be removed
+        if no_run {
+            return Ok(());
+        }
+
+        // leave the rest to the VM
         let result = vm.interpret(if use_signers { Some(signers) } else { None }, sym_args);
 
         // fail only when we are in strict mode

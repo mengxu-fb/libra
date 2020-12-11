@@ -147,8 +147,12 @@ enum OpCommand {
         #[structopt(long = "output-type-graph-listing")]
         output_type_graph_listing: bool,
 
+        /// Do not run the symbolic interpretation procedure
+        #[structopt(long = "no-run")]
+        no_run: bool,
+
         /// Strict mode, any failure in the symbolic VM is not allowed
-        #[structopt(long = "strict")]
+        #[structopt(long = "strict", conflicts_with = "no-run")]
         strict: bool,
     },
 
@@ -253,6 +257,7 @@ impl MoveController {
         output_exec_graph: bool,
         output_exec_graph_stats: bool,
         output_type_graph_listing: bool,
+        no_run: bool,
         strict: bool,
     ) -> Result<()> {
         // get the script
@@ -309,7 +314,7 @@ impl MoveController {
         }
 
         // symbolize it
-        symbolizer.symbolize(signers, sym_args, strict)
+        symbolizer.symbolize(signers, sym_args, no_run, strict)
     }
 
     pub fn push(&mut self) -> Result<()> {
@@ -358,6 +363,7 @@ impl MoveController {
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,
+                no_run,
                 strict,
             } => self.symbolize(
                 &signers,
@@ -369,6 +375,7 @@ impl MoveController {
                 output_exec_graph,
                 output_exec_graph_stats,
                 output_type_graph_listing,
+                no_run,
                 strict,
             ),
             OpCommand::Push => self.push(),
