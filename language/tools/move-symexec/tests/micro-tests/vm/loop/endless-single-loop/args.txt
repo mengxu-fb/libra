@@ -1,0 +1,2 @@
+compile move_src
+symbolize --no-pipeline --output-exec-graph --no-run

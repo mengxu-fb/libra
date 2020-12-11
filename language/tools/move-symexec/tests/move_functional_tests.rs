@@ -58,11 +58,10 @@ const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
     vec![
         // this test has intentional signer - value argument mismatch
-        ["move", "signer", "address_arg_is_not_signer"]
-            .iter()
-            .collect(),
+        vec!["move", "signer", "address_arg_is_not_signer"],
     ]
     .into_iter()
+    .map(|segments| segments.iter().collect::<PathBuf>())
     .collect()
 });
 
@@ -70,18 +69,18 @@ static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
 static TEST_NO_PROVER_PIPELINE: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
     vec![
         // recursion is not supported
-        ["diem", "epilogue", "recursion_out_of_gas"]
-            .iter()
-            .collect(),
-        ["epilogue", "out_of_gas_recursive"].iter().collect(),
+        vec!["diem", "epilogue", "recursion_out_of_gas"],
+        vec!["epilogue", "out_of_gas_recursive"],
         // nested loops cause weird errors
-        ["move", "loops", "nested_loops"].iter().collect(),
-        // no idea why...
-        ["move", "loops", "unused_signer_infinite_loop"]
-            .iter()
-            .collect(),
+        vec!["move", "loops", "nested_loops"],
+        // infinite loops cause hang in the pipeline
+        vec!["diem", "epilogue", "loop_out_of_gas"],
+        vec!["diem", "epilogue", "while_out_of_gas"],
+        vec!["diem", "transaction_fee", "burn_collected_fees"],
+        vec!["move", "loops", "unused_signer_infinite_loop"],
     ]
     .into_iter()
+    .map(|segments| segments.iter().collect::<PathBuf>())
     .collect()
 });
 
