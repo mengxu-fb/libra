@@ -7,7 +7,7 @@
 use itertools::Itertools;
 use log::debug;
 use petgraph::{
-    algo::{all_simple_paths, tarjan_scc, toposort},
+    algo::{all_simple_paths, has_path_connecting, tarjan_scc, toposort},
     dot::Dot,
     graph::{EdgeIndex, Graph, NodeIndex},
     visit::{Bfs, DfsPostOrder, EdgeRef},
@@ -755,6 +755,15 @@ impl ExecRefGraph {
 
         // set entry block
         self.entry_block_id = entry_block_id;
+    }
+
+    pub fn is_reachable(&self, src: ExecBlockId, dst: ExecBlockId) -> bool {
+        has_path_connecting(
+            &self.graph,
+            self.get_node_by_block_id(src),
+            self.get_node_by_block_id(dst),
+            None,
+        )
     }
 
     pub fn from_graph(exec_graph: &ExecGraph) -> Self {
