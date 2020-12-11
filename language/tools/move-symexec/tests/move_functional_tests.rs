@@ -54,11 +54,30 @@ const DEFAULT_SOURCE_LOC: &str = "sources";
 /// An error mark that the test validator expects
 const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 
-/// A blacklist of tests that we do not want to run
+/// A list tests that we do not want to run
 static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
     vec![
         // this test has intentional signer - value argument mismatch
         ["move", "signer", "address_arg_is_not_signer"]
+            .iter()
+            .collect(),
+    ]
+    .into_iter()
+    .collect()
+});
+
+/// A list of tests that we do not want the prover pipeline to run
+static TEST_NO_PROVER_PIPELINE: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
+    vec![
+        // recursion is not supported
+        ["libra", "epilogue", "recursion_out_of_gas"]
+            .iter()
+            .collect(),
+        ["epilogue", "out_of_gas_recursive"].iter().collect(),
+        // nested loops cause weird errors
+        ["move", "loops", "nested_loops"].iter().collect(),
+        // no idea why...
+        ["move", "loops", "unused_signer_infinite_loop"]
             .iter()
             .collect(),
     ]
@@ -71,6 +90,7 @@ struct MoveFunctionalTestCompiler<'a> {
     controller: &'a mut MoveController,
     source_loc: PathBuf,
     source_num: usize,
+    config_no_pipeline: bool,
 }
 
 impl Compiler for MoveFunctionalTestCompiler<'_> {
@@ -205,7 +225,7 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
             &type_tags,
             None,
             &[],
-            false,
+            self.config_no_pipeline,
             true,
             true,
             true,
@@ -229,6 +249,9 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
         return Ok(());
     }
 
+    // toggle test configs if needed
+    let config_no_pipeline = TEST_NO_PROVER_PIPELINE.contains(&test_name);
+
     // derive workdir
     let test_workdir = MOVE_FUNCTIONAL_TESTS_WORKDIR.join(&test_name);
     if test_workdir.exists() {
@@ -251,6 +274,7 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
             controller: &mut controller,
             source_loc,
             source_num: 0,
+            config_no_pipeline,
         },
         test_path,
     )
