@@ -50,3 +50,7 @@ harness = false
 [[test]]
 name = "move_functional_tests"
 harness = false
+
+[[test]]
+name = "move_e2e_tests"
+harness = false

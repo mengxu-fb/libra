@@ -23,11 +23,13 @@ use diem_types::{
 };
 use move_core_types::{
     identifier::{IdentStr, Identifier},
-    language_storage::{ResourceKey, StructTag},
+    language_storage::{ResourceKey, StructTag, TypeTag},
     move_resource::MoveResource,
+    transaction_argument::TransactionArgument,
     value::{MoveStructLayout, MoveTypeLayout},
 };
 use move_vm_types::values::{Struct, Value};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
     env,
@@ -203,6 +205,13 @@ impl Default for Account {
     }
 }
 
+#[derive(Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScriptMainInfo {
+    pub signers: Vec<AccountAddress>,
+    pub ty_args: Vec<TypeTag>,
+    pub args: Vec<TransactionArgument>,
+}
+
 pub struct TransactionBuilder {
     pub sender: Account,
     pub sequence_number: Option<u64>,
@@ -309,7 +318,14 @@ impl TransactionBuilder {
                 let dir_path = output_dir.as_ref().join("script").join(hval.to_hex());
                 fs::create_dir_all(&dir_path)?;
                 let mut file_ptr = create_unique_file_in_dir(&dir_path)?;
-                file_ptr.write_all(&serde_json::to_vec(s)?)?;
+
+                // collect main info and serialize it
+                let info = ScriptMainInfo {
+                    signers: vec![self.sender.addr],
+                    ty_args: s.ty_args().to_vec(),
+                    args: s.args().to_vec(),
+                };
+                file_ptr.write_all(&serde_json::to_vec(&info)?)?;
             }
             TransactionPayload::Module(m) => {
                 let hval = HashValue::sha3_256_of(m.code());
