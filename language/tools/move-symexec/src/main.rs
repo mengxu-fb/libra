@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
@@ -14,7 +14,7 @@ use structopt::StructOpt;
 use move_lang::{shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
+    configs::{MOVE_DIEM_SCRIPTS, MOVE_LIBNURSERY, MOVE_STDLIB_MODULES},
     controller::MoveController,
 };
 
@@ -45,9 +45,9 @@ struct MainArgs {
     #[structopt(long = "no-libnursery", conflicts_with = "no-stdlib")]
     no_libnursery: bool,
 
-    /// Mark that the libra script will be prepared
-    #[structopt(long = "use-libra", conflicts_with = "no-stdlib")]
-    use_libra: Option<String>,
+    /// Mark that the diem script will be prepared
+    #[structopt(long = "use-diem", conflicts_with = "no-stdlib")]
+    use_diem: Option<String>,
 
     /// Do not clean the workspace after running the commands
     #[structopt(long = "no-clean", short = "C")]
@@ -100,18 +100,18 @@ fn main() -> Result<()> {
 
     // preprocessing
     if !args.no_stdlib {
-        controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::LIBRA_CORE), true)?;
+        controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::DIEM_CORE), true)?;
         if !args.no_libnursery {
-            controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true)?;
+            controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::DIEM_CORE), true)?;
         }
     }
 
-    if let Some(script_name) = args.use_libra {
+    if let Some(script_name) = args.use_diem {
         controller.compile(
-            &[&(*MOVE_LIBRA_SCRIPTS
+            &[&(*MOVE_DIEM_SCRIPTS
                 .join(script_name)
                 .with_extension(MOVE_EXTENSION))],
-            Some(Address::LIBRA_CORE),
+            Some(Address::DIEM_CORE),
             true,
         )?;
     }

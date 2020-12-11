@@ -7,5 +7,5 @@ cargo run -- args.txt -v --no-libnursery
 # default
 cargo run -- args.txt -v
 
-# with libra
-cargo run -- args.txt -v --use-libra burn
+# with diem
+cargo run -- args.txt -v --use-diem burn

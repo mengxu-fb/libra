@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{bail, Result};
@@ -9,8 +9,8 @@ use std::{
     path::PathBuf,
 };
 
+use diem_vm::txn_effects_to_writeset_and_events;
 use language_e2e_tests::data_store::FakeDataStore;
-use libra_vm::txn_effects_to_writeset_and_events;
 use move_core_types::{
     account_address::AccountAddress,
     gas_schedule::{GasAlgebra, GasUnits},

@@ -1,6 +1,6 @@
 #!/bin/bash -e
 
-# Copyright (c) The Libra Core Contributors
+# Copyright (c) The Diem Core Contributors
 # SPDX-License-Identifier: Apache-2.0
 
 Z3_VERSION=4.8.9

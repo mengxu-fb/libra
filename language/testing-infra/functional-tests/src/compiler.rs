@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::Result;
-use diem_types::account_address::AccountAddress;
+use diem_types::{account_address::AccountAddress, transaction::SignedTransaction};
 use vm::file_format::{CompiledModule, CompiledScript};
 
 pub trait Compiler {

@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 use anyhow::{anyhow, bail, Result};
@@ -12,18 +12,18 @@ use std::{
 };
 
 use datatest_stable::{self, harness};
+use diem_types::{
+    account_address::AccountAddress,
+    transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
+};
 use functional_tests::{
     compiler::{Compiler, ScriptOrModule},
     testsuite,
 };
-use libra_types::{
-    account_address::AccountAddress,
-    transaction::{SignedTransaction, TransactionPayload, WriteSetPayload},
-};
 use move_lang::{move_compile, shared::Address, MOVE_EXTENSION};
 
 use move_symexec::{
-    configs::{MOVE_LIBNURSERY, MOVE_LIBRA_SCRIPTS, MOVE_STDLIB_MODULES},
+    configs::{MOVE_DIEM_SCRIPTS, MOVE_LIBNURSERY, MOVE_STDLIB_MODULES},
     controller::MoveController,
     crate_path, crate_path_string,
     sym_vm_types::SymTransactionArgument,
@@ -70,7 +70,7 @@ static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
 static TEST_NO_PROVER_PIPELINE: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
     vec![
         // recursion is not supported
-        ["libra", "epilogue", "recursion_out_of_gas"]
+        ["diem", "epilogue", "recursion_out_of_gas"]
             .iter()
             .collect(),
         ["epilogue", "out_of_gas_recursive"].iter().collect(),
@@ -183,14 +183,14 @@ impl Compiler for MoveFunctionalTestCompiler<'_> {
     fn hook_notify_precompiled_script(&mut self, input: &str) -> Result<()> {
         // find the script path
         let script_name = input.strip_prefix("stdlib_script::").unwrap();
-        let script_path = MOVE_LIBRA_SCRIPTS
+        let script_path = MOVE_DIEM_SCRIPTS
             .join(script_name)
             .with_extension(MOVE_EXTENSION);
 
         // compile the script in a separate session
         self.controller.push()?;
         self.controller
-            .compile(&[&script_path], Some(Address::LIBRA_CORE), true)
+            .compile(&[&script_path], Some(Address::DIEM_CORE), true)
     }
 
     fn hook_pre_exec_script_txn(&mut self, txn: &SignedTransaction) -> Result<()> {
@@ -265,8 +265,8 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     let mut controller = MoveController::new(test_workdir)?;
 
     // compile stdlib (including nursery)
-    controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::LIBRA_CORE), true)?;
-    controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::LIBRA_CORE), true)?;
+    controller.compile(&[&*MOVE_STDLIB_MODULES], Some(Address::DIEM_CORE), true)?;
+    controller.compile(&[&*MOVE_LIBNURSERY], Some(Address::DIEM_CORE), true)?;
 
     // test
     testsuite::functional_tests(

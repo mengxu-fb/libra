@@ -1,4 +1,4 @@
-// Copyright (c) The Libra Core Contributors
+// Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
 #![macro_use]
@@ -22,9 +22,9 @@ crate_path!(MOVE_LIBNURSERY, "..", "..", "stdlib", "nursery");
 // Default path to directory containing stdlib modules (source)
 crate_path!(MOVE_STDLIB_MODULES, "..", "..", "stdlib", "modules");
 
-// Default path to directory containing libra scripts (source)
+// Default path to directory containing diem scripts (source)
 crate_path!(
-    MOVE_LIBRA_SCRIPTS,
+    MOVE_DIEM_SCRIPTS,
     "..",
     "..",
     "stdlib",
