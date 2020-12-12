@@ -18,7 +18,8 @@ use diem_types::{
     block_metadata::{new_block_event_key, BlockMetadata, NewBlockEvent},
     on_chain_config::{OnChainConfig, VMPublishingOption, ValidatorSet},
     transaction::{
-        SignedTransaction, Transaction, TransactionOutput, TransactionStatus, VMValidatorResult,
+        SignedTransaction, Transaction, TransactionOutput, TransactionPayload, TransactionStatus,
+        VMValidatorResult, WriteSetPayload,
     },
     vm_status::{KeptVMStatus, VMStatus},
     write_set::WriteSet,
@@ -32,6 +33,7 @@ use move_core_types::{
     gas_schedule::{GasAlgebra, GasUnits},
     identifier::Identifier,
     language_storage::{ModuleId, TypeTag},
+    transaction_argument::TransactionArgument,
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_types::{
@@ -40,7 +42,31 @@ use move_vm_types::{
 };
 use vm::CompiledModule;
 
+use anyhow::{bail, Result};
+use serde::{Deserialize, Serialize};
+use std::{
+    env,
+    fs::{self, File, OpenOptions},
+    io::{self, Write},
+    path::{Path, PathBuf},
+};
+
 static RNG_SEED: [u8; 32] = [9u8; 32];
+
+#[derive(Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ExecStepInfo {
+    Module {
+        hval: String,
+        senders: Vec<AccountAddress>,
+    },
+    Script {
+        hval: String,
+        signers: Vec<AccountAddress>,
+        ty_args: Vec<TypeTag>,
+        val_args: Vec<TransactionArgument>,
+    },
+    WriteSet,
+}
 
 /// Provides an environment to run a VM instance.
 ///
@@ -51,9 +77,29 @@ pub struct FakeExecutor {
     block_time: u64,
     executed_output: Option<GoldenOutputs>,
     rng: KeyGen,
+    output_dir: Option<PathBuf>,
 }
 
 impl FakeExecutor {
+    // TODO: this is hacky and for move-symexec only, don't land!
+    fn create_sequenced_dir_racy<P: AsRef<Path>>(host_dir: P) -> Result<PathBuf> {
+        for i in 0..(1 << 16) {
+            let dir_path = host_dir.as_ref().join(i.to_string());
+            if fs::create_dir(&dir_path).is_ok() {
+                return Ok(dir_path);
+            }
+        }
+        bail!("Failed to create a unique sequenced directory");
+    }
+
+    fn create_sequenced_file_serial<P: AsRef<Path>>(host_dir: P) -> io::Result<File> {
+        let seq = fs::read_dir(host_dir.as_ref())?.count();
+        OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(host_dir.as_ref().join(seq.to_string()))
+    }
+
     /// Creates an executor from a genesis [`WriteSet`].
     pub fn from_genesis(write_set: &WriteSet) -> Self {
         let mut executor = FakeExecutor {
@@ -61,6 +107,7 @@ impl FakeExecutor {
             block_time: 0,
             executed_output: None,
             rng: KeyGen::from_seed(RNG_SEED),
+            output_dir: None,
         };
         executor.apply_write_set(write_set);
         executor
@@ -106,10 +153,21 @@ impl FakeExecutor {
             block_time: 0,
             executed_output: None,
             rng: KeyGen::from_seed(RNG_SEED),
+            output_dir: None,
         }
     }
 
     pub fn set_golden_file(&mut self, test_name: &str) {
+        if let Some(env_out) = env::var_os("OUTPUT_TXN_FOR_SYMEXEC") {
+            let output = Self::create_sequenced_dir_racy(env_out).unwrap();
+            let mut name_file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(output.join("name"))
+                .unwrap();
+            name_file.write_all(test_name.as_bytes()).unwrap();
+            self.output_dir = Some(output);
+        }
         self.executed_output = Some(GoldenOutputs::new(test_name));
     }
 
@@ -253,10 +311,49 @@ impl FakeExecutor {
         }
     }
 
+    fn dump_txn(&self, outdir: &Path, txn: &Transaction) -> Result<()> {
+        if let Transaction::UserTransaction(user_txn) = txn {
+            let raw_txn = user_txn.clone().into_raw_transaction();
+            let sender = raw_txn.sender();
+            let info = match raw_txn.into_payload() {
+                TransactionPayload::Script(script) => ExecStepInfo::Script {
+                    hval: HashValue::sha3_256_of(script.code()).to_hex(),
+                    signers: vec![sender],
+                    ty_args: script.ty_args().to_vec(),
+                    val_args: script.args().to_vec(),
+                },
+                TransactionPayload::Module(module) => ExecStepInfo::Module {
+                    hval: HashValue::sha3_256_of(module.code()).to_hex(),
+                    senders: vec![sender],
+                },
+                TransactionPayload::WriteSet(WriteSetPayload::Script { execute_as, script }) => {
+                    ExecStepInfo::Script {
+                        hval: HashValue::sha3_256_of(script.code()).to_hex(),
+                        signers: vec![execute_as],
+                        ty_args: script.ty_args().to_vec(),
+                        val_args: script.args().to_vec(),
+                    }
+                }
+                TransactionPayload::WriteSet(WriteSetPayload::Direct(_)) => ExecStepInfo::WriteSet,
+            };
+            let mut file = Self::create_sequenced_file_serial(outdir)?;
+            file.write_all(&serde_json::to_vec(&info)?)?;
+        }
+        Ok(())
+    }
+
     pub fn execute_transaction_block(
         &self,
         txn_block: Vec<Transaction>,
     ) -> Result<Vec<TransactionOutput>, VMStatus> {
+        // TODO: this is hacky and for move-symexec only, don't land!
+        if let Some(output) = self.output_dir.as_ref() {
+            for txn in txn_block.iter() {
+                self.dump_txn(output, txn)
+                    .expect("failed to output transaction details");
+            }
+        }
+
         let output = DiemVM::execute_block(txn_block, &self.data_store);
         if let Some(logger) = &self.executed_output {
             logger.log(format!("{:?}\n", output).as_str());

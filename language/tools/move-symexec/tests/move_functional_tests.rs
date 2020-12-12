@@ -54,7 +54,7 @@ const DEFAULT_SOURCE_LOC: &str = "sources";
 /// An error mark that the test validator expects
 const MOVE_COMPILER_ERROR_MARK: &str = "MoveSourceCompilerError";
 
-/// A list tests that we do not want to run
+/// A list of tests that we do not want to run
 static TEST_BLACKLIST: Lazy<HashSet<PathBuf>> = Lazy::new(|| {
     vec![
         // this test has intentional signer - value argument mismatch
