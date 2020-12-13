@@ -13,7 +13,12 @@ use std::{
 
 use compiled_stdlib::transaction_scripts::StdlibScript;
 use language_e2e_tests::executor::ExecStepInfo;
+use move_core_types::{account_address::AccountAddress, language_storage::TypeTag};
 use move_lang::{shared::Address, MOVE_EXTENSION};
+use vm::{
+    access::ScriptAccess,
+    file_format::{CompiledScript, SignatureToken},
+};
 
 use move_symexec::{
     configs::{MOVE_DIEM_SCRIPTS, MOVE_LIBNURSERY, MOVE_STDLIB_MODULES},
@@ -42,11 +47,43 @@ crate_path!(
 
 /// A list of tests that we do not want to run
 static TEST_BLACKLIST: Lazy<HashSet<String>> = Lazy::new(|| {
-    vec!["language_e2e_testsuite::tests::vasps::max_child_accounts_for_vasp"]
-        .into_iter()
-        .map(|item| item.to_owned())
-        .collect()
+    vec![
+        "language_e2e_testsuite::tests::vasps::max_child_accounts_for_vasp",
+        "language_e2e_testsuite::tests::verify_txn::charge_gas_invalid_args",
+    ]
+    .into_iter()
+    .map(|item| item.to_owned())
+    .collect()
 });
+
+fn precheck(
+    script: &CompiledScript,
+    signers: &[AccountAddress],
+    ty_args: &[TypeTag],
+    sym_args: &[SymTransactionArgument],
+) -> bool {
+    // check that we got the correct number of type tags
+    if ty_args.len() != script.as_inner().type_parameters.len() {
+        return false;
+    }
+
+    // check that we got the correct number of symbolic arguments
+    let val_arg_sigs = script.signature_at(script.as_inner().parameters);
+    let use_signers = !val_arg_sigs.is_empty()
+        && match val_arg_sigs.0.get(0).unwrap() {
+            SignatureToken::Reference(inner) => matches!(&**inner, SignatureToken::Signer),
+            _ => false,
+        };
+
+    // NOTE: signers must come before value arguments, if present in the signature
+    if val_arg_sigs.len() != if use_signers { signers.len() } else { 0 } + sym_args.len() {
+        // the number of symbols does not match the number of value arguments
+        return false;
+    }
+
+    // everything is OK
+    true
+}
 
 fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
     let dir_path = test_path.parent().unwrap();
@@ -122,20 +159,36 @@ fn run_one_test(test_path: &Path) -> datatest_stable::Result<()> {
                     .map(|i| SymTransactionArgument::Symbolic(format!("v{}", i)))
                     .collect::<Vec<_>>();
 
-                // symbolize it
-                controller.symbolize(
+                // filter out argument mismatches
+                let (_, mut compiled_scripts) = controller.get_compiled_units_recent();
+                debug_assert_eq!(compiled_scripts.len(), 1);
+                if !precheck(
+                    compiled_scripts.pop().unwrap(),
                     &signers,
-                    &sym_args,
                     &ty_args,
-                    None,
-                    &[],
-                    false,
-                    true,
-                    true,
-                    true,
-                    true,  // TODO: disable no-run when development is done
-                    false, // TODO: enable strict mode when development is done
-                )?;
+                    &sym_args,
+                ) {
+                    // skip the step as we know this is not going to work
+                    println!(
+                        "Test case {} step {} skipped due to pre-check failure",
+                        test_name, seq
+                    );
+                } else {
+                    // symbolize it
+                    controller.symbolize(
+                        &signers,
+                        &sym_args,
+                        &ty_args,
+                        None,
+                        &[],
+                        false,
+                        true,
+                        true,
+                        true,
+                        true,  // TODO: disable no-run when development is done
+                        false, // TODO: enable strict mode when development is done
+                    )?;
+                }
 
                 // now pop the stack to remove the script
                 controller.pop()?;
