@@ -3,10 +3,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use bytecode::stackless_bytecode::TempIndex;
+use bytecode::stackless_bytecode::{Bytecode, TempIndex};
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecScc, ExecWalker, ExecWalkerStep},
+    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecScc, ExecSccType, ExecWalker, ExecWalkerStep},
     sym_oracle::get_instruction_defs_and_uses,
 };
 
@@ -117,9 +117,46 @@ impl SymSccAnalysis {
         phi_nodes
     }
 
+    /// Find the phi nodes in this scc representing a call recursion
+    ///
+    /// A variable x is a phi node if and only if x is in the function argument list
+    /// TODO: this is based on my gut feeling... I can't actually prove it...
+    fn find_phi_nodes_in_rec_call(exec_graph: &ExecGraph, scc: &ExecScc) -> BTreeSet<TempIndex> {
+        let call_entry_block = exec_graph.get_block_by_block_id(scc.entry_block_id);
+        let params = call_entry_block.exec_unit.func_env.get_parameters();
+        let target = call_entry_block.exec_unit.get_target();
+        params
+            .into_iter()
+            .map(|param| *target.get_local_index(param.0).unwrap())
+            .collect()
+    }
+
+    /// Find the phi nodes in this scc representing a return recursion
+    ///
+    /// A variable x is a phi node if and only if x is in the return values list
+    /// TODO: this is based on my gut feeling... I can't actually prove it...
+    fn find_phi_nodes_in_rec_ret(exec_graph: &ExecGraph, scc: &ExecScc) -> BTreeSet<TempIndex> {
+        // NOTE: upon deciding that this scc is of return type, we already asserted that there is
+        // only one exit block. So we can safely unwrap the first entry of exit_block_ids
+        let call_return_block =
+            exec_graph.get_block_by_block_id(*scc.exit_block_ids.iter().next().unwrap());
+        match call_return_block.instructions.last().unwrap() {
+            Bytecode::Ret(_, rets) => rets.iter().copied().collect(),
+            _ => panic!("Invalid termination instruction for a return block in recursive scc"),
+        }
+    }
+
     fn find_phi_nodes(exec_graph: &ExecGraph, scc: &ExecScc) -> BTreeSet<TempIndex> {
-        SymSccAnalysis::find_phi_nodes_in_loop(exec_graph, scc)
-        // TODO: handle the recursion case
+        let scc_type = scc.get_type(exec_graph);
+        match scc_type {
+            ExecSccType::Loop => SymSccAnalysis::find_phi_nodes_in_loop(exec_graph, scc),
+            ExecSccType::RecursiveCall => {
+                SymSccAnalysis::find_phi_nodes_in_rec_call(exec_graph, scc)
+            }
+            ExecSccType::RecursiveRet(_) => {
+                SymSccAnalysis::find_phi_nodes_in_rec_ret(exec_graph, scc)
+            }
+        }
     }
 
     pub fn new(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {

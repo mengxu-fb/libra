@@ -18,6 +18,7 @@ use crate::{
     sym_type_graph::TypeGraph,
     sym_typing::ExecTypeArg,
     sym_vm::SymVM,
+    sym_vm_scc::SymSccAnalysis,
     sym_vm_types::SymTransactionArgument,
 };
 
@@ -88,9 +89,8 @@ impl<'env> MoveSymbolizer<'env> {
         while let Some(walker_step) = walker.next() {
             match walker_step {
                 ExecWalkerStep::CycleEntry { scc, .. } => {
-                    // NOTE: we piggy back on this chance to check that scc types can be derived
-                    // TODO: maybe add the induction variable deriving here?
-                    scc.get_type(exec_graph);
+                    // NOTE: we piggy back on this chance to derive loop phi nodes
+                    SymSccAnalysis::new(exec_graph, &scc);
                     scc_stack.push(Some(scc.scc_id));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
