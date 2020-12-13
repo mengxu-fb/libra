@@ -824,6 +824,8 @@ pub(crate) struct ExecScc {
     pub scope_block_ids: HashSet<ExecBlockId>,
     /// The entry block in this scc
     pub entry_block_id: ExecBlockId,
+    /// The exit blocks in this scc
+    pub exit_block_ids: HashSet<ExecBlockId>,
     /// Whether this scc is cyclic with backedges to the entry block
     pub back_edges_from: HashSet<ExecBlockId>,
 }
@@ -850,9 +852,11 @@ impl ExecScc {
             }
 
             // get the type
-            let entry_out_edges = exec_graph.get_outgoing_edges_for_block(self.entry_block_id);
-            debug_assert_eq!(entry_out_edges.len(), 2);
-            for (_, flow_type) in entry_out_edges {
+            debug_assert_eq!(self.exit_block_ids.len(), 1);
+            let scc_out_edges = exec_graph
+                .get_outgoing_edges_for_block(*self.exit_block_ids.iter().next().unwrap());
+            debug_assert_eq!(scc_out_edges.len(), 2);
+            for (_, flow_type) in scc_out_edges {
                 match flow_type {
                     ExecFlowType::RetRecursive(paired_call) => {
                         debug_assert!(scc_type.is_none());
@@ -1071,6 +1075,10 @@ impl ExecSccGraph {
                     scc_id,
                     scope_block_ids: scope_block_ids.clone(),
                     entry_block_id: scc_entry_block_id,
+                    exit_block_ids: outlet_map
+                        .iter()
+                        .map(|((src_block_id, _), _)| *src_block_id)
+                        .collect(),
                     back_edges_from: scc_intra_edge_dst_block_ids
                         .remove(&scc_entry_block_id)
                         .unwrap_or_else(HashSet::new),
