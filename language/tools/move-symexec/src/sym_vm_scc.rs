@@ -6,11 +6,14 @@ use std::collections::{BTreeMap, BTreeSet};
 use bytecode::stackless_bytecode::{Bytecode, TempIndex};
 
 use crate::{
-    sym_exec_graph::{ExecGraph, ExecRefGraph, ExecScc, ExecSccType, ExecWalker, ExecWalkerStep},
+    sym_exec_graph::{
+        ExecGraph, ExecRefGraph, ExecScc, ExecSccId, ExecSccType, ExecWalker, ExecWalkerStep,
+    },
     sym_oracle::get_instruction_defs_and_uses,
 };
 
 pub(crate) struct SymSccAnalysis {
+    pub scc_id: ExecSccId,
     _phi_nodes: BTreeSet<TempIndex>,
 }
 
@@ -161,6 +164,7 @@ impl SymSccAnalysis {
 
     pub fn new(exec_graph: &ExecGraph, scc: &ExecScc) -> Self {
         Self {
+            scc_id: scc.scc_id,
             _phi_nodes: SymSccAnalysis::find_phi_nodes(exec_graph, scc),
         }
     }

@@ -92,8 +92,8 @@ struct SymFlowInfo<'smt> {
 }
 
 struct SymSccInfo<'smt> {
-    /// The scc_id where all scc_ids in the edge_conds resides in
-    scc_id: Option<ExecSccId>,
+    /// The scc analysis for this particular scc
+    scc_analysis: Option<SymSccAnalysis>,
     /// Entry information
     entry_info: Option<SymFlowInfo<'smt>>,
     /// Information for flows (i.e., edges) within this scc only
@@ -103,9 +103,9 @@ struct SymSccInfo<'smt> {
 }
 
 impl<'smt> SymSccInfo<'smt> {
-    fn new(scc_id: Option<ExecSccId>, entry_info: Option<SymFlowInfo<'smt>>) -> Self {
+    fn new(scc_analysis: Option<SymSccAnalysis>, entry_info: Option<SymFlowInfo<'smt>>) -> Self {
         Self {
-            scc_id,
+            scc_analysis,
             entry_info,
             edge_info: HashMap::new(),
             exit_info: HashMap::new(),
@@ -515,15 +515,15 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
                         debug!("[x] Scc is unreachable");
                     }
 
-                    // run scc analysis
-                    SymSccAnalysis::new(self.exec_graph, &scc);
-
                     // add the new scc info to stack and be ready to descend into this scc
-                    scc_stack.push(SymSccInfo::new(Some(scc.scc_id), reach_info_opt));
+                    scc_stack.push(SymSccInfo::new(
+                        Some(SymSccAnalysis::new(self.exec_graph, &scc)),
+                        reach_info_opt,
+                    ));
                 }
                 ExecWalkerStep::CycleExit { scc_id } => {
                     let exiting_scc_info = scc_stack.pop().unwrap();
-                    debug_assert_eq!(exiting_scc_info.scc_id.unwrap(), scc_id);
+                    debug_assert_eq!(exiting_scc_info.scc_analysis.unwrap().scc_id, scc_id);
 
                     // transfer its exit info to all of its parent sccs
                     let scc_stack_len = scc_stack.len();
@@ -684,7 +684,7 @@ impl<'env, 'sym> SymVM<'env, 'sym> {
 
         // we should have nothing left in the stack after execution, except the root scc
         let base_scc = scc_stack.pop().unwrap();
-        debug_assert!(base_scc.scc_id.is_none());
+        debug_assert!(base_scc.scc_analysis.is_none());
         debug_assert!(scc_stack.is_empty());
 
         // done
