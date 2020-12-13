@@ -257,6 +257,22 @@ impl<'env> ExecGraph<'env> {
         self.graph.edge_weight(*edge).unwrap().flow_type.clone()
     }
 
+    fn get_outgoing_edges_for_block(
+        &self,
+        block_id: ExecBlockId,
+    ) -> HashMap<ExecBlockId, ExecFlowType> {
+        let src_node = self.get_node_by_block_id(block_id);
+        self.graph
+            .edges_directed(src_node, EdgeDirection::Outgoing)
+            .map(|edge| {
+                (
+                    self.get_block_by_node(edge.target()).block_id,
+                    edge.weight().flow_type.clone(),
+                )
+            })
+            .collect()
+    }
+
     // core
     fn incorporate(
         &mut self,
@@ -817,32 +833,56 @@ pub(crate) struct ExecScc {
 pub(crate) enum ExecSccType {
     Loop,
     RecursiveCall,
-    // TODO: RecursiveRet(ExecBlockId),
+    RecursiveRet(ExecBlockId),
 }
 
 impl ExecScc {
     pub fn get_type(&self, exec_graph: &ExecGraph) -> ExecSccType {
         let mut scc_type = None;
 
-        for back_from_block_id in self.back_edges_from.iter() {
-            let flow_type =
-                exec_graph.get_flow_by_block_ids(*back_from_block_id, self.entry_block_id);
-            match flow_type {
-                ExecFlowType::Branch(None) => {
-                    if let Some(existing) = scc_type.as_ref() {
-                        debug_assert_eq!(*existing, ExecSccType::Loop);
-                    } else {
-                        scc_type = Some(ExecSccType::Loop);
+        let entry_block = exec_graph.get_block_by_block_id(self.entry_block_id);
+        if let Bytecode::Ret(..) = entry_block.instructions.last().unwrap() {
+            // this is a recursive return block
+            for back_from_block_id in self.back_edges_from.iter() {
+                let flow_type =
+                    exec_graph.get_flow_by_block_ids(*back_from_block_id, self.entry_block_id);
+                debug_assert!(matches!(flow_type, ExecFlowType::Branch(None)));
+            }
+
+            // get the type
+            let entry_out_edges = exec_graph.get_outgoing_edges_for_block(self.entry_block_id);
+            debug_assert_eq!(entry_out_edges.len(), 2);
+            for (_, flow_type) in entry_out_edges {
+                match flow_type {
+                    ExecFlowType::RetRecursive(paired_call) => {
+                        debug_assert!(scc_type.is_none());
+                        scc_type = Some(ExecSccType::RecursiveRet(paired_call));
                     }
+                    ExecFlowType::Ret(_) => {}
+                    _ => panic!("Invalid flow type for back edges"),
                 }
-                ExecFlowType::CallRecursive => {
-                    if let Some(existing) = scc_type.as_ref() {
-                        debug_assert_eq!(*existing, ExecSccType::RecursiveCall);
-                    } else {
-                        scc_type = Some(ExecSccType::RecursiveCall)
+            }
+        } else {
+            for back_from_block_id in self.back_edges_from.iter() {
+                let flow_type =
+                    exec_graph.get_flow_by_block_ids(*back_from_block_id, self.entry_block_id);
+                match flow_type {
+                    ExecFlowType::Branch(None) => {
+                        if let Some(existing) = scc_type.as_ref() {
+                            debug_assert_eq!(*existing, ExecSccType::Loop);
+                        } else {
+                            scc_type = Some(ExecSccType::Loop);
+                        }
                     }
+                    ExecFlowType::CallRecursive => {
+                        if let Some(existing) = scc_type.as_ref() {
+                            debug_assert_eq!(*existing, ExecSccType::RecursiveCall);
+                        } else {
+                            scc_type = Some(ExecSccType::RecursiveCall)
+                        }
+                    }
+                    _ => panic!("Invalid flow type for back edges"),
                 }
-                _ => panic!("Invalid flow type for back edges"),
             }
         }
 
