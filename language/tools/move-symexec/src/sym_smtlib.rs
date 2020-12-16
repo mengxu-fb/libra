@@ -33,6 +33,8 @@ pub struct SmtStructInfo {
 pub struct SmtCtxt {
     /// A wrapper over Z3_context
     ctxt: Z3_context,
+    /// A wrapper over Z3_solver
+    solver: Z3_solver,
     /// A map of pre-defined structs
     struct_map: HashMap<String, SmtStructInfo>,
     /// Whether to simplify terms automatically
@@ -49,8 +51,15 @@ impl SmtCtxt {
             ctx
         };
 
+        let solver = unsafe {
+            let sol = Z3_mk_solver(ctxt);
+            Z3_solver_inc_ref(ctxt, sol);
+            sol
+        };
+
         Self {
             ctxt,
+            solver,
             struct_map: HashMap::new(),
             conf_auto_simplify,
         }
@@ -290,8 +299,7 @@ impl SmtCtxt {
     fn is_infeasible(&self, pred: Z3_ast) -> bool {
         let asts = vec![pred];
         let result = unsafe {
-            let solver = Z3_mk_solver(self.ctxt);
-            Z3_solver_check_assumptions(self.ctxt, solver, asts.len() as c_uint, asts.as_ptr())
+            Z3_solver_check_assumptions(self.ctxt, self.solver, asts.len() as c_uint, asts.as_ptr())
         };
         result == Z3_lbool_Z3_L_FALSE
     }
@@ -331,8 +339,7 @@ impl SmtCtxt {
     pub fn solve(&self, constraints: &[&SmtExpr]) -> SmtResult {
         let asts: Vec<Z3_ast> = constraints.iter().map(|expr| expr.ast).collect();
         let result = unsafe {
-            let solver = Z3_mk_solver(self.ctxt);
-            Z3_solver_check_assumptions(self.ctxt, solver, asts.len() as c_uint, asts.as_ptr())
+            Z3_solver_check_assumptions(self.ctxt, self.solver, asts.len() as c_uint, asts.as_ptr())
         };
 
         // convert to enum
@@ -361,6 +368,7 @@ impl SmtCtxt {
 impl Drop for SmtCtxt {
     fn drop(&mut self) {
         unsafe {
+            Z3_solver_dec_ref(self.ctxt, self.solver);
             Z3_del_context(self.ctxt);
         }
     }
