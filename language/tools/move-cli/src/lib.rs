@@ -315,42 +315,43 @@ impl OnDiskStateView {
     }
 
     /// Save `module` on disk under the path `module.address()`/`module.name()`
-    fn save_module(&self, module: &CompiledModule) -> Result<()> {
-        let path = self.get_module_path(&module.self_id());
+    fn save_module(&self, module_id: &ModuleId, module_bytes: &[u8]) -> Result<()> {
+        let path = self.get_module_path(module_id);
         if !path.exists() {
             fs::create_dir_all(path.parent().unwrap())?
         }
-
-        let mut module_bytes = vec![];
-        module.serialize(&mut module_bytes)?;
-
         Ok(fs::write(path, &module_bytes)?)
     }
 
+    fn sync_interface_files(&self) -> Result<()> {
+        move_lang::generate_interface_files(
+            &[self
+                .storage_dir
+                .clone()
+                .into_os_string()
+                .into_string()
+                .unwrap()],
+            Some(
+                self.build_dir
+                    .clone()
+                    .into_os_string()
+                    .into_string()
+                    .unwrap(),
+            ),
+            false,
+        )?;
+        Ok(())
+    }
+
     /// Save all the modules in the local cache, re-generate mv_interfaces if required.
-    pub fn save_modules(&self, modules: &[CompiledModule]) -> Result<()> {
-        for module in modules {
-            self.save_module(module)?;
+    pub fn save_modules(&self, modules: &[(ModuleId, Vec<u8>)]) -> Result<()> {
+        for (module_id, module_bytes) in modules {
+            self.save_module(module_id, module_bytes)?;
         }
 
         // sync with build_dir for updates of mv_interfaces if new modules are added
         if !modules.is_empty() {
-            move_lang::generate_interface_files(
-                &[self
-                    .storage_dir
-                    .clone()
-                    .into_os_string()
-                    .into_string()
-                    .unwrap()],
-                Some(
-                    self.build_dir
-                        .clone()
-                        .into_os_string()
-                        .into_string()
-                        .unwrap(),
-                ),
-                false,
-            )?;
+            self.sync_interface_files()?;
         }
 
         Ok(())
