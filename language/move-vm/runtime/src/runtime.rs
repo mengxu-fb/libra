@@ -101,7 +101,7 @@ impl VMRuntime {
             }
         }
 
-        // perform bytecode and loading verification
+        // perform bytecode, loading verification, and checking of cyclic dependencies
         self.loader.verify_module_verify_no_missing_dependencies(
             &compiled_module,
             data_store,
