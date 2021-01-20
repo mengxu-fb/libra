@@ -374,6 +374,12 @@ pub struct FieldDefinition {
     pub signature: TypeSignature,
 }
 
+pub enum Visibility {
+    Private,
+    Protected,
+    Public,
+}
+
 /// A `FunctionDefinition` is the implementation of a function. It defines
 /// the *prototype* of the function and the function body.
 
@@ -383,8 +389,8 @@ pub struct FieldDefinition {
 pub struct FunctionDefinition {
     /// The prototype of the function (module, name, signature).
     pub function: FunctionHandleIndex,
-    /// Flag to indicate if this function is public.
-    pub is_public: bool,
+    /// Flag to indicate the visibility of this function.
+    pub visibility: Visibility,
     /// List of nominal resources (declared in this module) that the procedure might access
     /// Either through: BorrowGlobal, MoveFrom, or transitively through another procedure
     /// This list of acquires grants the borrow checker the ability to statically verify the safety
@@ -1615,6 +1621,9 @@ pub struct CompiledModuleMut {
     pub struct_defs: Vec<StructDefinition>,
     /// Function defined in this module.
     pub function_defs: Vec<FunctionDefinition>,
+
+    /// Friends of this module.
+    pub friends: Vec<ModuleHandleIndex>,
 }
 
 // Need a custom implementation of Arbitrary because as of proptest-derive 0.1.1, the derivation
