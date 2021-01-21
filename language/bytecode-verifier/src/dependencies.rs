@@ -11,7 +11,7 @@ use vm::{
     errors::{verification_error, Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
         CompiledModule, CompiledScript, FunctionHandle, FunctionHandleIndex, ModuleHandle,
-        ModuleHandleIndex, SignatureToken, StructHandle, StructHandleIndex, TableIndex,
+        ModuleHandleIndex, SignatureToken, StructHandle, StructHandleIndex, TableIndex, Visibility,
     },
     IndexKind,
 };
@@ -22,7 +22,8 @@ pub struct DependencyChecker<'a> {
     dependency_map: BTreeMap<ModuleId, &'a CompiledModule>,
     // (Module::StructName -> handle) for all types of all dependencies
     struct_id_to_handle_map: HashMap<(ModuleId, Identifier), StructHandleIndex>,
-    // (Module::FunctionName -> handle) for all public functions of all dependencies
+    // (Module::FunctionName -> handle) for all functions accessible by this module in dependencies.
+    // These functions include public ones and protected ones that list this module as a friend.
     func_id_to_handle_map: HashMap<(ModuleId, Identifier), FunctionHandleIndex>,
 }
 
@@ -54,7 +55,7 @@ impl<'a> DependencyChecker<'a> {
             struct_id_to_handle_map: HashMap::new(),
             func_id_to_handle_map: HashMap::new(),
         };
-        checker.build_deps_entry_point();
+        checker.build_deps_entry_point(Some(module_id));
 
         // verify dependencies
         checker.verify_imported_modules(module.module_handles(), Some(module.self_handle_idx()))?;
@@ -84,14 +85,14 @@ impl<'a> DependencyChecker<'a> {
             struct_id_to_handle_map: HashMap::new(),
             func_id_to_handle_map: HashMap::new(),
         };
-        checker.build_deps_entry_point();
+        checker.build_deps_entry_point(None);
 
         checker.verify_imported_modules(script.module_handles(), None)?;
         checker.verify_imported_structs(script.struct_handles(), None)?;
         checker.verify_imported_functions(script.function_handles(), None)
     }
 
-    fn build_deps_entry_point(&mut self) {
+    fn build_deps_entry_point(&mut self, self_module_id: Option<ModuleId>) {
         for (module_id, module) in &self.dependency_map {
             // Module::StructName -> def handle idx
             for struct_def in module.struct_defs() {
@@ -104,7 +105,14 @@ impl<'a> DependencyChecker<'a> {
             }
             // Module::FuncName -> def handle idx
             for func_def in module.function_defs() {
-                if !func_def.is_public {
+                let can_be_called = match func_def.visibility {
+                    Visibility::Private => false,
+                    Visibility::Protected => {
+                        self_module_id.map_or(false, |self_id| module.has_friend(&self_id))
+                    }
+                    Visibility::Public => true,
+                };
+                if !can_be_called {
                     continue;
                 }
                 let func_handle = module.function_handle_at(func_def.function);
