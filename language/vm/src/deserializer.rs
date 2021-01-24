@@ -508,6 +508,15 @@ fn build_common_tables(
             | TableType::STRUCT_DEF_INST
             | TableType::FIELD_HANDLE
             | TableType::FIELD_INST => continue,
+            TableType::FRIEND_DECLS => {
+                // friend declarations do not exist in VERSION_1
+                if binary.version() == VERSION_1 {
+                    return Err(PartialVMError::new(StatusCode::MALFORMED).with_message(
+                        "Friend declarations not applicable in bytecode version 1".to_string(),
+                    ));
+                }
+                continue;
+            }
         }
     }
     Ok(())
@@ -535,6 +544,9 @@ fn build_module_tables(
             }
             TableType::FIELD_INST => {
                 load_field_instantiations(binary, table, &mut module.field_instantiations)?;
+            }
+            TableType::FRIEND_DECLS => {
+                load_friend_decls(binary, table, &mut module.friend_decls)?;
             }
             TableType::MODULE_HANDLES
             | TableType::STRUCT_HANDLES
@@ -573,7 +585,8 @@ fn build_script_tables(
             | TableType::STRUCT_DEF_INST
             | TableType::FUNCTION_DEFS
             | TableType::FIELD_INST
-            | TableType::FIELD_HANDLE => {
+            | TableType::FIELD_HANDLE
+            | TableType::FRIEND_DECLS => {
                 return Err(PartialVMError::new(StatusCode::MALFORMED)
                     .with_message("Bad table in Script".to_string()));
             }
@@ -802,10 +815,7 @@ fn load_signature_tokens(cursor: &mut VersionedCursor) -> BinaryLoaderResult<Vec
 pub fn load_signature_token_test_entry(
     cursor: std::io::Cursor<&[u8]>,
 ) -> BinaryLoaderResult<SignatureToken> {
-    load_signature_token(&mut VersionedCursor::new_for_test(
-        versioned_data::MAX_VERSION,
-        cursor,
-    ))
+    load_signature_token(&mut VersionedCursor::new_for_test(VERSION_MAX, cursor))
 }
 
 /// Deserializes a `SignatureToken`.
@@ -1097,7 +1107,35 @@ fn load_function_def(cursor: &mut VersionedCursor) -> BinaryLoaderResult<Functio
     let flags = cursor.read_u8().map_err(|_| {
         PartialVMError::new(StatusCode::MALFORMED).with_message("Unexpected EOF".to_string())
     })?;
-    let is_public = (flags & FunctionDefinition::PUBLIC) != 0;
+
+    let visibility = match cursor.version() {
+        VERSION_1 => {
+            if (flags & FunctionDefinition::PUBLIC) != 0 {
+                Visibility::Public
+            } else {
+                Visibility::Private
+            }
+        }
+        VERSION_2 => {
+            // NOTE: changes compared with VERSION_1
+            // - in VERSION_1: flag bit 0x4 can be either 0 or 1, with no impact on deserialization,
+            // - in VERSION_2: flag bit 0x4 can only be 1 when bit 0x1 is 0, malformed otherwise.
+            if (flags & FunctionDefinition::PUBLIC) != 0 {
+                if (flags & FunctionDefinition::PROTECTED) != 0 {
+                    return Err(PartialVMError::new(StatusCode::MALFORMED).with_message(
+                        "A function cannot be both public and protected".to_string(),
+                    ));
+                }
+                Visibility::Public
+            } else if (flags & FunctionDefinition::PROTECTED) != 0 {
+                Visibility::Protected
+            } else {
+                Visibility::Private
+            }
+        }
+        _ => unreachable!("Invalid bytecode version"),
+    };
+
     let acquires_global_resources = load_struct_definition_indices(cursor)?;
     let code_unit = if (flags & FunctionDefinition::NATIVE) != 0 {
         None
@@ -1106,7 +1144,7 @@ fn load_function_def(cursor: &mut VersionedCursor) -> BinaryLoaderResult<Functio
     };
     Ok(FunctionDefinition {
         function,
-        is_public,
+        visibility,
         acquires_global_resources,
         code: code_unit,
     })
@@ -1122,6 +1160,24 @@ fn load_struct_definition_indices(
         indices.push(load_struct_def_index(cursor)?);
     }
     Ok(indices)
+}
+
+/// Builds the `FriendDeclaration` table.
+fn load_friend_decls(
+    binary: &VersionedBinary,
+    table: &Table,
+    friend_decls: &mut Vec<FriendDeclaration>,
+) -> BinaryLoaderResult<()> {
+    let start = table.offset as usize;
+    let end = start
+        .checked_add(table.count as usize)
+        .expect("Unexpected overflow as the error should be detected early by `check_tables`");
+    let mut cursor = binary.new_cursor(start, end);
+    while cursor.position() < u64::from(table.count) {
+        let module = load_module_handle_index(&mut cursor)?;
+        friend_decls.push(FriendDeclaration { module });
+    }
+    Ok(())
 }
 
 /// Deserializes a `CodeUnit`.
@@ -1255,6 +1311,7 @@ impl TableType {
             0xC => Ok(TableType::FUNCTION_DEFS),
             0xD => Ok(TableType::FIELD_HANDLE),
             0xE => Ok(TableType::FIELD_INST),
+            0xF => Ok(TableType::FRIEND_DECLS),
             _ => Err(PartialVMError::new(StatusCode::UNKNOWN_TABLE_TYPE)),
         }
     }

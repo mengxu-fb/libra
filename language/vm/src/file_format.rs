@@ -338,8 +338,34 @@ pub struct FieldInstantiation {
     pub type_parameters: SignatureIndex,
 }
 
-/// A `StructDefinition` is a type definition. It either indicates it is native or
-// defines all the user-specified fields declared on the type.
+/// `Visibility` restricts the accessibility of the associated entity.
+/// - For function visibility, it restricts who may call into the associated function.
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
+pub enum Visibility {
+    Private,
+    Protected,
+    Public,
+}
+
+impl Default for Visibility {
+    fn default() -> Self {
+        Visibility::Private
+    }
+}
+
+/// A `FriendDeclaration` encapsulates information about a friend.
+#[derive(Clone, Debug, Hash, Eq, PartialEq)]
+#[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
+#[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
+pub struct FriendDeclaration {
+    /// Handle index to the friend module
+    pub module: ModuleHandleIndex,
+}
+
+/// A `StructDefinition` is a type definition. It either indicates it is native or defines all the
+/// user-specified fields declared on the type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
@@ -363,6 +389,7 @@ impl StructDefinition {
         }
     }
 }
+
 /// A `FieldDefinition` is the definition of a field: its name and the field type.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
@@ -376,15 +403,14 @@ pub struct FieldDefinition {
 
 /// A `FunctionDefinition` is the implementation of a function. It defines
 /// the *prototype* of the function and the function body.
-
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(params = "usize"))]
 pub struct FunctionDefinition {
     /// The prototype of the function (module, name, signature).
     pub function: FunctionHandleIndex,
-    /// Flag to indicate if this function is public.
-    pub is_public: bool,
+    /// The visibility of this function.
+    pub visibility: Visibility,
     /// List of nominal resources (declared in this module) that the procedure might access
     /// Either through: BorrowGlobal, MoveFrom, or transitively through another procedure
     /// This list of acquires grants the borrow checker the ability to statically verify the safety
@@ -404,19 +430,19 @@ pub struct FunctionDefinition {
 }
 
 impl FunctionDefinition {
-    /// Returns whether the FunctionDefinition is public.
-    pub fn is_public(&self) -> bool {
-        self.is_public
-    }
     /// Returns whether the FunctionDefinition is native.
     pub fn is_native(&self) -> bool {
         self.code.is_none()
     }
 
-    /// Function can be invoked outside of its declaring module.
+    /// A function can be invoked by any module or script outside of its declaring module.
     pub const PUBLIC: u8 = 0x1;
     /// A native function implemented in Rust.
     pub const NATIVE: u8 = 0x2;
+    /// A function can be invoked by functions defined in
+    ///  1) its declaring module plus
+    ///  2) a pre-defined list of modules known as the friends of its declaring module.
+    pub const PROTECTED: u8 = 0x4;
 }
 
 // Signature
@@ -1532,7 +1558,7 @@ impl CompiledScriptMut {
         // Create a function definition for the main function.
         let main_def = FunctionDefinition {
             function: main_handle_idx,
-            is_public: true,
+            visibility: Visibility::Public,
             acquires_global_resources: vec![],
             code: Some(self.code),
         };
@@ -1563,6 +1589,8 @@ impl CompiledScriptMut {
 
             struct_defs: vec![],
             function_defs: vec![main_def],
+
+            friend_decls: vec![],
         };
 
         (info, m)
@@ -1615,6 +1643,9 @@ pub struct CompiledModuleMut {
     pub struct_defs: Vec<StructDefinition>,
     /// Function defined in this module.
     pub function_defs: Vec<FunctionDefinition>,
+
+    /// Friend declarations of this module.
+    pub friend_decls: Vec<FriendDeclaration>,
 }
 
 // Need a custom implementation of Arbitrary because as of proptest-derive 0.1.1, the derivation
@@ -1693,6 +1724,7 @@ impl Arbitrary for CompiledModuleMut {
                 vec(any::<StructDefinition>(), 0..=size),
                 vec(any_with::<FunctionDefinition>(size), 0..=size),
             ),
+            vec(any::<FriendDeclaration>(), 0..=size),
         )
             .prop_map(
                 |(
@@ -1701,6 +1733,7 @@ impl Arbitrary for CompiledModuleMut {
                     signatures,
                     (identifiers, address_identifiers),
                     (struct_defs, function_defs),
+                    friend_decls,
                 )| {
                     // TODO actual constant generation
                     CompiledModuleMut {
@@ -1718,6 +1751,7 @@ impl Arbitrary for CompiledModuleMut {
                         constant_pool: vec![],
                         struct_defs,
                         function_defs,
+                        friend_decls,
                     }
                 },
             )
@@ -1738,6 +1772,7 @@ impl CompiledModuleMut {
             IndexKind::FieldInstantiation => self.field_instantiations.len(),
             IndexKind::StructDefinition => self.struct_defs.len(),
             IndexKind::FunctionDefinition => self.function_defs.len(),
+            IndexKind::FriendDeclaration => self.friend_decls.len(),
             IndexKind::Signature => self.signatures.len(),
             IndexKind::Identifier => self.identifiers.len(),
             IndexKind::AddressIdentifier => self.address_identifiers.len(),
@@ -1863,6 +1898,7 @@ pub fn empty_module() -> CompiledModuleMut {
         function_instantiations: vec![],
         field_instantiations: vec![],
         signatures: vec![Signature(vec![])],
+        friend_decls: vec![],
     }
 }
 
@@ -1888,7 +1924,7 @@ pub fn basic_test_module() -> CompiledModuleMut {
 
     m.function_defs.push(FunctionDefinition {
         function: FunctionHandleIndex(0),
-        is_public: false,
+        visibility: Visibility::Private,
         acquires_global_resources: vec![],
         code: Some(CodeUnit {
             locals: SignatureIndex(0),

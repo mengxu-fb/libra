@@ -25,8 +25,7 @@ impl BinaryConstants {
     /// The blob that must start a binary.
     pub const DIEM_MAGIC_SIZE: usize = 4;
     pub const DIEM_MAGIC: [u8; BinaryConstants::DIEM_MAGIC_SIZE] = [0xA1, 0x1C, 0xEB, 0x0B];
-    /// The `DIEM_MAGIC` size, 4 byte for major version and 1 byte
-    /// for table count.
+    /// The `DIEM_MAGIC` size, 4 byte for major version and 1 byte for table count.
     pub const HEADER_SIZE: usize = BinaryConstants::DIEM_MAGIC_SIZE + 5;
     /// A (Table Type, Start Offset, Byte Count) size, which is 1 byte for the type and
     /// 4 bytes for the offset/count.
@@ -96,6 +95,7 @@ pub enum TableType {
     FUNCTION_DEFS           = 0xC,
     FIELD_HANDLE            = 0xD,
     FIELD_INST              = 0xE,
+    FRIEND_DECLS            = 0xF,
 }
 
 /// Constants for signature blob values.
@@ -363,6 +363,21 @@ pub fn read_uleb128_as_u64(cursor: &mut Cursor<&[u8]>) -> Result<u64> {
     bail!("invalid ULEB128 repr for usize");
 }
 
+//
+// Bytecode evolution
+//
+
+/// Version 1: the initial version
+pub const VERSION_1: u32 = 1u32;
+
+/// Version 2: changes compared with version 1
+///  + friend list for modules
+///  + the "protected" visibility modifier
+pub const VERSION_2: u32 = 2u32;
+
+// Mark which version is the latest version
+pub const VERSION_MAX: u32 = VERSION_2;
+
 pub(crate) mod versioned_data {
     use crate::{errors::*, file_format_common::*};
     use move_core_types::vm_status::StatusCode;
@@ -376,8 +391,6 @@ pub(crate) mod versioned_data {
         version: u32,
         cursor: Cursor<&'a [u8]>,
     }
-
-    pub const MAX_VERSION: u32 = 1u32;
 
     impl<'a> VersionedBinary<'a> {
         fn new(binary: &'a [u8]) -> BinaryLoaderResult<(Self, Cursor<&'a [u8]>)> {
@@ -399,7 +412,7 @@ pub(crate) mod versioned_data {
                         .with_message("Bad binary header".to_string()));
                 }
             };
-            if version == 0 || version > MAX_VERSION {
+            if version == 0 || version > VERSION_MAX {
                 return Err(PartialVMError::new(StatusCode::UNKNOWN_VERSION));
             }
             Ok((Self { version, binary }, cursor))

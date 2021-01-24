@@ -158,7 +158,7 @@ impl CompiledScriptMut {
     /// [`CompiledScript::serialize`].
     pub fn serialize(&self, binary: &mut Vec<u8>) -> Result<()> {
         let mut binary_data = BinaryData::from(binary.clone());
-        let mut ser = ScriptSerializer::new(1);
+        let mut ser = ScriptSerializer::new(VERSION_MAX);
         let mut temp = BinaryData::new();
 
         ser.common.serialize_common_tables(&mut temp, self)?;
@@ -196,7 +196,7 @@ impl CompiledModuleMut {
     /// [`CompiledModule::serialize`].
     pub fn serialize(&self, binary: &mut Vec<u8>) -> Result<()> {
         let mut binary_data = BinaryData::from(binary.clone());
-        let mut ser = ModuleSerializer::new(1);
+        let mut ser = ModuleSerializer::new(VERSION_MAX);
         let mut temp = BinaryData::new();
         ser.serialize_tables(&mut temp, self)?;
         if temp.len() > u32::max_value() as usize {
@@ -248,6 +248,7 @@ struct ModuleSerializer {
     function_defs: (u32, u32),
     field_handles: (u32, u32),
     field_instantiations: (u32, u32),
+    friend_decls: (u32, u32),
 }
 
 /// Holds data to compute the header of a transaction script binary.
@@ -522,6 +523,9 @@ fn serialize_field_definition(
 /// A `FunctionDefinition` gets serialized as follows:
 /// - `FunctionDefinition.function` as a ULEB128 (index into the `FunctionHandle` table)
 /// - `FunctionDefinition.flags` 1 byte for the flags of the function
+///   The flags is essentially a composition of two items:
+///   1) visibility indicator, whether the function is private, public, or protected.
+///   2) native indicator, whether the function is a native function.
 /// - `FunctionDefinition.code` a variable size stream for the `CodeUnit`
 fn serialize_function_definition(
     binary: &mut BinaryData,
@@ -529,17 +533,17 @@ fn serialize_function_definition(
 ) -> Result<()> {
     serialize_function_handle_index(binary, &function_definition.function)?;
 
-    let is_public = if function_definition.is_public() {
-        FunctionDefinition::PUBLIC
-    } else {
-        0
+    let visibility_flag = match function_definition.visibility {
+        Visibility::Private => 0,
+        Visibility::Public => FunctionDefinition::PUBLIC,
+        Visibility::Protected => FunctionDefinition::PROTECTED,
     };
     let is_native = if function_definition.is_native() {
         FunctionDefinition::NATIVE
     } else {
         0
     };
-    binary.push(is_public | is_native)?;
+    binary.push(visibility_flag | is_native)?;
 
     serialize_acquires(binary, &function_definition.acquires_global_resources)?;
     if let Some(code) = &function_definition.code {
@@ -561,6 +565,17 @@ fn serialize_field_instantiation(
     serialize_field_handle_index(binary, &field_inst.handle)?;
     serialize_signature_index(binary, &field_inst.type_parameters)?;
     Ok(())
+}
+
+/// Serializes a `FriendDeclaration`.
+///
+/// A `FriendDeclaration` gets serialized as follows:
+/// - `FriendDeclaration.module` as a ULEB128 (index into the `ModuleHandle` table)
+fn serialize_friend_declaration(
+    binary: &mut BinaryData,
+    friend_declaration: &FriendDeclaration,
+) -> Result<()> {
+    serialize_module_handle_index(binary, &friend_declaration.module)
 }
 
 /// Serializes a `Vec<StructDefinitionIndex>`.
@@ -1123,6 +1138,7 @@ impl ModuleSerializer {
             function_defs: (0, 0),
             field_handles: (0, 0),
             field_instantiations: (0, 0),
+            friend_decls: (0, 0),
         }
     }
 
@@ -1136,7 +1152,8 @@ impl ModuleSerializer {
         self.serialize_struct_def_instantiations(binary, &module.struct_def_instantiations)?;
         self.serialize_function_definitions(binary, &module.function_defs)?;
         self.serialize_field_handles(binary, &module.field_handles)?;
-        self.serialize_field_instantiations(binary, &module.field_instantiations)
+        self.serialize_field_instantiations(binary, &module.field_instantiations)?;
+        self.serialize_friend_declarations(binary, &module.friend_decls)
     }
 
     fn serialize_table_indices(&mut self, binary: &mut BinaryData) -> Result<()> {
@@ -1170,6 +1187,12 @@ impl ModuleSerializer {
             TableType::FIELD_INST,
             self.field_instantiations.0,
             self.field_instantiations.1,
+        )?;
+        serialize_table_index(
+            binary,
+            TableType::FRIEND_DECLS,
+            self.friend_decls.0,
+            self.friend_decls.1,
         )?;
         Ok(())
     }
@@ -1255,6 +1278,22 @@ impl ModuleSerializer {
                 serialize_function_definition(binary, function_definition)?;
             }
             self.function_defs.1 = checked_calculate_table_size(binary, self.function_defs.0)?;
+        }
+        Ok(())
+    }
+
+    fn serialize_friend_declarations(
+        &mut self,
+        binary: &mut BinaryData,
+        friend_declarations: &[FriendDeclaration],
+    ) -> Result<()> {
+        if !friend_declarations.is_empty() {
+            self.common.table_count = self.common.table_count.wrapping_add(1); // the count will bound to a small number
+            self.friend_decls.0 = check_index_in_binary(binary.len())?;
+            for friend_declaration in friend_declarations {
+                serialize_friend_declaration(binary, friend_declaration)?;
+            }
+            self.friend_decls.1 = checked_calculate_table_size(binary, self.friend_decls.0)?;
         }
         Ok(())
     }

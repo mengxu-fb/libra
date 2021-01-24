@@ -3,7 +3,7 @@
 
 use crate::normalized::Module;
 
-/// The result of a linking and layoutcompatibility check. Here is what the different combinations
+/// The result of a linking and layout compatibility check. Here is what the different combinations
 /// mean:
 /// `{ struct: true, struct_layout: true }`: fully backward compatible
 /// `{ struct_and_function_linking: true, struct_layout: false }`: Dependent modules that reference functions or types in this module may not link. However, fixing, recompiling, and redeploying all dependent modules will work--no data migration needed.

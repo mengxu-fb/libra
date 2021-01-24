@@ -8,7 +8,7 @@ use move_vm::{
     access::ModuleAccess,
     file_format::{
         CompiledModule, FunctionDefinition, Kind, SignatureToken, StructDefinition,
-        StructFieldInformation, StructHandleIndex, TypeParameterIndex,
+        StructFieldInformation, StructHandleIndex, TypeParameterIndex, Visibility,
     },
 };
 use std::{collections::BTreeMap, fs};
@@ -57,16 +57,19 @@ pub fn write_to_string(compiled_module_file_input_path: &str) -> Result<(ModuleI
         members.push("".to_string());
     }
 
-    let mut public_funs = module
+    let mut accessible_funs = module
         .function_defs()
         .iter()
-        .filter(|fdef| fdef.is_public)
+        .filter(|fdef| match fdef.visibility {
+            Visibility::Public | Visibility::Protected => true,
+            Visibility::Private => false,
+        })
         .peekable();
-    if public_funs.peek().is_some() {
+    if accessible_funs.peek().is_some() {
         members.push(format!("    {}", DISCLAIMER));
     }
-    for public_fdef in public_funs {
-        members.push(write_function_def(&mut context, public_fdef));
+    for accessible_fdef in accessible_funs {
+        members.push(write_function_def(&mut context, accessible_fdef));
     }
     if !members.is_empty() {
         members.push("".to_string());
@@ -173,7 +176,13 @@ fn write_function_def(ctx: &mut Context, fdef: &FunctionDefinition) -> String {
     let parameters = &ctx.module.signature_at(fhandle.parameters).0;
     let return_ = &ctx.module.signature_at(fhandle.return_).0;
     format!(
-        "    native public fun {}{}({}){};",
+        "    native {} fun {}{}({}){};",
+        match fdef.visibility {
+            Visibility::Public => "public",
+            Visibility::Protected => "protected",
+            Visibility::Private =>
+                unreachable!("Unexpected private function for interface generation"),
+        },
         ctx.module.identifier_at(fhandle.name),
         write_type_paramters(&fhandle.type_parameters),
         write_parameters(ctx, parameters),

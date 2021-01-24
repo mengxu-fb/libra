@@ -5,7 +5,7 @@ use crate::{
     access::ModuleAccess,
     file_format::{
         CompiledModule, FieldDefinition, FunctionHandle, Kind, SignatureToken, StructDefinition,
-        StructFieldInformation, TypeParameterIndex,
+        StructFieldInformation, TypeParameterIndex, Visibility,
     },
 };
 use move_core_types::{
@@ -82,6 +82,7 @@ pub struct Module {
     pub name: Identifier,
     pub structs: Vec<Struct>,
     pub public_functions: Vec<FunctionSignature>,
+    pub protected_functions: Vec<FunctionSignature>,
 }
 
 impl Module {
@@ -93,19 +94,21 @@ impl Module {
         let public_functions = m
             .function_defs()
             .iter()
-            .filter_map(|f| {
-                if f.is_public {
-                    Some(FunctionSignature::new(m, m.function_handle_at(f.function)))
-                } else {
-                    None
-                }
-            })
+            .filter(|f| matches!(f.visibility, Visibility::Public))
+            .map(|f| FunctionSignature::new(m, m.function_handle_at(f.function)))
+            .collect();
+        let protected_functions = m
+            .function_defs()
+            .iter()
+            .filter(|f| matches!(f.visibility, Visibility::Protected))
+            .map(|f| FunctionSignature::new(m, m.function_handle_at(f.function)))
             .collect();
         Self {
             address: *m.address(),
             name: m.name().to_owned(),
             structs,
             public_functions,
+            protected_functions,
         }
     }
 }

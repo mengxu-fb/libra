@@ -11,7 +11,7 @@ use vm::{
     errors::{verification_error, Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
         CompiledModule, CompiledScript, FunctionHandle, FunctionHandleIndex, ModuleHandle,
-        ModuleHandleIndex, SignatureToken, StructHandle, StructHandleIndex, TableIndex,
+        ModuleHandleIndex, SignatureToken, StructHandle, StructHandleIndex, TableIndex, Visibility,
     },
     IndexKind,
 };
@@ -54,7 +54,7 @@ impl<'a> DependencyChecker<'a> {
             struct_id_to_handle_map: HashMap::new(),
             func_id_to_handle_map: HashMap::new(),
         };
-        checker.build_deps_entry_point();
+        checker.build_deps_entry_point(Some(module.self_id()));
 
         // verify dependencies
         checker.verify_imported_modules(module.module_handles(), Some(module.self_handle_idx()))?;
@@ -84,15 +84,17 @@ impl<'a> DependencyChecker<'a> {
             struct_id_to_handle_map: HashMap::new(),
             func_id_to_handle_map: HashMap::new(),
         };
-        checker.build_deps_entry_point();
+        checker.build_deps_entry_point(None);
 
         checker.verify_imported_modules(script.module_handles(), None)?;
         checker.verify_imported_structs(script.struct_handles(), None)?;
         checker.verify_imported_functions(script.function_handles(), None)
     }
 
-    fn build_deps_entry_point(&mut self) {
+    fn build_deps_entry_point(&mut self, target_module_id_opt: Option<ModuleId>) {
         for (module_id, module) in &self.dependency_map {
+            let friend_module_ids: BTreeSet<_> = module.friend_module_ids().into_iter().collect();
+
             // Module::StructName -> def handle idx
             for struct_def in module.struct_defs() {
                 let struct_handle = module.struct_handle_at(struct_def.struct_handle);
@@ -104,7 +106,18 @@ impl<'a> DependencyChecker<'a> {
             }
             // Module::FuncName -> def handle idx
             for func_def in module.function_defs() {
-                if !func_def.is_public {
+                let may_be_called = match func_def.visibility {
+                    Visibility::Private => false,
+                    Visibility::Protected => {
+                        if let Some(target_module_id) = &target_module_id_opt {
+                            friend_module_ids.contains(target_module_id)
+                        } else {
+                            false
+                        }
+                    }
+                    Visibility::Public => true,
+                };
+                if !may_be_called {
                     continue;
                 }
                 let func_handle = module.function_handle_at(func_def.function);
