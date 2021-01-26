@@ -865,7 +865,7 @@ impl<Location: Clone + Eq> Disassembler<Location> {
         };
         let visibility_modifier = match function_definition.visibility {
             Visibility::Private => "",
-            Visibility::Protected => "protected ",
+            Visibility::Friend => "public(friend) ",
             Visibility::Public => "public ",
         };
 

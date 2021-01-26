@@ -82,7 +82,7 @@ pub struct Module {
     pub name: Identifier,
     pub structs: Vec<Struct>,
     pub public_functions: Vec<FunctionSignature>,
-    pub protected_functions: Vec<FunctionSignature>,
+    pub friend_functions: Vec<FunctionSignature>,
 }
 
 impl Module {
@@ -97,10 +97,10 @@ impl Module {
             .filter(|f| matches!(f.visibility, Visibility::Public))
             .map(|f| FunctionSignature::new(m, m.function_handle_at(f.function)))
             .collect();
-        let protected_functions = m
+        let friend_functions = m
             .function_defs()
             .iter()
-            .filter(|f| matches!(f.visibility, Visibility::Protected))
+            .filter(|f| matches!(f.visibility, Visibility::Friend))
             .map(|f| FunctionSignature::new(m, m.function_handle_at(f.function)))
             .collect();
         Self {
@@ -108,7 +108,7 @@ impl Module {
             name: m.name().to_owned(),
             structs,
             public_functions,
-            protected_functions,
+            friend_functions,
         }
     }
 }

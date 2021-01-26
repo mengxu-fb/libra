@@ -61,7 +61,7 @@ pub fn write_to_string(compiled_module_file_input_path: &str) -> Result<(ModuleI
         .function_defs()
         .iter()
         .filter(|fdef| match fdef.visibility {
-            Visibility::Public | Visibility::Protected => true,
+            Visibility::Public | Visibility::Friend => true,
             Visibility::Private => false,
         })
         .peekable();
@@ -179,7 +179,7 @@ fn write_function_def(ctx: &mut Context, fdef: &FunctionDefinition) -> String {
         "    native {} fun {}{}({}){};",
         match fdef.visibility {
             Visibility::Public => "public",
-            Visibility::Protected => "protected",
+            Visibility::Friend => "public(friend)",
             Visibility::Private =>
                 unreachable!("Unexpected private function for interface generation"),
         },

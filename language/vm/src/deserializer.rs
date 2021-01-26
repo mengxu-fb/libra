@@ -1108,36 +1108,36 @@ fn load_function_def(cursor: &mut VersionedCursor) -> BinaryLoaderResult<Functio
         PartialVMError::new(StatusCode::MALFORMED).with_message("Unexpected EOF".to_string())
     })?;
 
-    let visibility = match cursor.version() {
+    let (visibility, extra_flags) = match cursor.version() {
         VERSION_1 => {
-            if (flags & FunctionDefinition::PUBLIC) != 0 {
+            let vis = if (flags & Visibility::Public as u8) != 0 {
                 Visibility::Public
             } else {
                 Visibility::Private
-            }
+            };
+            (vis, flags)
         }
         VERSION_2 => {
             // NOTE: changes compared with VERSION_1
-            // - in VERSION_1: flag bit 0x4 can be either 0 or 1, with no impact on deserialization,
-            // - in VERSION_2: flag bit 0x4 can only be 1 when bit 0x1 is 0, malformed otherwise.
-            if (flags & FunctionDefinition::PUBLIC) != 0 {
-                if (flags & FunctionDefinition::PROTECTED) != 0 {
-                    return Err(PartialVMError::new(StatusCode::MALFORMED).with_message(
-                        "A function cannot be both public and protected".to_string(),
-                    ));
-                }
-                Visibility::Public
-            } else if (flags & FunctionDefinition::PROTECTED) != 0 {
-                Visibility::Protected
-            } else {
-                Visibility::Private
-            }
+            // - in VERSION_1: the flags is a byte compositing both the visibility info and whether
+            //                 the function is a native function
+            // - in VERSION_2: the flags only represent the visibility info and we need to advance
+            //                 the cursor to read up the next byte as flags
+            let vis = flags.try_into().map_err(|_| {
+                PartialVMError::new(StatusCode::MALFORMED)
+                    .with_message("Invalid visibility byte".to_string())
+            })?;
+            let extra_flags = cursor.read_u8().map_err(|_| {
+                PartialVMError::new(StatusCode::MALFORMED)
+                    .with_message("Unexpected EOF".to_string())
+            })?;
+            (vis, extra_flags)
         }
         _ => unreachable!("Invalid bytecode version"),
     };
 
     let acquires_global_resources = load_struct_definition_indices(cursor)?;
-    let code_unit = if (flags & FunctionDefinition::NATIVE) != 0 {
+    let code_unit = if (extra_flags & FunctionDefinition::NATIVE) != 0 {
         None
     } else {
         Some(load_code_unit(cursor)?)

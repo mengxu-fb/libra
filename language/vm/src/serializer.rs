@@ -522,10 +522,10 @@ fn serialize_field_definition(
 ///
 /// A `FunctionDefinition` gets serialized as follows:
 /// - `FunctionDefinition.function` as a ULEB128 (index into the `FunctionHandle` table)
+/// - `FunctionDefinition.visibility` 1 byte for the visibility modifier of the function
 /// - `FunctionDefinition.flags` 1 byte for the flags of the function
-///   The flags is essentially a composition of two items:
-///   1) visibility indicator, whether the function is private, public, or protected.
-///   2) native indicator, whether the function is a native function.
+///   The flags now has only one bit used:
+///   - bit 0x2: native indicator, indicates whether the function is a native function.
 /// - `FunctionDefinition.code` a variable size stream for the `CodeUnit`
 fn serialize_function_definition(
     binary: &mut BinaryData,
@@ -533,17 +533,13 @@ fn serialize_function_definition(
 ) -> Result<()> {
     serialize_function_handle_index(binary, &function_definition.function)?;
 
-    let visibility_flag = match function_definition.visibility {
-        Visibility::Private => 0,
-        Visibility::Public => FunctionDefinition::PUBLIC,
-        Visibility::Protected => FunctionDefinition::PROTECTED,
-    };
+    binary.push(function_definition.visibility as u8)?;
     let is_native = if function_definition.is_native() {
         FunctionDefinition::NATIVE
     } else {
         0
     };
-    binary.push(visibility_flag | is_native)?;
+    binary.push(is_native)?;
 
     serialize_acquires(binary, &function_definition.acquires_global_resources)?;
     if let Some(code) = &function_definition.code {

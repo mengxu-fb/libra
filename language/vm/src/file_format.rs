@@ -340,13 +340,30 @@ pub struct FieldInstantiation {
 
 /// `Visibility` restricts the accessibility of the associated entity.
 /// - For function visibility, it restricts who may call into the associated function.
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[cfg_attr(any(test, feature = "fuzzing"), derive(Arbitrary))]
 #[cfg_attr(any(test, feature = "fuzzing"), proptest(no_params))]
+#[repr(u8)]
 pub enum Visibility {
-    Private,
-    Protected,
-    Public,
+    /// Accessible within its defining module only.
+    Private = 0x0,
+    /// Accessible by any module or script outside of its declaring module.
+    Public = 0x1,
+    /// Accessible within its defining module as well as a selective list of modules (friends).
+    Friend = 0x2,
+}
+
+impl std::convert::TryFrom<u8> for Visibility {
+    type Error = ();
+
+    fn try_from(v: u8) -> Result<Self, Self::Error> {
+        match v {
+            x if x == Visibility::Private as u8 => Ok(Visibility::Private),
+            x if x == Visibility::Public as u8 => Ok(Visibility::Public),
+            x if x == Visibility::Friend as u8 => Ok(Visibility::Friend),
+            _ => Err(()),
+        }
+    }
 }
 
 impl Default for Visibility {
@@ -435,14 +452,8 @@ impl FunctionDefinition {
         self.code.is_none()
     }
 
-    /// A function can be invoked by any module or script outside of its declaring module.
-    pub const PUBLIC: u8 = 0x1;
     /// A native function implemented in Rust.
     pub const NATIVE: u8 = 0x2;
-    /// A function can be invoked by functions defined in
-    ///  1) its declaring module plus
-    ///  2) a pre-defined list of modules known as the friends of its declaring module.
-    pub const PROTECTED: u8 = 0x4;
 }
 
 // Signature

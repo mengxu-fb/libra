@@ -108,7 +108,7 @@ impl<'a> DependencyChecker<'a> {
             for func_def in module.function_defs() {
                 let may_be_called = match func_def.visibility {
                     Visibility::Private => false,
-                    Visibility::Protected => {
+                    Visibility::Friend => {
                         if let Some(target_module_id) = &target_module_id_opt {
                             friend_module_ids.contains(target_module_id)
                         } else {
