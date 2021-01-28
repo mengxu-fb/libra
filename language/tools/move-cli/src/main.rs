@@ -823,10 +823,15 @@ fn doctor(state: OnDiskStateView) -> Result<()> {
             )
         }
 
-        let all_deps = code_cache.get_all_module_dependencies(module)?;
-        if bytecode_verifier::CyclicModuleDependencyChecker::verify_module(module, all_deps)
-            .is_err()
-        {
+        let cyclic_check_result =
+            bytecode_verifier::CyclicModuleDependencyChecker::verify_module(module, |module_id| {
+                code_cache
+                    .get_module(module_id)
+                    .unwrap()
+                    .immediate_module_dependencies()
+            })
+            .is_err();
+        if cyclic_check_result {
             bail!(
                 "Cyclic module dependencies are detected with module {} in the loop",
                 module.self_id()
