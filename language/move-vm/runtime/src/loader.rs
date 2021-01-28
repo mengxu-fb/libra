@@ -5,7 +5,8 @@ use crate::{logging::LogContext, native_functions::NativeFunction};
 use bytecode_verifier::{
     constants, instantiation_loops::InstantiationLoopChecker, verify_main_signature,
     CodeUnitVerifier, CyclicModuleDependencyChecker, DependencyChecker, DuplicationChecker,
-    InstructionConsistency, RecursiveStructDefChecker, ResourceTransitiveChecker, SignatureChecker,
+    FriendChecker, InstructionConsistency, RecursiveStructDefChecker, ResourceTransitiveChecker,
+    SignatureChecker,
 };
 use diem_crypto::HashValue;
 use diem_infallible::Mutex;
@@ -630,7 +631,8 @@ impl Loader {
             self.load_dependencies_expect_no_missing_dependencies(deps, data_store, log_context)?
         };
 
-        self.verify_module_dependencies(module, loaded_imm_deps)
+        self.verify_module_dependencies(module, loaded_imm_deps)?;
+        self.verify_module_friends(module)
     }
 
     fn verify_module_dependencies(
@@ -646,6 +648,17 @@ impl Loader {
 
         let module_cache = self.module_cache.lock();
         CyclicModuleDependencyChecker::verify_module(module, |module_id| {
+            module_cache
+                .modules
+                .get(module_id)
+                .ok_or_else(|| PartialVMError::new(StatusCode::MISSING_DEPENDENCY))
+                .map(|m| m.module())
+        })
+    }
+
+    fn verify_module_friends(&self, module: &CompiledModule) -> VMResult<()> {
+        let module_cache = self.module_cache.lock();
+        FriendChecker::verify_module(module, |module_id| {
             module_cache
                 .modules
                 .get(module_id)

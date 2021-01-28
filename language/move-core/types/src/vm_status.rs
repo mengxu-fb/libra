@@ -560,6 +560,12 @@ pub enum StatusCode {
     BACKWARD_INCOMPATIBLE_MODULE_UPDATE = 1096,
     // The updated module introduces a cyclic dependency (i.e., A uses B and B also uses A)
     CYCLIC_MODULE_DEPENDENCY = 1097,
+    // Cannot mark the module itself as a friend
+    INVALID_FRIEND_DECL_WITH_SELF = 1098,
+    // Cannot declare modules outside of account address as friends
+    INVALID_FRIEND_DECL_WITH_MODULES_OUTSIDE_ADDRESS = 1099,
+    // Cannot declare modules that this module depends on as friends
+    INVALID_FRIEND_DECL_WITH_MODULES_IN_DEPENDENCY = 1100,
 
     // These are errors that the VM might raise if a violation of internal
     // invariants takes place.
