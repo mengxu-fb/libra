@@ -620,7 +620,7 @@ fn explain_publish_error(
             let mut stack = vec![];
             let mut state = BTreeMap::new();
             state.insert(module_id.clone(), true);
-            for dep in module.immediate_module_dependencies() {
+            for dep in module.immediate_dependency_module_ids() {
                 stack.push((code_cache.get_module(&dep)?, false));
             }
 
@@ -632,7 +632,7 @@ fn explain_publish_error(
                 } else {
                     state.insert(cur_id, true);
                     stack.push((cur, true));
-                    for next in cur.immediate_module_dependencies() {
+                    for next in cur.immediate_dependency_module_ids() {
                         if let Some(is_discovered_but_not_finished) = state.get(&next) {
                             if *is_discovered_but_not_finished {
                                 let cycle_path: Vec<_> = stack

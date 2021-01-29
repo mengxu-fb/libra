@@ -10,8 +10,8 @@ use vm::{
     access::{ModuleAccess, ScriptAccess},
     errors::{verification_error, Location, PartialVMError, PartialVMResult, VMResult},
     file_format::{
-        CompiledModule, CompiledScript, FunctionHandle, FunctionHandleIndex, ModuleHandle,
-        ModuleHandleIndex, SignatureToken, StructHandle, StructHandleIndex, TableIndex, Visibility,
+        CompiledModule, CompiledScript, FunctionHandle, FunctionHandleIndex, ModuleHandleIndex,
+        SignatureToken, StructHandle, StructHandleIndex, TableIndex, Visibility,
     },
     IndexKind,
 };
@@ -57,7 +57,7 @@ impl<'a> DependencyChecker<'a> {
         checker.build_deps_entry_point(Some(module.self_id()));
 
         // verify dependencies
-        checker.verify_imported_modules(module.module_handles(), Some(module.self_handle_idx()))?;
+        checker.verify_imported_modules(module.immediate_dependencies())?;
         checker.verify_imported_structs(module.struct_handles(), Some(module.self_handle_idx()))?;
         checker.verify_imported_functions(module.function_handles(), Some(module.self_handle_idx()))
     }
@@ -86,14 +86,15 @@ impl<'a> DependencyChecker<'a> {
         };
         checker.build_deps_entry_point(None);
 
-        checker.verify_imported_modules(script.module_handles(), None)?;
+        checker.verify_imported_modules(script.immediate_dependencies())?;
         checker.verify_imported_structs(script.struct_handles(), None)?;
         checker.verify_imported_functions(script.function_handles(), None)
     }
 
     fn build_deps_entry_point(&mut self, target_module_id_opt: Option<ModuleId>) {
         for (module_id, module) in &self.dependency_map {
-            let friend_module_ids: BTreeSet<_> = module.friend_module_ids().into_iter().collect();
+            let friend_module_ids: BTreeSet<_> =
+                module.immediate_friend_module_ids().into_iter().collect();
 
             // Module::StructName -> def handle idx
             for struct_def in module.struct_defs() {
@@ -130,18 +131,17 @@ impl<'a> DependencyChecker<'a> {
 
     fn verify_imported_modules(
         &self,
-        module_handles: &[ModuleHandle],
-        self_module: Option<ModuleHandleIndex>,
+        immediate_deps: Vec<ModuleHandleIndex>,
     ) -> PartialVMResult<()> {
-        for (idx, module_handle) in module_handles.iter().enumerate() {
-            let module_id = self.resolver.module_id_for_handle(module_handle);
-            if Some(ModuleHandleIndex(idx as u16)) != self_module
-                && !self.dependency_map.contains_key(&module_id)
-            {
+        for idx in immediate_deps {
+            let module_id = self
+                .resolver
+                .module_id_for_handle(self.resolver.module_handle_at(idx));
+            if !self.dependency_map.contains_key(&module_id) {
                 return Err(verification_error(
                     StatusCode::MISSING_DEPENDENCY,
                     IndexKind::ModuleHandle,
-                    idx as TableIndex,
+                    idx.0,
                 ));
             }
         }
@@ -380,7 +380,7 @@ impl CyclicModuleDependencyChecker {
                 return Ok(true);
             }
             if visited_modules.insert(cursor_module_id.clone()) {
-                for next in module_fetcher(cursor_module_id)?.immediate_module_dependencies() {
+                for next in module_fetcher(cursor_module_id)?.immediate_dependency_module_ids() {
                     if check_existence_in_dependency_recursive(
                         target_module_id,
                         &next,
@@ -396,7 +396,7 @@ impl CyclicModuleDependencyChecker {
 
         let self_id = module.self_id();
         let mut visited_modules = BTreeSet::new();
-        for dep in module.immediate_module_dependencies() {
+        for dep in module.immediate_dependency_module_ids() {
             if check_existence_in_dependency_recursive(
                 &self_id,
                 &dep,

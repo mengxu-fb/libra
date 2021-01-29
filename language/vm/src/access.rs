@@ -9,6 +9,7 @@ use move_core_types::{
     identifier::{IdentStr, Identifier},
     language_storage::ModuleId,
 };
+use std::collections::BTreeSet;
 
 /// Represents accessors for a compiled module.
 ///
@@ -188,19 +189,43 @@ pub trait ModuleAccess: Sync {
         self.as_module().self_id()
     }
 
-    fn immediate_module_dependencies(&self) -> Vec<ModuleId> {
-        let self_handle = self.self_handle();
-        self.module_handles()
+    fn immediate_dependencies(&self) -> Vec<ModuleHandleIndex> {
+        let self_handle_index = self.self_handle_idx();
+        let friend_handle_indice: BTreeSet<_> = self
+            .friend_decls()
             .iter()
-            .filter(|&handle| handle != self_handle)
-            .map(|handle| self.module_id_for_handle(handle))
+            .map(|friend_decl| friend_decl.module)
+            .collect();
+        (0..self.module_handles().len())
+            .filter_map(|pos| {
+                let index = ModuleHandleIndex(pos as u16);
+                if index != self_handle_index && !friend_handle_indice.contains(&index) {
+                    Some(index)
+                } else {
+                    None
+                }
+            })
             .collect()
     }
 
-    fn friend_module_ids(&self) -> Vec<ModuleId> {
+    fn immediate_dependency_module_ids(&self) -> Vec<ModuleId> {
+        self.immediate_dependencies()
+            .into_iter()
+            .map(|index| self.module_id_for_handle(self.module_handle_at(index)))
+            .collect()
+    }
+
+    fn immediate_friends(&self) -> Vec<ModuleHandleIndex> {
         self.friend_decls()
             .iter()
-            .map(|friend_decl| self.module_id_for_handle(self.module_handle_at(friend_decl.module)))
+            .map(|friend_decl| friend_decl.module)
+            .collect()
+    }
+
+    fn immediate_friend_module_ids(&self) -> Vec<ModuleId> {
+        self.immediate_friends()
+            .into_iter()
+            .map(|index| self.module_id_for_handle(self.module_handle_at(index)))
             .collect()
     }
 }
@@ -280,10 +305,17 @@ pub trait ScriptAccess: Sync {
         &self.as_script().as_inner().code
     }
 
-    fn immediate_module_dependencies(&self) -> Vec<ModuleId> {
-        self.module_handles()
-            .iter()
-            .map(|handle| {
+    fn immediate_dependencies(&self) -> Vec<ModuleHandleIndex> {
+        (0..self.module_handles().len())
+            .map(|pos| ModuleHandleIndex(pos as u16))
+            .collect()
+    }
+
+    fn immediate_dependency_module_ids(&self) -> Vec<ModuleId> {
+        self.immediate_dependencies()
+            .into_iter()
+            .map(|index| {
+                let handle = self.module_handle_at(index);
                 ModuleId::new(
                     *self.address_identifier_at(handle.address),
                     self.identifier_at(handle.name).to_owned(),

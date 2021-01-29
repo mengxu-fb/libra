@@ -501,7 +501,7 @@ impl Loader {
         match self.verify_script(&script) {
             Ok(_) => {
                 // verify dependencies
-                let deps = script.immediate_module_dependencies();
+                let deps = script.immediate_dependency_module_ids();
                 let loaded_deps = self.load_dependencies_verify_no_missing_dependencies(
                     deps,
                     data_store,
@@ -624,7 +624,7 @@ impl Loader {
         CodeUnitVerifier::verify_module(&module)?;
         Self::check_natives(&module)?;
 
-        let deps = module.immediate_module_dependencies();
+        let deps = module.immediate_dependency_module_ids();
         let loaded_imm_deps = if verify_no_missing_modules {
             self.load_dependencies_verify_no_missing_dependencies(deps, data_store, log_context)?
         } else {

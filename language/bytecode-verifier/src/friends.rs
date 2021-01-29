@@ -38,7 +38,7 @@ impl FriendChecker {
                 return Ok(true);
             }
             if visited_modules.insert(cursor_module_id.clone()) {
-                for next in module_fetcher(cursor_module_id)?.immediate_module_dependencies() {
+                for next in module_fetcher(cursor_module_id)?.immediate_dependency_module_ids() {
                     if check_existence_in_dependency_recursive(
                         target_module_ids,
                         &next,
@@ -53,7 +53,7 @@ impl FriendChecker {
         }
 
         let self_id = module.self_id();
-        let friends: BTreeSet<_> = module.friend_module_ids().into_iter().collect();
+        let friends: BTreeSet<_> = module.immediate_friend_module_ids().into_iter().collect();
 
         // check that self_id is not in the friend list
         if friends.contains(&self_id) {
@@ -72,7 +72,7 @@ impl FriendChecker {
         }
         // check that any direct/transitive dependenciesl do not show up in the friend list
         let mut visited_modules = BTreeSet::new();
-        for dep in module.immediate_module_dependencies() {
+        for dep in module.immediate_dependency_module_ids() {
             if check_existence_in_dependency_recursive(
                 &friends,
                 &dep,
