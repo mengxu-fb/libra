@@ -11,13 +11,14 @@
 //!   immediately -- the views are a convenience to make that simpler. They've been written as lazy
 //!   iterators to aid understanding of the file format and to make it easy to generate views.
 
-use std::iter::DoubleEndedIterator;
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    iter::DoubleEndedIterator,
+};
 
 use crate::{access::ModuleAccess, file_format::*, SignatureTokenKind};
-use std::collections::BTreeSet;
 
 use move_core_types::{identifier::IdentStr, language_storage::ModuleId};
-use std::collections::BTreeMap;
 
 /// Represents a lazily evaluated abstraction over a module.
 ///
@@ -175,8 +176,38 @@ impl<'a, T: ModuleAccess> ModuleView<'a, T> {
             .collect()
     }
 
+    pub fn friend_declarations(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = FriendDeclarationView<'a, T>> + Send {
+        let module = self.module;
+        module
+            .friend_decls()
+            .iter()
+            .map(move |friend_decl| FriendDeclarationView::new(module, friend_decl))
+    }
+
     pub fn id(&self) -> ModuleId {
         self.module.self_id()
+    }
+
+    pub fn immediate_dependencies(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = ModuleHandleView<'a, T>> + Send {
+        let module = self.module;
+        module
+            .immediate_dependencies()
+            .into_iter()
+            .map(move |index| ModuleHandleView::new(module, module.module_handle_at(index)))
+    }
+
+    pub fn immediate_friends(
+        &self,
+    ) -> impl DoubleEndedIterator<Item = ModuleHandleView<'a, T>> + Send {
+        let module = self.module;
+        module
+            .immediate_friends()
+            .into_iter()
+            .map(move |index| ModuleHandleView::new(module, module.module_handle_at(index)))
     }
 }
 
@@ -587,6 +618,23 @@ impl<'a, T: ModuleAccess> FieldInstantiationView<'a, T> {
     }
 }
 
+pub struct FriendDeclarationView<'a, T> {
+    #[allow(unused)]
+    module: &'a T,
+    #[allow(unused)]
+    friend_decl: &'a FriendDeclaration,
+}
+
+impl<'a, T: ModuleAccess> FriendDeclarationView<'a, T> {
+    #[inline]
+    pub fn new(module: &'a T, friend_decl: &'a FriendDeclaration) -> Self {
+        Self {
+            module,
+            friend_decl,
+        }
+    }
+}
+
 pub struct TypeSignatureView<'a, T> {
     module: &'a T,
     type_signature: &'a TypeSignature,
@@ -722,6 +770,7 @@ impl_view_internals!(FunctionHandleView, FunctionHandle, function_handle);
 impl_view_internals!(StructDefinitionView, StructDefinition, struct_def);
 impl_view_internals!(FunctionDefinitionView, FunctionDefinition, function_def);
 impl_view_internals!(FieldDefinitionView, FieldDefinition, field_def);
+impl_view_internals!(FriendDeclarationView, FriendDeclaration, friend_decl);
 impl_view_internals!(TypeSignatureView, TypeSignature, type_signature);
 impl_view_internals!(SignatureView, Signature, signature);
 impl_view_internals!(SignatureTokenView, SignatureToken, token);
