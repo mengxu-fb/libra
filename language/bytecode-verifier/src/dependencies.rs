@@ -355,40 +355,43 @@ impl<'a> DependencyChecker<'a> {
 pub struct CyclicModuleDependencyChecker {}
 
 impl CyclicModuleDependencyChecker {
-    pub fn verify_module<F: Fn(&ModuleId) -> Vec<ModuleId>>(
-        module: &CompiledModule,
-        immediate_module_dependencies: F,
-    ) -> VMResult<()> {
-        Self::verify_module_impl(module, immediate_module_dependencies)
+    pub fn verify_module<'a, F>(module: &CompiledModule, module_fetcher: F) -> VMResult<()>
+    where
+        F: 'a + Fn(&ModuleId) -> PartialVMResult<&'a CompiledModule>,
+    {
+        Self::verify_module_impl(module, module_fetcher)
             .map_err(|e| e.finish(Location::Module(module.self_id())))
     }
 
-    fn verify_module_impl<F: Fn(&ModuleId) -> Vec<ModuleId>>(
-        module: &CompiledModule,
-        immediate_module_dependencies: F,
-    ) -> PartialVMResult<()> {
-        fn check_existence_in_dependency_recursive<F: Fn(&ModuleId) -> Vec<ModuleId>>(
+    fn verify_module_impl<'a, F>(module: &CompiledModule, module_fetcher: F) -> PartialVMResult<()>
+    where
+        F: 'a + Fn(&ModuleId) -> PartialVMResult<&'a CompiledModule>,
+    {
+        fn check_existence_in_dependency_recursive<'a, F>(
             target_module_id: &ModuleId,
             cursor_module_id: &ModuleId,
-            immediate_module_dependencies: &F,
+            module_fetcher: &F,
             visited_modules: &mut BTreeSet<ModuleId>,
-        ) -> bool {
+        ) -> PartialVMResult<bool>
+        where
+            F: 'a + Fn(&ModuleId) -> PartialVMResult<&'a CompiledModule>,
+        {
             if cursor_module_id == target_module_id {
-                return true;
+                return Ok(true);
             }
             if visited_modules.insert(cursor_module_id.clone()) {
-                for next in immediate_module_dependencies(cursor_module_id) {
+                for next in module_fetcher(cursor_module_id)?.immediate_module_dependencies() {
                     if check_existence_in_dependency_recursive(
                         target_module_id,
                         &next,
-                        immediate_module_dependencies,
+                        module_fetcher,
                         visited_modules,
-                    ) {
-                        return true;
+                    )? {
+                        return Ok(true);
                     }
                 }
             }
-            false
+            Ok(false)
         }
 
         let self_id = module.self_id();
@@ -397,9 +400,9 @@ impl CyclicModuleDependencyChecker {
             if check_existence_in_dependency_recursive(
                 &self_id,
                 &dep,
-                &immediate_module_dependencies,
+                &module_fetcher,
                 &mut visited_modules,
-            ) {
+            )? {
                 return Err(PartialVMError::new(StatusCode::CYCLIC_MODULE_DEPENDENCY));
             }
         }

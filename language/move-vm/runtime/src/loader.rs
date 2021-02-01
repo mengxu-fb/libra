@@ -643,10 +643,14 @@ impl Loader {
             .map(|module| module.module())
             .collect();
         DependencyChecker::verify_module(module, imm_deps)?;
+
+        let module_cache = self.module_cache.lock();
         CyclicModuleDependencyChecker::verify_module(module, |module_id| {
-            self.get_module(module_id)
-                .module()
-                .immediate_module_dependencies()
+            module_cache
+                .modules
+                .get(module_id)
+                .ok_or_else(|| PartialVMError::new(StatusCode::MISSING_DEPENDENCY))
+                .map(|m| m.module())
         })
     }
 

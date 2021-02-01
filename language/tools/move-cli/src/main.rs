@@ -21,7 +21,7 @@ use move_vm_types::{gas_schedule::CostStrategy, values::Value};
 use vm::{
     access::{ModuleAccess, ScriptAccess},
     compatibility::Compatibility,
-    errors::VMError,
+    errors::{PartialVMError, VMError},
     file_format::{CompiledModule, CompiledScript, SignatureToken},
     normalized,
 };
@@ -827,15 +827,20 @@ fn doctor(state: OnDiskStateView) -> Result<()> {
             bytecode_verifier::CyclicModuleDependencyChecker::verify_module(module, |module_id| {
                 code_cache
                     .get_module(module_id)
-                    .unwrap()
-                    .immediate_module_dependencies()
-            })
-            .is_err();
-        if cyclic_check_result {
-            bail!(
-                "Cyclic module dependencies are detected with module {} in the loop",
-                module.self_id()
-            )
+                    .map_err(|_| PartialVMError::new(StatusCode::MISSING_DEPENDENCY))
+            });
+        if let Err(cyclic_check_error) = cyclic_check_result {
+            if cyclic_check_error.major_status() == StatusCode::CYCLIC_MODULE_DEPENDENCY {
+                bail!(
+                    "Cyclic module dependencies are detected with module {} in the loop",
+                    module.self_id()
+                )
+            } else {
+                bail!(
+                    "Unexpected error happened in the cyclic module dependency checker: {}",
+                    cyclic_check_error
+                )
+            }
         }
     }
     // deserialize each resource
