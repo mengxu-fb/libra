@@ -245,7 +245,7 @@ fn fetch_module_dependencies(
     module: &CompiledModule,
 ) -> Vec<CompiledModule> {
     let idents = ModuleView::new(module)
-        .module_handles()
+        .immediate_dependencies()
         .map(|handle_view| handle_view.module_id());
     fetch_dependencies(exec, idents)
 }
