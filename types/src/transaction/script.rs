@@ -1,19 +1,34 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use crate::transaction::transaction_argument::TransactionArgument;
-use move_core_types::language_storage::TypeTag;
+use crate::{
+    account_address::AccountAddress, transaction::transaction_argument::TransactionArgument,
+};
+use move_core_types::{identifier::Identifier, language_storage::TypeTag};
 use serde::{Deserialize, Serialize};
 use std::fmt;
 
 #[allow(dead_code)]
 pub const SCRIPT_HASH_LENGTH: usize = 32;
 
+/// Identifier to a script function.
+#[derive(Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ScriptFn {
+    pub address: AccountAddress,
+    pub module: Identifier,
+    pub function: Identifier,
+}
+
+#[derive(Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
+pub enum ScriptCodeOrFn {
+    Code(#[serde(with = "serde_bytes")] Vec<u8>),
+    Fn(ScriptFn),
+}
+
 /// Call a Move script.
 #[derive(Clone, Hash, Eq, PartialEq, Serialize, Deserialize)]
 pub struct Script {
-    #[serde(with = "serde_bytes")]
-    code: Vec<u8>,
+    code_or_fn: ScriptCodeOrFn,
     ty_args: Vec<TypeTag>,
     args: Vec<TransactionArgument>,
 }
@@ -21,14 +36,27 @@ pub struct Script {
 impl Script {
     pub fn new(code: Vec<u8>, ty_args: Vec<TypeTag>, args: Vec<TransactionArgument>) -> Self {
         Script {
-            code,
+            code_or_fn: ScriptCodeOrFn::Code(code),
             ty_args,
             args,
         }
     }
 
-    pub fn code(&self) -> &[u8] {
-        &self.code
+    // TODO: this should be the new function, but the current `new` has too many dependencies...
+    pub fn new_with_code_or_fn(
+        code_or_fn: ScriptCodeOrFn,
+        ty_args: Vec<TypeTag>,
+        args: Vec<TransactionArgument>,
+    ) -> Self {
+        Script {
+            code_or_fn,
+            ty_args,
+            args,
+        }
+    }
+
+    pub fn code_or_fn(&self) -> &ScriptCodeOrFn {
+        &self.code_or_fn
     }
 
     pub fn ty_args(&self) -> &[TypeTag] {
@@ -39,15 +67,23 @@ impl Script {
         &self.args
     }
 
-    pub fn into_inner(self) -> (Vec<u8>, Vec<TransactionArgument>) {
-        (self.code, self.args)
+    pub fn into_inner(self) -> (ScriptCodeOrFn, Vec<TransactionArgument>) {
+        (self.code_or_fn, self.args)
     }
 }
 
 impl fmt::Debug for Script {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Script")
-            .field("code", &hex::encode(&self.code))
+            .field(
+                "code_or_fn",
+                &match &self.code_or_fn {
+                    ScriptCodeOrFn::Code(code) => hex::encode(code),
+                    ScriptCodeOrFn::Fn(func) => {
+                        format!("{}::{}::{}", func.address, func.module, func.function)
+                    }
+                },
+            )
             .field("ty_args", &self.ty_args)
             .field("args", &self.args)
             .finish()

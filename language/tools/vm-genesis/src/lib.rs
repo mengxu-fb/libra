@@ -24,7 +24,8 @@ use diem_types::{
     contract_event::ContractEvent,
     on_chain_config::VMPublishingOption,
     transaction::{
-        authenticator::AuthenticationKey, ChangeSet, Script, Transaction, WriteSetPayload,
+        authenticator::AuthenticationKey, ChangeSet, Script, ScriptCodeOrFn, Transaction,
+        WriteSetPayload,
     },
 };
 use diem_vm::{data_cache::StateViewCache, txn_effects_to_writeset_and_events};
@@ -209,16 +210,31 @@ fn exec_script(
     sender: AccountAddress,
     script: &Script,
 ) {
-    session
-        .execute_script(
-            script.code().to_vec(),
-            script.ty_args().to_vec(),
-            convert_txn_args(script.args()),
-            vec![sender],
-            &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
+    let ty_args = script.ty_args().to_vec();
+    let args = convert_txn_args(script.args());
+    let senders = vec![sender];
+    let mut cost_strategy = CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000));
+
+    match script.code_or_fn() {
+        ScriptCodeOrFn::Code(code) => session.execute_script(
+            code.to_owned(),
+            ty_args,
+            args,
+            senders,
+            &mut cost_strategy,
             log_context,
-        )
-        .unwrap()
+        ),
+        ScriptCodeOrFn::Fn(func) => session.execute_script_function(
+            &ModuleId::new(func.address, func.module.clone()),
+            &func.function,
+            ty_args,
+            args,
+            senders,
+            &mut cost_strategy,
+            log_context,
+        ),
+    }
+    .unwrap()
 }
 
 /// Create and initialize Association and Core Code accounts.

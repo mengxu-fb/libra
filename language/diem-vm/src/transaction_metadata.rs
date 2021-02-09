@@ -6,7 +6,8 @@ use diem_types::{
     account_address::AccountAddress,
     chain_id::ChainId,
     transaction::{
-        authenticator::AuthenticationKeyPreimage, SignedTransaction, TransactionPayload,
+        authenticator::AuthenticationKeyPreimage, ScriptCodeOrFn, SignedTransaction,
+        TransactionPayload,
     },
 };
 use move_core_types::gas_schedule::{
@@ -41,7 +42,14 @@ impl TransactionMetadata {
             expiration_timestamp_secs: txn.expiration_timestamp_secs(),
             chain_id: txn.chain_id(),
             script_hash: match txn.payload() {
-                TransactionPayload::Script(s) => HashValue::sha3_256_of(s.code()).to_vec(),
+                TransactionPayload::Script(s) => match s.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => HashValue::sha3_256_of(code).to_vec(),
+                    // TODO: this hash value is going to be used in `DiemAccount::script_prologue`,
+                    // and checked by `DiemTransactionPublishingOption::is_script_allowed`, putting
+                    // a zero for now but this value will definitely not pass the check unless the
+                    // `script_allow_list` is empty
+                    ScriptCodeOrFn::Fn(_) => HashValue::zero().to_vec(),
+                },
                 TransactionPayload::Module(_) => vec![],
                 TransactionPayload::WriteSet(_) => vec![],
             },

@@ -49,6 +49,48 @@ impl<'r, 'l, R: RemoteCache> Session<'r, 'l, R> {
             function_name,
             ty_args,
             args,
+            None,
+            &mut self.data_cache,
+            cost_strategy,
+            log_context,
+        )
+    }
+
+    /// Execute a Move script function with the given arguments.
+    ///
+    /// Unlike `execute_function` which is designed for system logic, `execute_script_function` is
+    /// mainly designed to call a script function in an existing module. It is more close to
+    /// `execute_script` except that the caller does not need to supply the script code.
+    ///
+    /// The caller MUST ensure
+    ///   - The function to be called and the module containing it exist.
+    ///   - The function has script visibility.
+    ///   - All types and modules referred to by the type arguments exist.
+    ///   - All arguments are valid and match the signature of the function called.
+    ///
+    /// The Move VM MUST return an invariant violation if the caller fails to follow any of the rules above.
+    ///
+    /// If any other error occurs during execution, the Move VM MUST propagate that error back to the caller.
+    /// Besides, no user input should cause the Move VM to return an invariant violation.
+    ///
+    /// In case an invariant violation occurs, the whole Session should be considered corrupted and one shall
+    /// not proceed with effect generation.
+    pub fn execute_script_function(
+        &mut self,
+        module: &ModuleId,
+        function_name: &IdentStr,
+        ty_args: Vec<TypeTag>,
+        args: Vec<Vec<u8>>,
+        senders: Vec<AccountAddress>,
+        cost_strategy: &mut CostStrategy,
+        log_context: &impl LogContext,
+    ) -> VMResult<()> {
+        self.runtime.execute_function(
+            module,
+            function_name,
+            ty_args,
+            args,
+            Some(senders),
             &mut self.data_cache,
             cost_strategy,
             log_context,

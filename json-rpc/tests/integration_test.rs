@@ -13,7 +13,10 @@ use diem_types::{
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
     proof::TransactionAccumulatorRangeProof,
-    transaction::{ChangeSet, Transaction, TransactionInfo, TransactionPayload, WriteSetPayload},
+    transaction::{
+        ChangeSet, ScriptCodeOrFn, Transaction, TransactionInfo, TransactionPayload,
+        WriteSetPayload,
+    },
     write_set::{WriteOp, WriteSet, WriteSetMut},
 };
 use std::{convert::TryInto, ops::Deref};
@@ -312,7 +315,12 @@ fn create_test_cases() -> Vec<Test> {
                     TransactionPayload::Script(s) => s,
                     _ => unreachable!(),
                 };
-                let script_hash = diem_crypto::HashValue::sha3_256_of(script.code()).to_hex();
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
+                let script_hash = diem_crypto::HashValue::sha3_256_of(script_code).to_hex();
                 let script_bytes = hex::encode(bcs::to_bytes(script).unwrap());
 
                 assert_eq!(
@@ -365,7 +373,7 @@ fn create_test_cases() -> Vec<Test> {
                                     "{U8Vector: 0x}",
                                     "{U8Vector: 0x}"
                                 ],
-                                "code": hex::encode(script.code()),
+                                "code": hex::encode(script_code),
                                 "amount": 200000,
                                 "currency": "XUS",
                                 "metadata": "",
@@ -488,6 +496,11 @@ fn create_test_cases() -> Vec<Test> {
             name: "preburn & burn events",
             run: |env: &mut testing::Env| {
                 let script = stdlib::encode_preburn_script(xus_tag(), 100);
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
                 let txn = env.create_txn(&env.dd, script.clone());
                 let result = env.submit_and_wait(txn);
                 let version = result["version"].as_u64().unwrap();
@@ -530,7 +543,7 @@ fn create_test_cases() -> Vec<Test> {
                         "arguments": [
                             "{U64: 100}",
                         ],
-                        "code": hex::encode(script.code()),
+                        "code": hex::encode(script_code),
                         "type": "preburn"
                     }),
                     "{}",
@@ -538,6 +551,11 @@ fn create_test_cases() -> Vec<Test> {
                 );
 
                 let script = stdlib::encode_burn_script(xus_tag(), 0, env.dd.address);
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
                 let burn_txn = env.create_txn(&env.tc, script.clone());
                 let result = env.submit_and_wait(burn_txn);
                 let version = result["version"].as_u64().unwrap();
@@ -566,7 +584,7 @@ fn create_test_cases() -> Vec<Test> {
                             "{U64: 0}",
                             "{ADDRESS: 000000000000000000000000000000DD}"
                         ],
-                        "code": hex::encode(script.code()),
+                        "code": hex::encode(script_code),
                         "type": "burn"
                     }),
                     "{}",
@@ -582,6 +600,11 @@ fn create_test_cases() -> Vec<Test> {
                 env.submit_and_wait(txn);
 
                 let script = stdlib::encode_cancel_burn_script(xus_tag(), env.dd.address);
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
                 let cancel_burn_txn = env.create_txn(&env.tc, script.clone());
                 let result = env.submit_and_wait(cancel_burn_txn);
                 let version = result["version"].as_u64().unwrap();
@@ -623,7 +646,7 @@ fn create_test_cases() -> Vec<Test> {
                         "arguments": [
                             "{ADDRESS: 000000000000000000000000000000DD}",
                         ],
-                        "code": hex::encode(script.code()),
+                        "code": hex::encode(script_code),
                         "type": "cancel_burn"
                     }),
                     "{}",
@@ -635,6 +658,11 @@ fn create_test_cases() -> Vec<Test> {
             name: "update exchange rate event",
             run: |env: &mut testing::Env| {
                 let script = stdlib::encode_update_exchange_rate_script(xus_tag(), 0, 1, 4);
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
                 let txn = env.create_txn(&env.tc, script.clone());
                 let result = env.submit_and_wait(txn);
                 let version = result["version"].as_u64().unwrap();
@@ -664,7 +692,7 @@ fn create_test_cases() -> Vec<Test> {
                             "{U64: 1}",
                             "{U64: 4}"
                         ],
-                        "code": hex::encode(script.code()),
+                        "code": hex::encode(script_code),
                         "type": "update_exchange_rate"
                     }),
                     "{}",
@@ -682,6 +710,11 @@ fn create_test_cases() -> Vec<Test> {
                     1_000_000,
                     1,
                 );
+                let script_code = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => code,
+                    // TODO: maybe simply unreachable?
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+                };
                 let txn = env.create_txn(&env.tc, script.clone());
                 let result = env.submit_and_wait(txn);
                 let version = result["version"].as_u64().unwrap();
@@ -735,7 +768,7 @@ fn create_test_cases() -> Vec<Test> {
                             "{U64: 1000000}",
                             "{U64: 1}",
                         ],
-                        "code": hex::encode(script.code()),
+                        "code": hex::encode(script_code),
                         "type": "tiered_mint"
                     }),
                     "{}",

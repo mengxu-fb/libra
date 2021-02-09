@@ -22,8 +22,8 @@ use diem_types::{
     account_config,
     block_metadata::BlockMetadata,
     transaction::{
-        ChangeSet, Module, Script, SignatureCheckedTransaction, Transaction, TransactionOutput,
-        TransactionPayload, TransactionStatus, WriteSetPayload,
+        ChangeSet, Module, Script, ScriptCodeOrFn, SignatureCheckedTransaction, Transaction,
+        TransactionOutput, TransactionPayload, TransactionStatus, WriteSetPayload,
     },
     vm_status::{KeptVMStatus, StatusCode, VMStatus},
     write_set::{WriteSet, WriteSetMut},
@@ -33,6 +33,7 @@ use move_core_types::{
     account_address::AccountAddress,
     gas_schedule::{CostTable, GasAlgebra, GasCarrier, GasUnits},
     identifier::IdentStr,
+    language_storage::ModuleId,
     transaction_argument::convert_txn_args,
     value::{serialize_values, MoveValue},
 };
@@ -172,16 +173,30 @@ impl DiemVM {
             cost_strategy
                 .charge_intrinsic_gas(txn_data.transaction_size())
                 .map_err(|e| e.into_vm_status())?;
-            session
-                .execute_script(
-                    script.code().to_vec(),
-                    script.ty_args().to_vec(),
-                    convert_txn_args(script.args()),
-                    vec![txn_data.sender()],
+
+            let ty_args = script.ty_args().to_vec();
+            let args = convert_txn_args(script.args());
+            let senders = vec![txn_data.sender()];
+            match script.code_or_fn() {
+                ScriptCodeOrFn::Code(code) => session.execute_script(
+                    code.to_owned(),
+                    ty_args,
+                    args,
+                    senders,
                     cost_strategy,
                     log_context,
-                )
-                .map_err(|e| e.into_vm_status())?;
+                ),
+                ScriptCodeOrFn::Fn(func) => session.execute_script_function(
+                    &ModuleId::new(func.address, func.module.clone()),
+                    &func.function,
+                    ty_args,
+                    args,
+                    senders,
+                    cost_strategy,
+                    log_context,
+                ),
+            }
+            .map_err(|e| e.into_vm_status())?;
 
             charge_global_write_gas_usage(cost_strategy, &session, &txn_data.sender())?;
 
@@ -342,22 +357,33 @@ impl DiemVM {
             WriteSetPayload::Direct(change_set) => change_set.clone(),
             WriteSetPayload::Script { script, execute_as } => {
                 let mut tmp_session = self.0.new_session(remote_cache);
+                let ty_args = script.ty_args().to_vec();
                 let args = convert_txn_args(script.args());
                 let senders = match txn_sender {
                     None => vec![*execute_as],
                     Some(sender) => vec![sender, *execute_as],
                 };
-                let execution_result = tmp_session
-                    .execute_script(
-                        script.code().to_vec(),
-                        script.ty_args().to_vec(),
+                let execution_result = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => tmp_session.execute_script(
+                        code.to_owned(),
+                        ty_args,
                         args,
                         senders,
                         &mut cost_strategy,
                         log_context,
-                    )
-                    .and_then(|_| tmp_session.finish())
-                    .map_err(|e| e.into_vm_status());
+                    ),
+                    ScriptCodeOrFn::Fn(func) => tmp_session.execute_script_function(
+                        &ModuleId::new(func.address, func.module.clone()),
+                        &func.function,
+                        ty_args,
+                        args,
+                        senders,
+                        &mut cost_strategy,
+                        log_context,
+                    ),
+                }
+                .and_then(|_| tmp_session.finish())
+                .map_err(|e| e.into_vm_status());
                 match execution_result {
                     Ok(effect) => {
                         let (cs, events) =

@@ -5,7 +5,7 @@ use diem_crypto::HashValue;
 use diem_types::{
     account_config::diem_root_address,
     on_chain_config::new_epoch_event_key,
-    transaction::{Transaction, TransactionPayload, TransactionStatus},
+    transaction::{ScriptCodeOrFn, Transaction, TransactionPayload, TransactionStatus},
     vm_status::KeptVMStatus,
 };
 use diem_writeset_generator::{
@@ -249,7 +249,14 @@ fn halt_network() {
 
     let txn = peer_to_peer_txn(sender.account(), receiver.account(), 10, 1);
     let script_hash = match txn.payload() {
-        TransactionPayload::Script(s) => HashValue::sha3_256_of(s.code()).to_vec(),
+        TransactionPayload::Script(s) => match s.code_or_fn() {
+            ScriptCodeOrFn::Code(code) => HashValue::sha3_256_of(code).to_vec(),
+            // TODO: this hash value is going to be used in `DiemAccount::script_prologue`,
+            // and checked by `DiemTransactionPublishingOption::is_script_allowed`, putting
+            // a zero for now but this value will definitely not pass the check unless the
+            // `script_allow_list` is empty
+            ScriptCodeOrFn::Fn(_) => HashValue::zero().to_vec(),
+        },
         _ => panic!("Unexpected types of transaction"),
     };
     // Regular transactions like p2p are no longer allowed.

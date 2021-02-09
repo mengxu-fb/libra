@@ -30,7 +30,9 @@ use diem_types::{
     mempool_status::{MempoolStatus, MempoolStatusCode},
     proof::{SparseMerkleProof, TransactionAccumulatorProof, TransactionInfoWithProof},
     test_helpers::transaction_test_helpers::get_test_signed_txn,
-    transaction::{SignedTransaction, Transaction, TransactionInfo, TransactionPayload},
+    transaction::{
+        ScriptCodeOrFn, SignedTransaction, Transaction, TransactionInfo, TransactionPayload,
+    },
     vm_status::StatusCode,
 };
 use diemdb::test_helper::arb_blocks_to_commit;
@@ -1349,10 +1351,16 @@ fn test_get_transactions() {
                         assert_eq!(&t.chain_id().id(), chain_id);
                         // TODO: verify every field
                         if let TransactionPayload::Script(s) = t.payload() {
-                            assert_eq!(
-                                script_hash.clone().to_string(),
-                                HashValue::sha3_256_of(s.code()).to_hex()
-                            );
+                            match s.code_or_fn() {
+                                ScriptCodeOrFn::Code(code) => assert_eq!(
+                                    script_hash.clone().to_string(),
+                                    HashValue::sha3_256_of(code).to_hex()
+                                ),
+                                // TODO: what is needed to verify a script fun? maybe nothing?
+                                ScriptCodeOrFn::Fn(_) => {
+                                    unimplemented!("Script function not supported yet.")
+                                }
+                            }
                         }
                     }
                     _ => panic!("Returned value doesn't match!"),
@@ -1427,10 +1435,16 @@ fn test_get_account_transaction() {
                     assert_eq!(seq, sequence_number);
 
                     if let TransactionPayload::Script(s) = expected_tx.payload() {
-                        assert_eq!(
-                            script_hash.to_string(),
-                            HashValue::sha3_256_of(s.code()).to_hex()
-                        );
+                        match s.code_or_fn() {
+                            ScriptCodeOrFn::Code(code) => assert_eq!(
+                                script_hash.clone().to_string(),
+                                HashValue::sha3_256_of(code).to_hex()
+                            ),
+                            // TODO: what is needed to verify a script fun? maybe nothing?
+                            ScriptCodeOrFn::Fn(_) => {
+                                unimplemented!("Script function not supported yet.")
+                            }
+                        }
                     }
                 }
                 _ => panic!("wrong type"),

@@ -13,7 +13,7 @@
 #![allow(unused_imports)]
 use diem_types::{
     account_address::AccountAddress,
-    transaction::{Script, TransactionArgument},
+    transaction::{Script, ScriptCodeOrFn, TransactionArgument},
 };
 use move_core_types::language_storage::TypeTag;
 use std::collections::BTreeMap as Map;
@@ -1693,9 +1693,13 @@ impl ScriptCall {
 
     /// Try to recognize a Diem `Script` and convert it into a structured object `ScriptCall`.
     pub fn decode(script: &Script) -> Option<ScriptCall> {
-        match SCRIPT_DECODER_MAP.get(script.code()) {
-            Some(decoder) => decoder(script),
-            None => None,
+        match script.code_or_fn() {
+            ScriptCodeOrFn::Code(code) => match SCRIPT_DECODER_MAP.get(code) {
+                Some(decoder) => decoder(script),
+                None => None,
+            },
+            // TODO: map script funs to standard `ScriptCall`
+            ScriptCodeOrFn::Fn(_) => None,
         }
     }
 }

@@ -361,7 +361,8 @@ fn test_validate_invalid_arguments() {
     let (program_script, _) =
         encode_peer_to_peer_with_metadata_script(xus_tag(), address, 100, vec![], vec![])
             .into_inner();
-    let program = Script::new(program_script, vec![], vec![TransactionArgument::U64(42)]);
+    let program =
+        Script::new_with_code_or_fn(program_script, vec![], vec![TransactionArgument::U64(42)]);
     let transaction = transaction_test_helpers::get_test_signed_txn(
         address,
         1,

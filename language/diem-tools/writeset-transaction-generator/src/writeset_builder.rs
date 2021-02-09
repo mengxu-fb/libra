@@ -7,7 +7,7 @@ use diem_state_view::StateView;
 use diem_types::{
     account_address::AccountAddress,
     account_config::{self, diem_root_address},
-    transaction::{ChangeSet, Script, Version},
+    transaction::{ChangeSet, Script, ScriptCodeOrFn, Version},
 };
 use diem_vm::{data_cache::RemoteStorage, txn_effects_to_writeset_and_events};
 use move_core_types::{
@@ -60,16 +60,33 @@ impl<'r, 'l, R: RemoteCache> GenesisSession<'r, 'l, R> {
     }
 
     pub fn exec_script(&mut self, sender: AccountAddress, script: &Script) {
-        self.0
-            .execute_script(
-                script.code().to_vec(),
-                script.ty_args().to_vec(),
-                convert_txn_args(script.args()),
-                vec![sender],
-                &mut CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000)),
-                &NoContextLog::new(),
-            )
-            .unwrap()
+        let ty_args = script.ty_args().to_vec();
+        let args = convert_txn_args(script.args());
+        let senders = vec![sender];
+        let mut cost_strategy =
+            CostStrategy::system(&ZERO_COST_SCHEDULE, GasUnits::new(100_000_000));
+        let log_context = NoContextLog::new();
+
+        match script.code_or_fn() {
+            ScriptCodeOrFn::Code(code) => self.0.execute_script(
+                code.to_owned(),
+                ty_args,
+                args,
+                senders,
+                &mut cost_strategy,
+                &log_context,
+            ),
+            ScriptCodeOrFn::Fn(func) => self.0.execute_script_function(
+                &ModuleId::new(func.address, func.module.clone()),
+                &func.function,
+                ty_args,
+                args,
+                senders,
+                &mut cost_strategy,
+                &log_context,
+            ),
+        }
+        .unwrap()
     }
 
     fn disable_reconfiguration(&mut self) {

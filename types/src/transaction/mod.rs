@@ -43,7 +43,9 @@ mod transaction_argument;
 
 pub use change_set::ChangeSet;
 pub use module::Module;
-pub use script::{ArgumentABI, Script, ScriptABI, TypeArgumentABI, SCRIPT_HASH_LENGTH};
+pub use script::{
+    ArgumentABI, Script, ScriptABI, ScriptCodeOrFn, ScriptFn, TypeArgumentABI, SCRIPT_HASH_LENGTH,
+};
 
 use std::ops::Deref;
 pub use transaction_argument::{parse_transaction_argument, TransactionArgument};
@@ -259,7 +261,12 @@ impl RawTransaction {
         let (code, args) = match &self.payload {
             TransactionPayload::WriteSet(_) => ("genesis".to_string(), &empty_vec[..]),
             TransactionPayload::Script(script) => {
-                (get_transaction_name(script.code()), script.args())
+                let txn_name = match script.code_or_fn() {
+                    ScriptCodeOrFn::Code(code) => get_transaction_name(code),
+                    // TODO: implement formatting logic for script fun
+                    ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet"),
+                };
+                (txn_name, script.args())
             }
             TransactionPayload::Module(_) => ("module publishing".to_string(), &empty_vec[..]),
         };

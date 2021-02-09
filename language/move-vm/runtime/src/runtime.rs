@@ -254,13 +254,15 @@ impl VMRuntime {
         )
     }
 
-    // See Session::execute_function for what contracts to follow.
+    // See Session::execute_function and Session::execute_script_function for what contracts to
+    // follow in executing system and script functions.
     pub(crate) fn execute_function(
         &self,
         module: &ModuleId,
         function_name: &IdentStr,
         ty_args: Vec<TypeTag>,
         args: Vec<Vec<u8>>,
+        senders_opt: Option<Vec<AccountAddress>>,
         data_store: &mut impl DataStore,
         cost_strategy: &mut CostStrategy,
         log_context: &impl LogContext,
@@ -271,6 +273,17 @@ impl VMRuntime {
             self.loader
                 .load_function(function_name, module, &ty_args, data_store, log_context)?;
 
+        // if calling a script function, check the function visibility
+        //
+        // TODO: the current implementation abuses this `senders_opt` to indicate whether we are
+        // calling a system function or a script function. Maybe we need to devise a better way
+        // for the distinction?
+        if senders_opt.is_some() && !func.is_script_fn() {
+            return Err(
+                PartialVMError::new(StatusCode::INVALID_SCRIPT_FN).finish(Location::Undefined)
+            );
+        }
+
         let params = params
             .into_iter()
             .map(|ty| ty.subst(&ty_args))
@@ -278,15 +291,18 @@ impl VMRuntime {
             .map_err(|err| err.finish(Location::Undefined))?;
 
         // check the arguments provided are of restricted types
-        let args = self
-            .deserialize_args(&params, args)
-            .map_err(|err| err.finish(Location::Undefined))?;
+        let value_args = if let Some(senders) = senders_opt {
+            self.create_signers_and_arguments(&params, senders, args)
+        } else {
+            self.deserialize_args(&params, args)
+        }
+        .map_err(|err| err.finish(Location::Undefined))?;
 
         // run the function
         Interpreter::entrypoint(
             func,
             ty_args,
-            args,
+            value_args,
             data_store,
             cost_strategy,
             &self.loader,

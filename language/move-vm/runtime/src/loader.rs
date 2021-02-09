@@ -28,7 +28,7 @@ use vm::{
         Bytecode, CompiledModule, CompiledScript, Constant, ConstantPoolIndex, FieldHandleIndex,
         FieldInstantiationIndex, FunctionDefinition, FunctionDefinitionIndex, FunctionHandleIndex,
         FunctionInstantiationIndex, Kind, Signature, SignatureToken, StructDefInstantiationIndex,
-        StructDefinition, StructDefinitionIndex, StructFieldInformation, TableIndex,
+        StructDefinition, StructDefinitionIndex, StructFieldInformation, TableIndex, Visibility,
     },
     IndexKind,
 };
@@ -1441,6 +1441,7 @@ impl Script {
             native,
             scope,
             name,
+            visibility: Visibility::Script, // Script entries always have script visibility
         });
 
         Ok(Self {
@@ -1485,6 +1486,7 @@ pub(crate) struct Function {
     native: Option<NativeFunction>,
     scope: Scope,
     name: Identifier,
+    visibility: Visibility,
 }
 
 impl Function {
@@ -1534,6 +1536,7 @@ impl Function {
             native,
             scope,
             name,
+            visibility: def.visibility,
         }
     }
 
@@ -1595,6 +1598,13 @@ impl Function {
                 id.name().as_str(),
                 self.name.as_str()
             ),
+        }
+    }
+
+    pub(crate) fn is_script_fn(&self) -> bool {
+        match &self.visibility {
+            Visibility::Script => true,
+            Visibility::Public | Visibility::Private => false,
         }
     }
 

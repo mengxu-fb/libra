@@ -16,7 +16,7 @@ use diem_types::{
     epoch_change::EpochChangeProof,
     ledger_info::LedgerInfoWithSignatures,
     proof::{AccountStateProof, AccumulatorConsistencyProof},
-    transaction::{Script, Transaction, TransactionArgument, TransactionPayload},
+    transaction::{Script, ScriptCodeOrFn, Transaction, TransactionArgument, TransactionPayload},
     vm_status::KeptVMStatus,
 };
 use move_core_types::{
@@ -570,6 +570,7 @@ pub enum TransactionDataView {
         gas_currency: String,
         expiration_timestamp_secs: u64,
         script_hash: BytesView,
+        // TODO: why storing both `script_bytes` as well as `script` as ScriptView?
         script_bytes: BytesView,
         script: ScriptView,
     },
@@ -630,7 +631,13 @@ impl From<Transaction> for TransactionDataView {
             Transaction::GenesisTransaction(_) => TransactionDataView::WriteSet {},
             Transaction::UserTransaction(t) => {
                 let script_hash = match t.payload() {
-                    TransactionPayload::Script(s) => HashValue::sha3_256_of(s.code()),
+                    TransactionPayload::Script(s) => match s.code_or_fn() {
+                        ScriptCodeOrFn::Code(code) => HashValue::sha3_256_of(code),
+                        ScriptCodeOrFn::Fn(_) => {
+                            // TODO: maybe set the hash to zero?
+                            unimplemented!("Script function not supported yet")
+                        }
+                    },
                     _ => HashValue::zero(),
                 };
 
@@ -719,7 +726,14 @@ impl From<AccountRole> for AccountRoleView {
 
 impl From<&Script> for ScriptView {
     fn from(script: &Script) -> Self {
-        let name = StdlibScript::try_from(script.code())
+        // TODO: not confident about changing the Views in json-rpc, so just mark the ScriptFn as
+        // not supported for now.
+        let script_code = match script.code_or_fn() {
+            ScriptCodeOrFn::Code(code) => code,
+            ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet."),
+        };
+
+        let name = StdlibScript::try_from(script_code.as_slice())
             .map_or("unknown".to_string(), |name| format!("{}", name));
         let ty_args: Vec<String> = script
             .ty_args()
@@ -731,7 +745,7 @@ impl From<&Script> for ScriptView {
             .collect();
         let mut view = ScriptView {
             r#type: name.clone(),
-            code: Some(script.code().into()),
+            code: Some(script_code.into()),
             arguments: Some(
                 script
                     .args()

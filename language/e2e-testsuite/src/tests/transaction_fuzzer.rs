@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 use compiled_stdlib::transaction_scripts::StdlibScript;
-use diem_types::account_config;
+use diem_types::{account_config, transaction::ScriptCodeOrFn};
 use language_e2e_tests::{
     account::{self, Account},
     executor::FakeExecutor,
@@ -72,11 +72,14 @@ proptest! {
         for (i, txn) in txns.into_iter().enumerate() {
             let script = txn.encode();
             let (account, account_sequence_number) = accounts.get_mut(i % num_accounts).unwrap();
-            let script_is_rotate = StdlibScript::try_from(script.code()).map(|script|
-                script == StdlibScript::RotateAuthenticationKey ||
-                script == StdlibScript::RotateAuthenticationKeyWithNonce ||
-                script == StdlibScript::RotateAuthenticationKeyWithRecoveryAddress
-            ).unwrap_or(false);
+            let script_is_rotate = match script.code_or_fn() {
+                ScriptCodeOrFn::Code(code) => StdlibScript::try_from(code.as_slice()).map(|script|
+                        script == StdlibScript::RotateAuthenticationKey ||
+                        script == StdlibScript::RotateAuthenticationKeyWithNonce ||
+                        script == StdlibScript::RotateAuthenticationKeyWithRecoveryAddress
+                    ).unwrap_or(false),
+                ScriptCodeOrFn::Fn(_) => unimplemented!("Script function not supported yet"),
+            };
             let output = executor.execute_transaction(
                 account.transaction()
                 .script(script.clone())
