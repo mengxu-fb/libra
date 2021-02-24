@@ -1,0 +1,19 @@
+# preparation
+compile src
+
+# [section 1]
+push -e
+
+# first transaction is OK
+execute -s 0xA -v 0u64 --dry-run
+execute -s 0xA -v 0u64
+
+# second transaction is not allowed
+-F execute -s 0xA -v 0u64 --dry-run
+-F execute -s 0xA -v 0u64
+
+pop -e
+
+# after popping, transaction is Ok again
+execute -s 0xA -v 1u64 --dry-run
+execute -s 0xA -v 1u64

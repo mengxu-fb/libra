@@ -1,0 +1,15 @@
+compile src/A.move
+
+# cannot re-compile the same file
+-F compile src/A.move --dry-run
+-F compile src/A.move
+
+-F compile src/A.move B.move --dry-run
+-F compile src/A.move B.move
+
+-F compile src --dry-run
+-F compile src
+
+compile src/B.move
+-F compile src --dry-run
+-F compile src

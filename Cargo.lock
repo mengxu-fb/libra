@@ -4492,6 +4492,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "move-symexec"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "bcs",
+ "datatest-stable",
+ "diem-workspace-hack",
+ "goldenfile",
+ "log",
+ "move-core-types",
+ "move-lang",
+ "move-model",
+ "move-vm-runtime",
+ "move-vm-types",
+ "once_cell",
+ "regex",
+ "shell-words",
+ "simplelog",
+ "structopt 0.3.21",
+ "tempfile",
+ "vm",
+]
+
+[[package]]
 name = "move-vm-integration-tests"
 version = "0.1.0"
 dependencies = [

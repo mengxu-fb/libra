@@ -1,0 +1,51 @@
+# cannot pop without push
+-F pop -b
+-F pop -e
+-F pop -s
+
+# cannot have pops more than pushes (builder)
+push -b
+pop -b
+-F pop -b
+
+# cannot have pops more than pushes (executor)
+push -e
+pop -e
+-F pop -e
+
+# cannot have pops more than pushes (symbolizer)
+push -s
+pop -s
+-F pop -s
+
+# cannot compile once an executor is in-place
+push -b
+compile src
+execute
+-F compile src
+pop -b
+
+# cannot compile once a symbolizer is in-place
+push -b
+compile src
+symbolize
+-F compile src
+pop -b
+
+# cannot pop while the executor is unbalanced
+push -b
+push -e
+-F pop -b
+
+# can pop after balancing the executor
+pop -e
+pop -b
+
+# cannot pop while the symbolizer is unbalanced
+push -b
+push -s
+-F pop -b
+
+# can pop after balancing the symbolizer
+pop -s
+pop -b

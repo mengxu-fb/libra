@@ -1,0 +1,16 @@
+[DEBUG] [control] Building stdlib modules
+[DEBUG] [compile] Sources compiled - modules: 40, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] compile src
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] execute -s 0xA -v 0u64 --dry-run
+[DEBUG] [execute] Script executed - changes: 2, events: 1
+[DEBUG] [control] execute -s 0xA -v 0u64
+[DEBUG] [execute] Script executed - changes: 2, events: 1
+[DEBUG] [execute] Results committed
+[DEBUG] [control] execute -s 0xA -v 1u64 --dry-run
+[DEBUG] [execute] Script executed - changes: 1, events: 1
+[DEBUG] [control] execute -s 0xA -v 1u64
+[DEBUG] [execute] Script executed - changes: 1, events: 1
+[DEBUG] [execute] Results committed

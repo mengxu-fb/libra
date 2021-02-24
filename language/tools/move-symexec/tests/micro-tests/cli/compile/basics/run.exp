@@ -1,0 +1,32 @@
+[DEBUG] [control] push -b
+[DEBUG] [control] compile src/A.move --dry-run
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 0
+[DEBUG] [control] compile src/A.move
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] compile src/script1.move --dry-run
+[DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
+[DEBUG] [control] compile src/script1.move
+[DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] compile src/B.move src/script2.move --dry-run
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [control] compile src/B.move src/script2.move
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] pop -b
+[DEBUG] [control] push -b
+[DEBUG] [control] compile src --dry-run
+[DEBUG] [compile] Sources compiled - modules: 2, scripts: 2
+[DEBUG] [control] compile src
+[DEBUG] [compile] Sources compiled - modules: 2, scripts: 2
+[DEBUG] [compile] Results committed
+[DEBUG] [control] pop -b
+[DEBUG] [control] push -b
+[DEBUG] [control] compile src/A.move src/script1.move --sender 0x2
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] compile src/B.move src/script2.move  --sender 0x2
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] pop -b

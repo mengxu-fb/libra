@@ -1,0 +1,9 @@
+[DEBUG] [control] Building stdlib modules
+[DEBUG] [compile] Sources compiled - modules: 40, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] Building stdlib modules
+[DEBUG] [compile] Sources compiled - modules: 40, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] Building diem script 'preburn'
+[DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
+[DEBUG] [compile] Results committed

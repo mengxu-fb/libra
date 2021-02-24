@@ -1,0 +1,18 @@
+[DEBUG] [control] compile {{Debug.move}} src
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] execute -t u8 -v 0u8 --dry-run
+[debug] 0
+[DEBUG] [execute] Script executed - changes: 0, events: 0
+[DEBUG] [control] execute -t u8 -v 0u8
+[debug] 0
+[DEBUG] [execute] Script executed - changes: 0, events: 0
+[DEBUG] [execute] Results committed
+[DEBUG] [control] -F execute -t u64 -v 42u8 --dry-run
+[debug] 42
+VMError with status ABORTED with sub status 1 at location Script and message Script::main at offset 9 at code offset 9 in function definition 0
+[DEBUG] [control] [x] Script execution failed
+[DEBUG] [control] -F execute -t u64 -v 42u8
+[debug] 42
+VMError with status ABORTED with sub status 1 at location Script and message Script::main at offset 9 at code offset 9 in function definition 0
+[DEBUG] [control] [x] Script execution failed

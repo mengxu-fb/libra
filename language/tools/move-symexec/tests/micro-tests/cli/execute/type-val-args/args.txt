@@ -1,0 +1,10 @@
+# preparation
+compile {{Debug.move}} src
+
+# execution success
+execute -t u8 -v 0u8 --dry-run
+execute -t u8 -v 0u8
+
+# execution failure
+-F execute -t u64 -v 42u8 --dry-run
+-F execute -t u64 -v 42u8

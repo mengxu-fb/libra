@@ -1,0 +1,34 @@
+# [section 1]
+push -b
+
+# single module file
+compile src/A.move --dry-run
+compile src/A.move
+
+# single script file
+compile src/script1.move --dry-run
+compile src/script1.move
+
+# mix of script and module
+compile src/B.move src/script2.move --dry-run
+compile src/B.move src/script2.move
+
+pop -b
+
+# [section 2]
+push -b
+
+# whole directory
+compile src --dry-run
+compile src
+
+pop -b
+
+# [section 3]
+push -b
+
+# progressive compilation with sender changed
+compile src/A.move src/script1.move --sender 0x2
+compile src/B.move src/script2.move  --sender 0x2
+
+pop -b

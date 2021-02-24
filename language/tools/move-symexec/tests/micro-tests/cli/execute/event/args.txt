@@ -1,0 +1,8 @@
+# preparation
+compile src
+
+# run
+execute -s 0xA -v 0u64 --dry-run
+execute -s 0xA -v 0u64
+execute -s 0xA -v 1u64 --dry-run
+execute -s 0xA -v 1u64

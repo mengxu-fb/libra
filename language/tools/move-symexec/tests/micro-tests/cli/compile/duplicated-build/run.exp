@@ -1,0 +1,22 @@
+[DEBUG] [control] compile src/A.move
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] -F compile src/A.move --dry-run
+[DEBUG] [control] [x] Duplicated compilation of source files: 1
+[DEBUG] [control] -F compile src/A.move
+[DEBUG] [control] [x] Duplicated compilation of source files: 1
+[DEBUG] [control] -F compile src/A.move B.move --dry-run
+[DEBUG] [control] [x] No such file or directory 'B.move'
+[DEBUG] [control] -F compile src/A.move B.move
+[DEBUG] [control] [x] No such file or directory 'B.move'
+[DEBUG] [control] -F compile src --dry-run
+[DEBUG] [control] [x] Duplicated compilation of source files: 1
+[DEBUG] [control] -F compile src
+[DEBUG] [control] [x] Duplicated compilation of source files: 1
+[DEBUG] [control] compile src/B.move
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 0
+[DEBUG] [compile] Results committed
+[DEBUG] [control] -F compile src --dry-run
+[DEBUG] [control] [x] Duplicated compilation of source files: 2
+[DEBUG] [control] -F compile src
+[DEBUG] [control] [x] Duplicated compilation of source files: 2

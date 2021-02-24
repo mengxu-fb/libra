@@ -1,0 +1,49 @@
+[DEBUG] [control] -F pop -b
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] -F pop -e
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] -F pop -s
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] push -b
+[DEBUG] [control] pop -b
+[DEBUG] [control] -F pop -b
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] push -e
+[DEBUG] [control] pop -e
+[DEBUG] [control] -F pop -e
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] push -s
+[DEBUG] [control] pop -s
+[DEBUG] [control] -F pop -s
+[DEBUG] [control] [x] Cannot have more pops than pushes
+[DEBUG] [control] push -b
+[DEBUG] [control] compile src
+[DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] execute
+[DEBUG] [execute] Script executed - changes: 0, events: 0
+[DEBUG] [execute] Results committed
+[DEBUG] [control] -F compile src
+[DEBUG] [control] [x] Compilation disabled due to existence of the executor
+[DEBUG] [control] pop -b
+[DEBUG] [control] push -b
+[DEBUG] [control] compile src
+[DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] symbolize
+[DEBUG] [symeval] Program symbolized
+[DEBUG] [control] -F compile src
+[DEBUG] [control] [x] Compilation disabled due to existence of the symbolizer
+[DEBUG] [control] pop -b
+[DEBUG] [control] push -b
+[DEBUG] [control] push -e
+[DEBUG] [control] -F pop -b
+[DEBUG] [control] [x] Cannot pop the builder because the associated executor is unbalanced
+[DEBUG] [control] pop -e
+[DEBUG] [control] pop -b
+[DEBUG] [control] push -b
+[DEBUG] [control] push -s
+[DEBUG] [control] -F pop -b
+[DEBUG] [control] [x] Cannot pop the builder because the associated symbolizer is unbalanced
+[DEBUG] [control] pop -s
+[DEBUG] [control] pop -b
