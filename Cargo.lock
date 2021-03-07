@@ -4500,6 +4500,7 @@ dependencies = [
  "bytecode",
  "datatest-stable",
  "diem-workspace-hack",
+ "functional-tests",
  "goldenfile",
  "itertools 0.10.0",
  "log",

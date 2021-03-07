@@ -35,9 +35,14 @@ goldenfile = "1.1.0"
 
 # diem-specific
 datatest-stable = { path = "../../../common/datatest-stable" }
+functional-tests = { path = "../../testing-infra/functional-tests" }
 
 [[test]]
 name = "micro_tests"
+harness = false
+
+[[test]]
+name = "move_functional_tests"
 harness = false
 
 [[test]]
