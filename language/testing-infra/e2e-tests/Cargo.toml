@@ -33,3 +33,5 @@ compiled-stdlib = { path = "../../diem-framework/compiled" }
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
 transaction-builder = { path = "../../transaction-builder"}
 hex = "0.4.3"
+serde = { version = "1.0.123", features = ["derive"] }
+serde_json = "1.0.64"

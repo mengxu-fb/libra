@@ -37,7 +37,14 @@ use move_core_types::{
 };
 use move_vm_runtime::{logging::NoContextLog, move_vm::MoveVM};
 use move_vm_types::gas_schedule::{zero_cost_schedule, CostStrategy};
+use std::{
+    env,
+    fs::{self, OpenOptions},
+    io::Write,
+    path::{Path, PathBuf},
+};
 
+static ENV_TRACE_DIR: &str = "TRACE_TXN";
 static RNG_SEED: [u8; 32] = [9u8; 32];
 
 pub const RELEASE_1_1_GENESIS: &[u8] =
@@ -55,6 +62,7 @@ pub struct FakeExecutor {
     data_store: FakeDataStore,
     block_time: u64,
     executed_output: Option<GoldenOutputs>,
+    trace_dir: Option<PathBuf>,
     rng: KeyGen,
 }
 
@@ -65,6 +73,7 @@ impl FakeExecutor {
             data_store: FakeDataStore::default(),
             block_time: 0,
             executed_output: None,
+            trace_dir: None,
             rng: KeyGen::from_seed(RNG_SEED),
         };
         executor.apply_write_set(write_set);
@@ -116,6 +125,7 @@ impl FakeExecutor {
             data_store: FakeDataStore::default(),
             block_time: 0,
             executed_output: None,
+            trace_dir: None,
             rng: KeyGen::from_seed(RNG_SEED),
         }
     }
@@ -125,6 +135,24 @@ impl FakeExecutor {
         // files can persist on windows machines.
         let file_name = test_name.replace(':', "_");
         self.executed_output = Some(GoldenOutputs::new(&file_name));
+
+        // NOTE: tracing is only available when
+        //  - the e2e test outputs a golden file, and
+        //  - the environment variable is properly set.
+        if let Some(env_trace_dir) = env::var_os(ENV_TRACE_DIR) {
+            let trace_dir = Path::new(&env_trace_dir).join(file_name);
+            if trace_dir.exists() {
+                fs::remove_dir_all(&trace_dir).expect("Failed to clean up the trace directory");
+            }
+            fs::create_dir_all(&trace_dir).expect("Failed to create the trace directory");
+            let mut name_file = OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(trace_dir.join("name"))
+                .unwrap();
+            name_file.write_all(test_name.as_bytes()).unwrap();
+            self.trace_dir = Some(trace_dir);
+        }
     }
 
     /// Creates an executor with only the standard library Move modules published and not other
@@ -277,6 +305,12 @@ impl FakeExecutor {
         &self,
         txn_block: Vec<Transaction>,
     ) -> Result<Vec<TransactionOutput>, VMStatus> {
+        // dump serialized transaction details before execution, if tracing
+        if let Some(trace_dir) = &self.trace_dir {
+            for txn in &txn_block {
+                Self::trace_transaction(trace_dir, txn);
+            }
+        }
         let output = DiemVM::execute_block(txn_block, &self.data_store);
         if let Some(logger) = &self.executed_output {
             logger.log(format!("{:?}\n", output).as_str());
@@ -292,6 +326,20 @@ impl FakeExecutor {
         outputs
             .pop()
             .expect("A block with one transaction should have one output")
+    }
+
+    fn trace_transaction<P: AsRef<Path>>(outdir: P, txn: &Transaction) {
+        let bytes = serde_json::to_vec(txn).expect("Failed to serialize the transaction");
+        let seq = fs::read_dir(outdir.as_ref())
+            .expect("Unable to read trace dir")
+            .count();
+        let mut file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(outdir.as_ref().join(seq.to_string()))
+            .expect("Unable to create a trace file");
+        file.write_all(&bytes)
+            .expect("Failed to write to the trace file");
     }
 
     /// Get the blob for the associated AccessPath
