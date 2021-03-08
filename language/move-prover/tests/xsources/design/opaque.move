@@ -1,4 +1,3 @@
-// flag: --v2
 address 0x0 {
 /// Example for opaque function calls.
 module Trafo {

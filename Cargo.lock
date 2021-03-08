@@ -4514,6 +4514,8 @@ dependencies = [
  "move-core-types",
  "move-lang",
  "move-model",
+ "move-prover",
+ "move-prover-test-utils",
  "move-vm-runtime",
  "move-vm-types",
  "once_cell",
