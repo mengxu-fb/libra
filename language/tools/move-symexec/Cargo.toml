@@ -19,6 +19,7 @@ tempfile = "3.2.0"
 
 # move-specific
 bcs = "0.1.2"
+bytecode = { path = "../../move-prover/bytecode" }
 diem-workspace-hack = { path = "../../../common/workspace-hack" }
 move-core-types = { path = "../../move-core/types" }
 move-lang = { path = "../../move-lang" }

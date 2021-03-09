@@ -75,7 +75,6 @@ impl<I, A: MoveWorkerAttr> MoveWorker<I, A> {
         &mut self.attr
     }
 
-    #[allow(unused)]
     pub fn info(&self) -> &I {
         match &self.parent {
             Parent::Worker(p) => p.info(),

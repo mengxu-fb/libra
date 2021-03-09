@@ -31,6 +31,7 @@
 [DEBUG] [compile] Sources compiled - modules: 0, scripts: 1
 [DEBUG] [compile] Results committed
 [DEBUG] [control] symbolize
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 0 structs
 [DEBUG] [symeval] Program symbolized
 [DEBUG] [control] -F compile src
 [DEBUG] [control] [x] Compilation disabled due to existence of the symbolizer

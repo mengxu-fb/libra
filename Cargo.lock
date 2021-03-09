@@ -4497,6 +4497,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "bcs",
+ "bytecode",
  "datatest-stable",
  "diem-workspace-hack",
  "goldenfile",

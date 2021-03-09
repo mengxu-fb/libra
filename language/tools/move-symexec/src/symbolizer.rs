@@ -7,7 +7,10 @@ use log::debug;
 use move_core_types::language_storage::TypeTag;
 use move_model::model::GlobalEnv;
 
-use crate::worker::{MoveStatefulWorker, MoveWorker, MoveWorkerAttr};
+use crate::{
+    sym_env::SymEnv,
+    worker::{MoveStatefulWorker, MoveWorker, MoveWorkerAttr},
+};
 
 /// Tag added to log messages
 const LOG_TAG: &str = "[symeval]";
@@ -22,7 +25,16 @@ impl MoveWorkerAttr for MoveSymbolizerAttr {}
 pub(crate) type MoveSymbolizer = MoveWorker<GlobalEnv, MoveSymbolizerAttr>;
 
 impl MoveSymbolizer {
-    pub fn symbolize(&self, _type_args: &[TypeTag]) -> Result<()> {
+    pub fn symbolize(&self, _type_args: &[TypeTag], no_pipeline: bool) -> Result<()> {
+        // transform the program
+        let sym_env = SymEnv::new(self.info(), no_pipeline);
+        debug!(
+            "{} Transformation finished: tracking {} functions and {} structs",
+            LOG_TAG,
+            sym_env.num_functions(),
+            sym_env.num_structs(),
+        );
+
         // TODO: implement the logic
         debug!("{} Program symbolized", LOG_TAG);
         Ok(())
@@ -37,7 +49,7 @@ impl MoveStatefulSymbolizer {
     // core operations
     //
 
-    pub fn symbolize(&self, type_args: &[TypeTag]) -> Result<()> {
-        self.top_worker().symbolize(type_args)
+    pub fn symbolize(&self, type_args: &[TypeTag], use_pipeline: bool) -> Result<()> {
+        self.top_worker().symbolize(type_args, use_pipeline)
     }
 }

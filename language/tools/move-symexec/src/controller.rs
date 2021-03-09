@@ -119,6 +119,10 @@ enum OpCommand {
         /// Must match the type arguments expected by every script
         #[structopt(long = "type-args", short = "t", parse(try_from_str = parse_type_tag))]
         type_args: Vec<TypeTag>,
+
+        /// Do not run the pipeline that transforms and optimizes stackless bytecode
+        #[structopt(long = "no-pipeline")]
+        no_pipeline: bool,
     },
 
     /// Push the state stack:
@@ -216,10 +220,10 @@ impl MoveController {
         executor.execute_script(script, signers, val_args, type_args, commit)
     }
 
-    pub fn symbolize(&mut self, type_args: &[TypeTag]) -> Result<()> {
+    pub fn symbolize(&mut self, type_args: &[TypeTag], no_pipeline: bool) -> Result<()> {
         // symbolize it
         let symbolizer = Self::get_or_create_symbolizer(&self.builder, &mut self.symbolizers)?;
-        symbolizer.symbolize(type_args)
+        symbolizer.symbolize(type_args, no_pipeline)
     }
 
     pub fn push(
@@ -379,7 +383,10 @@ impl MoveController {
                 type_args,
                 dry_run,
             } => self.execute(&signers, &val_args, &type_args, !dry_run),
-            OpCommand::Symbolize { type_args } => self.symbolize(&type_args),
+            OpCommand::Symbolize {
+                type_args,
+                no_pipeline,
+            } => self.symbolize(&type_args, no_pipeline),
             OpCommand::Push {
                 builder,
                 executor,
