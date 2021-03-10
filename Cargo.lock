@@ -4501,6 +4501,7 @@ dependencies = [
  "datatest-stable",
  "diem-workspace-hack",
  "goldenfile",
+ "itertools 0.10.0",
  "log",
  "move-core-types",
  "move-lang",

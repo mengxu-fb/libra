@@ -1,0 +1,15 @@
+# preparation
+compile src
+
+# the good case
+symbolize -t u8
+symbolize -t 0x42::M::S
+
+# give fewer type args than required
+-F symbolize
+
+# give more type args than required
+-F symbolize -t u8 -t u8
+
+# give nonexistent types
+-F symbolize -t 0x42::M::NonExist

@@ -1,0 +1,18 @@
+[DEBUG] [control] compile src
+[DEBUG] [compile] Sources compiled - modules: 1, scripts: 1
+[DEBUG] [compile] Results committed
+[DEBUG] [control] symbolize -t u8
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 2 structs
+[DEBUG] [symeval] Program symbolized
+[DEBUG] [control] symbolize -t 0x42::M::S
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 2 structs
+[DEBUG] [symeval] Program symbolized
+[DEBUG] [control] -F symbolize
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 2 structs
+[DEBUG] [control] [x] Wrong number of type arguments specified: expect 1, got 0
+[DEBUG] [control] -F symbolize -t u8 -t u8
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 2 structs
+[DEBUG] [control] [x] Wrong number of type arguments specified: expect 1, got 2
+[DEBUG] [control] -F symbolize -t 0x42::M::NonExist
+[DEBUG] [symeval] Transformation finished: tracking 1 functions and 2 structs
+[DEBUG] [control] [x] Unable to find struct by move: 00000000000000000000000000000042::M::NonExist

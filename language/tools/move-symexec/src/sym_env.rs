@@ -1,7 +1,9 @@
 // Copyright (c) The Diem Core Contributors
 // SPDX-License-Identifier: Apache-2.0
 
-use std::collections::BTreeMap;
+use anyhow::{anyhow, Result};
+use itertools::Itertools;
+use std::{cmp, collections::BTreeMap, fmt};
 
 use bytecode::{
     borrow_analysis::BorrowAnalysisProcessor,
@@ -28,11 +30,13 @@ use bytecode::{
 };
 use move_core_types::{
     identifier::{IdentStr, Identifier},
-    language_storage::ModuleId as ModuleIdByMove,
+    language_storage::{ModuleId as ModuleIdByMove, TypeTag},
 };
 use move_model::model::{
     FunId, FunctionEnv, GlobalEnv, ModuleEnv, ModuleId as ModuleIdBySpec, StructEnv, StructId,
+    TypeConstraint,
 };
+use vm::file_format::TypeParameterIndex;
 
 /// Lookup id for a `SymFuncInfo` in a `SymEnv`
 #[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Clone, Copy)]
@@ -40,10 +44,30 @@ pub(crate) struct SymFuncId(usize);
 
 /// Bridges and extends the `FunctionEnv` in move-model
 pub(crate) struct SymFuncInfo<'env> {
-    pub func_id: SymFuncId,
+    func_id: SymFuncId,
     pub func_env: FunctionEnv<'env>,
     pub func_data: FunctionData,
     pub func_cfg: StacklessControlFlowGraph,
+}
+
+impl cmp::PartialEq for SymFuncInfo<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.func_id == other.func_id
+    }
+}
+
+impl cmp::Eq for SymFuncInfo<'_> {}
+
+impl cmp::PartialOrd for SymFuncInfo<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.func_id.partial_cmp(&other.func_id)
+    }
+}
+
+impl cmp::Ord for SymFuncInfo<'_> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.func_id.cmp(&other.func_id)
+    }
 }
 
 impl<'env> SymFuncInfo<'env> {
@@ -90,8 +114,28 @@ pub(crate) struct SymStructId(usize);
 
 /// Bridges and extends the `StructEnv` in move-model
 pub(crate) struct SymStructInfo<'env> {
-    pub struct_id: SymStructId,
+    struct_id: SymStructId,
     pub struct_env: StructEnv<'env>,
+}
+
+impl cmp::PartialEq for SymStructInfo<'_> {
+    fn eq(&self, other: &Self) -> bool {
+        self.struct_id == other.struct_id
+    }
+}
+
+impl cmp::Eq for SymStructInfo<'_> {}
+
+impl cmp::PartialOrd for SymStructInfo<'_> {
+    fn partial_cmp(&self, other: &Self) -> Option<cmp::Ordering> {
+        self.struct_id.partial_cmp(&other.struct_id)
+    }
+}
+
+impl cmp::Ord for SymStructInfo<'_> {
+    fn cmp(&self, other: &Self) -> cmp::Ordering {
+        self.struct_id.cmp(&other.struct_id)
+    }
 }
 
 impl<'env> SymStructInfo<'env> {
@@ -106,7 +150,6 @@ impl<'env> SymStructInfo<'env> {
     // info
     //
 
-    #[allow(unused)]
     pub fn context_string(&self) -> String {
         let module_env = &self.struct_env.module_env;
         format!(
@@ -123,7 +166,7 @@ pub(crate) struct SymEnv<'env> {
     #[allow(unused)]
     global_env: &'env GlobalEnv,
     // the module env representing the script
-    script_env: ModuleEnv<'env>,
+    pub script_env: ModuleEnv<'env>,
     // defined functions with two ways to look it up
     defined_functions: BTreeMap<SymFuncId, SymFuncInfo<'env>>,
     defined_functions_by_spec: BTreeMap<ModuleIdBySpec, BTreeMap<FunId, SymFuncId>>,
@@ -231,14 +274,18 @@ impl<'env> SymEnv<'env> {
         &self,
         module_id: &ModuleIdBySpec,
         func_id: &FunId,
-    ) -> &SymFuncInfo<'env> {
-        let sym_id = self
-            .defined_functions_by_spec
+    ) -> Result<&SymFuncInfo<'env>> {
+        self.defined_functions_by_spec
             .get(module_id)
-            .unwrap()
-            .get(func_id)
-            .unwrap();
-        self.defined_functions.get(sym_id).unwrap()
+            .and_then(|sub| sub.get(func_id))
+            .and_then(|sym_id| self.defined_functions.get(sym_id))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Unable to find function by spec: {:?}::{:?}",
+                    module_id,
+                    func_id
+                )
+            })
     }
 
     #[allow(unused)]
@@ -246,14 +293,18 @@ impl<'env> SymEnv<'env> {
         &self,
         module_id: &ModuleIdByMove,
         func_id: &IdentStr,
-    ) -> &SymFuncInfo<'env> {
-        let sym_id = self
-            .defined_functions_by_move
+    ) -> Result<&SymFuncInfo<'env>> {
+        self.defined_functions_by_move
             .get(module_id)
-            .unwrap()
-            .get(func_id)
-            .unwrap();
-        self.defined_functions.get(sym_id).unwrap()
+            .and_then(|sub| sub.get(func_id))
+            .and_then(|sym_id| self.defined_functions.get(sym_id))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Unable to find function by move: {}::{}",
+                    module_id,
+                    func_id
+                )
+            })
     }
 
     #[allow(unused)]
@@ -261,32 +312,38 @@ impl<'env> SymEnv<'env> {
         &self,
         module_id: &ModuleIdBySpec,
         struct_id: &StructId,
-    ) -> &SymStructInfo<'env> {
-        let sym_id = self
-            .defined_structs_by_spec
+    ) -> Result<&SymStructInfo<'env>> {
+        self.defined_structs_by_spec
             .get(module_id)
-            .unwrap()
-            .get(struct_id)
-            .unwrap();
-        self.defined_structs.get(sym_id).unwrap()
+            .and_then(|sub| sub.get(struct_id))
+            .and_then(|sym_id| self.defined_structs.get(sym_id))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Unable to find struct by spec: {:?}::{:?}",
+                    module_id,
+                    struct_id
+                )
+            })
     }
 
-    #[allow(unused)]
-    pub fn get_defined_struct_by_move(
+    pub fn get_struct_by_move(
         &self,
         module_id: &ModuleIdByMove,
         struct_id: &IdentStr,
-    ) -> &SymStructInfo<'env> {
-        let sym_id = self
-            .defined_structs_by_move
+    ) -> Result<&SymStructInfo<'env>> {
+        self.defined_structs_by_move
             .get(module_id)
-            .unwrap()
-            .get(struct_id)
-            .unwrap();
-        self.defined_structs.get(sym_id).unwrap()
+            .and_then(|sub| sub.get(struct_id))
+            .and_then(|sym_id| self.defined_structs.get(sym_id))
+            .ok_or_else(|| {
+                anyhow!(
+                    "Unable to find struct by move: {}::{}",
+                    module_id,
+                    struct_id
+                )
+            })
     }
 
-    #[allow(unused)]
     pub fn get_script_exec_unit(&self) -> &SymFuncInfo<'env> {
         // NOTE: we already checked that the `script_env` has one and only one function and that
         // function is always tracked. So both `unwrap`s are safe here
@@ -294,6 +351,7 @@ impl<'env> SymEnv<'env> {
             &self.script_env.get_id(),
             &self.script_env.get_functions().last().unwrap().get_id(),
         )
+        .unwrap()
     }
 
     //
@@ -390,5 +448,98 @@ impl<'env> SymEnv<'env> {
         // run the pipeline
         pipeline.run(global_env, &mut targets, None);
         targets
+    }
+}
+
+/// Flattened type tracking
+#[derive(Clone, Eq, PartialEq, Ord, PartialOrd)]
+pub(crate) enum SymTypeArg<'env> {
+    Bool,
+    U8,
+    U64,
+    U128,
+    Address,
+    Signer,
+    Vector {
+        element_type: Box<SymTypeArg<'env>>,
+    },
+    Struct {
+        struct_info: &'env SymStructInfo<'env>,
+        type_args: Vec<SymTypeArg<'env>>,
+    },
+    Reference {
+        mutable: bool,
+        referred_type: Box<SymTypeArg<'env>>,
+    },
+    TypeParameter {
+        param_index: TypeParameterIndex,
+        actual_type: Box<SymTypeArg<'env>>,
+    },
+}
+
+impl<'env> SymTypeArg<'env> {
+    pub fn from_type_tag(tag: &TypeTag, sym_env: &'env SymEnv<'env>) -> Result<Self> {
+        let converted = match tag {
+            TypeTag::Bool => Self::Bool,
+            TypeTag::U8 => Self::U8,
+            TypeTag::U64 => Self::U64,
+            TypeTag::U128 => Self::U128,
+            TypeTag::Address => Self::Address,
+            TypeTag::Signer => Self::Signer,
+            TypeTag::Vector(element_tag) => Self::Vector {
+                element_type: Box::new(Self::from_type_tag(element_tag.as_ref(), sym_env)?),
+            },
+            TypeTag::Struct(struct_tag) => Self::Struct {
+                struct_info: sym_env
+                    .get_struct_by_move(&struct_tag.module_id(), &struct_tag.name)?,
+                type_args: struct_tag
+                    .type_params
+                    .iter()
+                    .map(|sub_tag| Self::from_type_tag(sub_tag, sym_env))
+                    .collect::<Result<Vec<_>>>()?,
+            },
+        };
+        Ok(converted)
+    }
+
+    // TODO: update this check once the type ability changes are ready
+    pub fn satisfies_abilities_constraints(&self, _constraints: TypeConstraint) -> bool {
+        true
+    }
+}
+
+impl fmt::Display for SymTypeArg<'_> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            Self::Bool => write!(f, "bool"),
+            Self::U8 => write!(f, "u8"),
+            Self::U64 => write!(f, "u64"),
+            Self::U128 => write!(f, "u128"),
+            Self::Address => write!(f, "address"),
+            Self::Signer => write!(f, "signer"),
+            Self::Vector { element_type } => write!(f, "vector<{}>", element_type),
+            Self::Struct {
+                struct_info,
+                type_args,
+            } => write!(
+                f,
+                "struct {}<{}>",
+                struct_info.context_string(),
+                type_args.iter().map(|ty_arg| ty_arg.to_string()).join(", ")
+            ),
+            Self::Reference {
+                mutable,
+                referred_type,
+            } => write!(
+                f,
+                "&{}{}",
+                if *mutable { "mut " } else { "" },
+                referred_type
+            ),
+            Self::TypeParameter {
+                param_index,
+                actual_type,
+            } => write!(f, "#{}-{}", param_index, actual_type),
+        }
     }
 }
