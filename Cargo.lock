@@ -3989,9 +3989,9 @@ dependencies = [
  "proptest",
  "proptest-derive",
  "rand 0.8.3",
- "transaction-builder",
  "serde",
  "serde_json",
+ "transaction-builder",
  "vm",
  "vm-genesis",
 ]
@@ -4503,7 +4503,6 @@ dependencies = [
  "compiled-stdlib",
  "datatest-stable",
  "diem-crypto",
- "diem-types",
  "diem-workspace-hack",
  "functional-tests",
  "goldenfile",
