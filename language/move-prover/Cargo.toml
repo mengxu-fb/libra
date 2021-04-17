@@ -16,6 +16,7 @@ docgen = { path = "docgen" }
 abigen = { path = "abigen" }
 errmapgen = { path = "errmapgen" }
 bytecode = { path = "bytecode" }
+bytecode-interpreter = { path = "interpreter" }
 vm = { path = "../vm" }
 diem-temppath = { path = "../../common/temppath" }
 diem-workspace-hack = { path = "../../common/workspace-hack" }

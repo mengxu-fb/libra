@@ -1,0 +1,22 @@
+[package]
+name = "bytecode-interpreter"
+version = "0.1.0"
+authors = ["Diem Association <opensource@diem.com>"]
+publish = false
+edition = "2018"
+license = "Apache-2.0"
+
+[dependencies]
+# diem dependencies
+bytecode = { path = "../bytecode" }
+diem-workspace-hack = { path = "../../../common/workspace-hack" }
+move-core-types = { path = "../../move-core/types" }
+move-model = { path = "../../move-model" }
+vm = { path = "../../vm" }
+
+# external dependencies
+anyhow = "1.0.38"
+
+[dev-dependencies]
+datatest-stable = "0.1.1"
+move-prover-test-utils = { path = "../test-utils" }
