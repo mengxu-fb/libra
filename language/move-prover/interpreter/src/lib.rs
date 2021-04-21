@@ -7,3 +7,7 @@ pub mod player;
 pub mod runtime;
 pub mod status;
 pub mod value;
+
+// TODO: re-organize this file after exploration
+pub mod assembly;
+pub mod types;

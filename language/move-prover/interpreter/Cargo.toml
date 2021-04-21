@@ -20,3 +20,7 @@ anyhow = "1.0.38"
 [dev-dependencies]
 datatest-stable = "0.1.1"
 move-prover-test-utils = { path = "../test-utils" }
+
+[[test]]
+name = "test_assembly"
+harness = false
