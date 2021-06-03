@@ -7,8 +7,12 @@ use std::{cell::Cell, collections::BTreeMap, rc::Rc};
 use bytecode::{function_target::FunctionTarget, function_target_pipeline::FunctionTargetsHolder};
 use move_core_types::account_address::AccountAddress;
 use move_model::{
-    ast::{Exp, ExpData, LocalVarDecl, MemoryLabel, Operation, SpecFunDecl, TempIndex, Value},
+    ast::{
+        Exp, ExpData, LocalVarDecl, MemoryLabel, Operation, QuantKind, SpecFunDecl, TempIndex,
+        Value,
+    },
     model::{FieldId, ModuleEnv, ModuleId, NodeId, SpecFunId, StructId},
+    ty::Type as MTy,
 };
 
 use crate::{
@@ -112,7 +116,56 @@ impl<'env> Evaluator<'env> {
     // entry points
     //
 
+    fn is_quant_exp_ok(
+        &self,
+        _node_id: NodeId,
+        _kind: QuantKind,
+        ranges: &[(LocalVarDecl, Exp)],
+        _triggers: &[Vec<Exp>],
+        _constraint: Option<&Exp>,
+        _body: &Exp,
+    ) -> bool {
+        let env = self.target.global_env();
+        for (_, r_exp) in ranges {
+            match r_exp.as_ref() {
+                // case: range
+                ExpData::Call(_, Operation::Range, _)
+                | ExpData::Call(_, Operation::RangeVec, _) => (),
+                // case: address
+                ExpData::Call(_, Operation::TypeDomain, _) => (),
+                // case: resource
+                ExpData::Call(_, Operation::ResourceDomain, _) => (),
+                // cont.
+                _ => match env.get_node_type(r_exp.node_id()) {
+                    MTy::Vector(_) => (),
+                    _ => {
+                        return false;
+                    }
+                },
+            }
+        }
+        true
+    }
+
     pub fn check_assert(&self, exp: &Exp) {
+        let env = self.target.global_env();
+        exp.visit(&mut |e| match e {
+            ExpData::Quant(node_id, kind, ranges, triggers, constraint, body) => {
+                if !self.is_quant_exp_ok(
+                    *node_id,
+                    *kind,
+                    ranges,
+                    triggers,
+                    constraint.as_ref(),
+                    body,
+                ) {
+                    println!("{}", e.display(env));
+                }
+            }
+            ExpData::Invalid(_) => unreachable!(),
+            _ => {}
+        });
+        /*
         match self.evaluate(exp) {
             Ok(val) => {
                 if !val.into_bool() {
@@ -127,11 +180,15 @@ impl<'env> Evaluator<'env> {
                 self.record_evaluation_failure(exp, err);
             }
         }
+        */
     }
 
     pub fn check_assume(&self, exp: &Exp) -> Option<(TempIndex, TypedValue)> {
+        self.check_assert(exp);
+        None
         // NOTE: `let` bindings are translated to `Assume(Identical($t, <exp>));`. This should be
         // treated as an assignment.
+        /*
         if let ExpData::Call(_, Operation::Identical, args) = exp.as_ref() {
             if cfg!(debug_assertions) {
                 assert_eq!(args.len(), 2);
@@ -158,6 +215,7 @@ impl<'env> Evaluator<'env> {
             self.check_assert(exp);
             None
         }
+        */
     }
 
     //
